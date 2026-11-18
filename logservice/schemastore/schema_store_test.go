@@ -173,7 +173,7 @@ func TestIgnoreDDLByCommitTs(t *testing.T) {
 		return store.resolvedTs.Load() >= 1030
 	}, 5*time.Second, 10*time.Millisecond)
 
-	tables, err := pstorage.getAllPhysicalTables(1030, nil)
+	tables, err := pstorage.getAllPhysicalTables(1030, nil, nil)
 	require.NoError(t, err)
 
 	// Only table t1 and t3 should exist. t2 should be ignored.
@@ -281,17 +281,17 @@ func TestRenameTableFromSystemSchema(t *testing.T) {
 				buildTableFilterByNameForTest("test", "a"),
 				buildTableFilterByNameForTest("*", "*"),
 			} {
-				events, err := pstorage.fetchTableTriggerDDLEvents(tableFilter, 1000, 10)
+				events, err := pstorage.fetchTableTriggerDDLEvents(tableFilter, nil, 1000, 10)
 				require.NoError(t, err)
 				require.Len(t, events, 1)
 				require.Contains(t, events[0].Err, "ErrSyncRenameTableFailed")
 			}
-			events, err := pstorage.fetchTableTriggerDDLEvents(buildTableFilterByNameForTest("other", "*"), 1000, 10)
+			events, err := pstorage.fetchTableTriggerDDLEvents(buildTableFilterByNameForTest("other", "*"), nil, 1000, 10)
 			require.NoError(t, err)
 			require.Empty(t, events)
 
 			// Snapshot reconstruction and restart must also handle the missing old table.
-			tables, err := pstorage.getAllPhysicalTables(1010, buildTableFilterByNameForTest("test", "a"))
+			tables, err := pstorage.getAllPhysicalTables(1010, buildTableFilterByNameForTest("test", "a"), nil)
 			require.NoError(t, err)
 			var actualIDs []int64
 			for _, table := range tables {
@@ -316,6 +316,156 @@ func TestRenameTableFromSystemSchema(t *testing.T) {
 	}
 }
 
+<<<<<<< HEAD
+=======
+func TestTryUpdateResolvedTsRetryAfterDDLHandleFailure(t *testing.T) {
+	mockPDClock := pdutil.NewClock4Test()
+	appcontext.SetService(appcontext.DefaultPDClock, mockPDClock)
+
+	dir := t.TempDir()
+	pstorage := newPersistentStorageForTest(dir, nil)
+	defer func() {
+		err := pstorage.close()
+		require.NoError(t, err)
+	}()
+	pstorage.encryptionManager = &flakyEncryptionManagerForTest{failTimes: 1}
+
+	store := &keyspaceSchemaStore{
+		pdClock:       mockPDClock,
+		unsortedCache: newDDLCache(),
+		dataStorage:   pstorage,
+		notifyCh:      make(chan any, 1),
+	}
+	store.resolvedTs.Store(pstorage.gcTs)
+	store.pendingResolvedTs.Store(pstorage.gcTs)
+
+	createSchema := buildCreateSchemaJobForTest(100, "test", 1000)
+	createSchema.BinlogInfo.SchemaVersion = 1
+	createTable := buildCreateTableJobForTest(100, 200, "t1", 1010)
+	createTable.BinlogInfo.SchemaVersion = 2
+
+	store.writeDDLEvent(DDLJobWithCommitTs{
+		Job:      createSchema,
+		CommitTs: 1000,
+	})
+	store.writeDDLEvent(DDLJobWithCommitTs{
+		Job:      createTable,
+		CommitTs: 1010,
+	})
+	store.advancePendingResolvedTs(1010)
+
+	// First attempt fails when writing create schema; dedup watermarks should not advance.
+	store.tryUpdateResolvedTs()
+	require.Equal(t, int64(0), store.schemaVersion)
+	require.Equal(t, uint64(0), store.finishedDDLTs)
+	require.Equal(t, uint64(0), store.resolvedTs.Load())
+
+	// Second attempt retries failed DDLs and succeeds.
+	store.tryUpdateResolvedTs()
+	require.Equal(t, int64(2), store.schemaVersion)
+	require.Equal(t, uint64(1010), store.finishedDDLTs)
+	require.Equal(t, uint64(1010), store.resolvedTs.Load())
+
+	tables, err := pstorage.getAllPhysicalTables(1010, nil, nil)
+	require.NoError(t, err)
+	require.Len(t, tables, 1)
+	require.Equal(t, "t1", tables[0].TableName)
+}
+
+func TestTryUpdateResolvedTsDoesNotAdvancePastFailedDDLAtSameCommitTs(t *testing.T) {
+	mockPDClock := pdutil.NewClock4Test()
+	appcontext.SetService(appcontext.DefaultPDClock, mockPDClock)
+
+	pstorage := newPersistentStorageForTest(t.TempDir(), nil)
+	defer func() {
+		require.NoError(t, pstorage.close())
+	}()
+	pstorage.encryptionManager = &flakyEncryptionManagerForTest{failOnCall: 2}
+
+	store := &keyspaceSchemaStore{
+		pdClock:       mockPDClock,
+		unsortedCache: newDDLCache(),
+		dataStorage:   pstorage,
+		notifyCh:      make(chan any, 1),
+	}
+	store.resolvedTs.Store(pstorage.gcTs)
+	store.pendingResolvedTs.Store(pstorage.gcTs)
+
+	const commitTs = uint64(1010)
+	createSchema := buildCreateSchemaJobForTest(100, "test", 1000)
+	createSchema.BinlogInfo.SchemaVersion = 1
+	createTable := buildCreateTableJobForTest(100, 200, "t1", 1010)
+	createTable.BinlogInfo.SchemaVersion = 2
+	store.writeDDLEvent(DDLJobWithCommitTs{Job: createSchema, CommitTs: commitTs})
+	store.writeDDLEvent(DDLJobWithCommitTs{Job: createTable, CommitTs: commitTs})
+	store.advancePendingResolvedTs(commitTs)
+
+	store.tryUpdateResolvedTs()
+	require.Equal(t, int64(1), store.schemaVersion)
+	require.Equal(t, uint64(1000), store.finishedDDLTs)
+	require.Less(t, store.resolvedTs.Load(), commitTs)
+
+	store.tryUpdateResolvedTs()
+	require.Equal(t, int64(2), store.schemaVersion)
+	require.Equal(t, uint64(1010), store.finishedDDLTs)
+	require.Equal(t, commitTs, store.resolvedTs.Load())
+}
+
+func TestGetAllPhysicalTablesDecryptsEncryptedDDLEvents(t *testing.T) {
+	dir := t.TempDir()
+	pstorage := newPersistentStorageForTest(dir, nil)
+	defer func() {
+		err := pstorage.close()
+		require.NoError(t, err)
+	}()
+	pstorage.encryptionManager = &prefixEncryptionManagerForTest{}
+
+	createSchema := buildCreateSchemaJobForTest(100, "test", 1000)
+	createSchema.BinlogInfo.SchemaVersion = 1
+	createTable := buildCreateTableJobForTest(100, 200, "t1", 1010)
+	createTable.BinlogInfo.SchemaVersion = 2
+
+	err := pstorage.handleDDLJob(createSchema)
+	require.NoError(t, err)
+	err = pstorage.handleDDLJob(createTable)
+	require.NoError(t, err)
+
+	tables, err := pstorage.getAllPhysicalTables(1010, nil, nil)
+	require.NoError(t, err)
+	require.Len(t, tables, 1)
+	require.Equal(t, int64(200), tables[0].TableID)
+	require.Equal(t, int64(100), tables[0].SchemaID)
+	require.Equal(t, "t1", tables[0].TableName)
+}
+
+func TestRegisterTableDecryptsEncryptedDDLEvents(t *testing.T) {
+	dir := t.TempDir()
+	pstorage := newPersistentStorageForTest(dir, nil)
+	defer func() {
+		err := pstorage.close()
+		require.NoError(t, err)
+	}()
+	pstorage.encryptionManager = &prefixEncryptionManagerForTest{}
+
+	createSchema := buildCreateSchemaJobForTest(100, "test", 1000)
+	createSchema.BinlogInfo.SchemaVersion = 1
+	createTable := buildCreateTableJobForTest(100, 200, "t1", 1010)
+	createTable.BinlogInfo.SchemaVersion = 2
+
+	err := pstorage.handleDDLJob(createSchema)
+	require.NoError(t, err)
+	err = pstorage.handleDDLJob(createTable)
+	require.NoError(t, err)
+
+	err = pstorage.registerTable(200, 1010)
+	require.NoError(t, err)
+
+	tableInfo, err := pstorage.getTableInfo(200, 1010)
+	require.NoError(t, err)
+	require.NotNil(t, tableInfo)
+}
+
+>>>>>>> c68c69d88 (sink: support per-table transaction ordering for MySQL sinks (#6860))
 func TestGetAllPhysicalTablesReturnsSnapshotLostByGCError(t *testing.T) {
 	dir := t.TempDir()
 	pstorage := newPersistentStorageForTest(dir, nil)
@@ -328,7 +478,7 @@ func TestGetAllPhysicalTablesReturnsSnapshotLostByGCError(t *testing.T) {
 	pstorage.gcTs = 100
 	pstorage.mu.Unlock()
 
-	_, err := pstorage.getAllPhysicalTables(99, nil)
+	_, err := pstorage.getAllPhysicalTables(99, nil, nil)
 	require.Error(t, err)
 	require.True(t, cerror.ErrSnapshotLostByGC.Equal(err))
 	require.Contains(t, err.Error(), "checkpoint-ts 99 is earlier than or equal to GC safepoint at 100")

@@ -191,6 +191,7 @@ func TestChangefeedUpdateCli(t *testing.T) {
 	require.NotNil(t, o.run(cmd))
 }
 
+<<<<<<< HEAD
 func TestChangefeedUpdatePassword(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
@@ -199,6 +200,46 @@ func TestChangefeedUpdatePassword(t *testing.T) {
 		ID:      "abc",
 		SinkURI: "kafka://127.0.0.1:9092/topic?protocol=open-protocol",
 		Config:  v2.ToAPIReplicaConfig(config.GetDefaultReplicaConfig()),
+=======
+func TestTxnOrderUpdateConfigs(t *testing.T) {
+	for _, tc := range []struct {
+		name, content string
+		want          []string
+	}{
+		{"omitted", "memory-quota = 2097152\n", []string{"test.ordered"}},
+		{"clear", "[sink.mysql-config]\ntxn-order-tables = []\n", []string{}},
+		{"replace", "[sink.mysql-config]\ntxn-order-tables = ['test.other']\n", []string{"test.other"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			replica := config.GetDefaultReplicaConfig()
+			replica.Sink.MySQLConfig = &config.MySQLConfig{TxnOrderTables: []string{"test.ordered"}}
+			oldInfo := &v2.ChangeFeedInfo{Config: v2.ToAPIReplicaConfig(replica)}
+			path := filepath.Join(t.TempDir(), "cf.toml")
+			require.NoError(t, os.WriteFile(path, []byte(tc.content), 0o600))
+			cmd := NewCmdCli()
+			o := newUpdateChangefeedOptions(newChangefeedCommonOptions())
+			o.addFlags(cmd)
+			require.NoError(t, cmd.ParseFlags([]string{"--config=" + path}))
+			updated, err := o.applyChanges(oldInfo, cmd)
+			require.NoError(t, err)
+			require.Equal(t, tc.want, updated.Config.Sink.MySQLConfig.TxnOrderTables)
+			body, err := json.Marshal(o.getChangefeedConfig(cmd, updated))
+			require.NoError(t, err)
+			request := &v2.ChangefeedConfig{ReplicaConfig: v2.ToAPIReplicaConfig(replica)}
+			require.NoError(t, json.Unmarshal(body, request))
+			require.Equal(t, tc.want, request.ReplicaConfig.Sink.MySQLConfig.TxnOrderTables)
+			require.Equal(t, []string{"test.ordered"}, oldInfo.Config.Sink.MySQLConfig.TxnOrderTables)
+		})
+	}
+}
+
+func TestSameClusterUpdateConfigs(t *testing.T) {
+	replica := config.GetDefaultReplicaConfig()
+	replica.AllowSameCluster = new(true)
+	replica.Filter.Rules = []string{"src.*"}
+	replica.Sink.DispatchRules = []*config.DispatchRule{
+		{Matcher: []string{"src.*"}, TargetSchema: "dst", TargetTable: "{table}_copy"},
+>>>>>>> c68c69d88 (sink: support per-table transaction ordering for MySQL sinks (#6860))
 	}
 	oldInfo.Config.Sink.KafkaConfig = &v2.KafkaConfig{
 		SASLUser:      util.AddressOf("alice"),

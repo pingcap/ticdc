@@ -26,6 +26,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/filter"
 	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/node"
+	"github.com/pingcap/ticdc/pkg/ordering"
 	"github.com/pingcap/ticdc/pkg/util"
 	"go.uber.org/atomic"
 	"go.uber.org/zap"
@@ -72,6 +73,8 @@ type dispatcherStat struct {
 	messageWorkerIndex int
 	info               DispatcherInfo
 	filter             filter.Filter
+	txnOrderMatcher    *ordering.TxnOrderMatcher
+	isSplitSpan        bool
 	// the start ts of the dispatcher
 	startTs uint64
 	// startTableInfo is the table info at the `startTs` of the dispatcher
@@ -185,6 +188,8 @@ func newDispatcherStat(
 		messageWorkerIndex: common.GID(id).Hash(messageWorkerCount),
 		info:               info,
 		filter:             changefeedStatus.filter,
+		txnOrderMatcher:    changefeedStatus.txnOrderMatcher,
+		isSplitSpan:        changefeedStatus.txnOrderMatcher != nil && !common.IsCompleteSpan(info.GetTableSpan()),
 		startTs:            info.GetStartTs(),
 		epoch:              info.GetEpoch(),
 		startTableInfo:     startTableInfo,
@@ -551,9 +556,10 @@ func (c *resolvedTsCache) reset() {
 }
 
 type changefeedStatus struct {
-	changefeedID   common.ChangeFeedID
-	lowLatencyMode bool
-	filter         filter.Filter
+	changefeedID    common.ChangeFeedID
+	lowLatencyMode  bool
+	filter          filter.Filter
+	txnOrderMatcher *ordering.TxnOrderMatcher
 	// mounter configuration is changefeed scoped.
 	mounter pevent.Mounter
 

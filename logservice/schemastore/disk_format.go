@@ -28,6 +28,7 @@ import (
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/filter"
+	"github.com/pingcap/ticdc/pkg/ordering"
 	"github.com/pingcap/tidb/pkg/kv"
 	"github.com/pingcap/tidb/pkg/meta/model"
 	"go.uber.org/zap"
@@ -796,6 +797,12 @@ func loadAllPhysicalTablesAtTs(
 	gcTs uint64,
 	snapVersion uint64,
 	tableFilter filter.Filter,
+<<<<<<< HEAD
+=======
+	txnOrderMatcher *ordering.TxnOrderMatcher,
+	encMgr encryption.EncryptionManager,
+	keyspaceID uint32,
+>>>>>>> c68c69d88 (sink: support per-table transaction ordering for MySQL sinks (#6860))
 ) ([]commonEvent.Table, error) {
 	// Replay DDLs before applying the filter to the final physical table list.
 	databaseMap, err := loadDatabasesInKVSnap(storageSnap, gcTs)
@@ -902,6 +909,15 @@ func loadAllPhysicalTablesAtTs(
 		}
 
 		splitable := traits.splitable
+		if txnOrderMatcher.Match(schemaName, tableInfo.Name) {
+			_, isPartition := partitionMap[tableID]
+			if err := verifyTxnOrderTable(txnOrderMatcher, &common.TableInfo{TableName: common.TableName{
+				Schema: schemaName, Table: tableInfo.Name, TableID: tableID, IsPartition: isPartition,
+			}}); err != nil {
+				return nil, err
+			}
+			splitable = false
+		}
 		if partitionInfo, ok := partitionMap[tableID]; ok {
 			for partitionID := range partitionInfo {
 				tables = append(tables, commonEvent.Table{

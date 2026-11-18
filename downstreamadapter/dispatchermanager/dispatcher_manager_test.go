@@ -34,6 +34,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/node"
+	"github.com/pingcap/ticdc/pkg/ordering"
 	"github.com/pingcap/ticdc/pkg/pdutil"
 	"github.com/pingcap/ticdc/pkg/routing"
 	"github.com/pingcap/ticdc/pkg/util"
@@ -158,6 +159,7 @@ func (s *bootstrapSchemaStoreForTest) GetAllPhysicalTables(
 	keyspaceMeta common.KeyspaceMeta,
 	snapTs uint64,
 	filter filter.Filter,
+	txnOrderMatcher *ordering.TxnOrderMatcher,
 ) ([]event.Table, error) {
 	return nil, nil
 }
@@ -205,6 +207,7 @@ func (s *bootstrapSchemaStoreForTest) FetchTableDDLEvents(
 	dispatcherID common.DispatcherID,
 	tableID int64,
 	tableFilter filter.Filter,
+	txnOrderMatcher *ordering.TxnOrderMatcher,
 	start uint64,
 	end uint64,
 ) ([]event.DDLEvent, error) {
@@ -215,6 +218,7 @@ func (s *bootstrapSchemaStoreForTest) FetchTableTriggerDDLEvents(
 	keyspaceMeta common.KeyspaceMeta,
 	dispatcherID common.DispatcherID,
 	tableFilter filter.Filter,
+	txnOrderMatcher *ordering.TxnOrderMatcher,
 	start uint64,
 	limit int,
 ) ([]event.DDLEvent, uint64, error) {

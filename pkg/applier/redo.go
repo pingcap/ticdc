@@ -25,6 +25,7 @@ import (
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/ordering"
 	"github.com/pingcap/ticdc/pkg/redo"
 	misc "github.com/pingcap/ticdc/pkg/redo/common"
 	"github.com/pingcap/ticdc/pkg/redo/reader"
@@ -50,9 +51,11 @@ var (
 
 // RedoApplierConfig is the configuration used by a redo log applier
 type RedoApplierConfig struct {
-	SinkURI string
-	Storage string
-	Dir     string
+	SinkURI       string
+	Storage       string
+	Dir           string
+	SinkConfig    *config.SinkConfig
+	CaseSensitive bool
 }
 
 // RedoApplier implements a redo log applier
@@ -69,6 +72,8 @@ type RedoApplier struct {
 	appliedLogCount uint64
 
 	needRecoveryInfo bool
+	txnOrderMatcher  *ordering.TxnOrderMatcher
+	hasTableRoute    bool
 }
 
 // NewRedoApplier creates a new RedoApplier instance
@@ -339,6 +344,9 @@ func (ra *RedoApplier) applyDDL(
 	if shouldSkip() {
 		return nil
 	}
+	if err := ra.verifyTxnOrderDDL(ctx, ddl); err != nil {
+		return err
+	}
 	log.Warn("apply DDL", zap.String("ddl", ddl.DDL.Query))
 	// Wait block tables to flush data before applying DDL.
 	tableIDs := ra.getBlockTableIDs(ddl.DDL.BlockedTables)
@@ -386,10 +394,21 @@ func (ra *RedoApplier) applyRow(
 		log.Warn("ignore the dml event since the ddl is not finished", zap.Int64("ts", tableDDLTs.ts), zap.String("row", util.RedactAny(row)))
 		return nil
 	}
+	if err := ra.verifyRedoTable(row.Row.SourceTable, row.Row.Table); err != nil {
+		return err
+	}
 
 	ra.eventsGroup[tableID].append(row.ToDMLEvent())
 
 	ra.appliedLogCount++
+	return nil
+}
+
+func (ra *RedoApplier) verifyTxnOrderTable(table *commonType.TableName) error {
+	if ra.txnOrderMatcher != nil && table != nil && table.IsPartition && ra.txnOrderMatcher.Match(table.Schema, table.Table) {
+		return errors.ErrInvalidReplicaConfig.GenWithStackByArgs(
+			"sink.mysql-config.txn-order-tables does not support partitioned table " + table.String())
+	}
 	return nil
 }
 
@@ -469,7 +488,19 @@ func (ra *RedoApplier) Apply(egCtx context.Context) (err error) {
 
 	sinkURI, err := url.Parse(ra.cfg.SinkURI)
 	if err != nil {
-		return errors.WrapError(errors.ErrSinkURIInvalid, err)
+		return errors.WrapError(errors.ErrSinkURIInvalid, util.MaskSensitiveDataInURLError(err), util.MaskSensitiveDataInURIForError(ra.cfg.SinkURI))
+	}
+	ra.txnOrderMatcher, err = ordering.NewTxnOrderMatcher(ra.cfg.SinkConfig.GetTxnOrderTables(sinkURI.Scheme), ra.cfg.CaseSensitive)
+	if err != nil {
+		return err
+	}
+	if ra.cfg.SinkConfig != nil {
+		for _, rule := range ra.cfg.SinkConfig.DispatchRules {
+			if rule != nil && (rule.TargetSchema != "" || rule.TargetTable != "") {
+				ra.hasTableRoute = true
+				break
+			}
+		}
 	}
 	query := sinkURI.Query()
 	query.Set("batch-dml-enable", "false")
@@ -484,9 +515,21 @@ func (ra *RedoApplier) Apply(egCtx context.Context) (err error) {
 		return err
 	}
 	replicaConfig := &config.ChangefeedConfig{
+<<<<<<< HEAD
 		SinkURI:    sinkURI.String(),
 		TimeZone:   timezone,
 		SinkConfig: &config.SinkConfig{},
+=======
+		SinkURI: sinkURI.String(),
+		// Redo apply runs without a CDC server instance, so resolve the default
+		// server timezone for the same sink URI validation as normal changefeeds.
+		TimeZone:      timezone,
+		CaseSensitive: ra.cfg.CaseSensitive,
+		SinkConfig:    ra.cfg.SinkConfig,
+	}
+	if replicaConfig.SinkConfig == nil {
+		replicaConfig.SinkConfig = &config.SinkConfig{}
+>>>>>>> c68c69d88 (sink: support per-table transaction ordering for MySQL sinks (#6860))
 	}
 	if ra.mysqlSink == nil {
 		ra.mysqlSink, err = mysql.New(

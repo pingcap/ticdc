@@ -435,6 +435,10 @@ func (d *dispatcherStat) handleSingleDataEvents(events []dispatcher.DispatcherEv
 		d.session.resetCurrentEventService()
 		return false
 	}
+	// Forward dispatcher failures before routing SQL or updating the cached schema.
+	if ddl, ok := events[0].Event.(*commonEvent.DDLEvent); ok && ddl.Err != "" {
+		return d.target.HandleEvents(events, func() { d.wake() })
+	}
 	if !d.shouldForwardEventByCommitTs(events[0]) {
 		return false
 	}

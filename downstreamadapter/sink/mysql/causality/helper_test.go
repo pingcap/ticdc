@@ -21,6 +21,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
+	"github.com/pingcap/ticdc/pkg/ordering"
 	codeccommon "github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"github.com/pingcap/ticdc/pkg/sink/codec/open"
 	timodel "github.com/pingcap/tidb/pkg/meta/model"
@@ -32,6 +33,32 @@ import (
 	"github.com/pingcap/tidb/pkg/util/collate"
 	"github.com/stretchr/testify/require"
 )
+
+func TestTxnOrderTableKeys(t *testing.T) {
+	pk := types.NewFieldType(mysql.TypeLong)
+	pk.AddFlag(mysql.PriKeyFlag | mysql.NotNullFlag)
+	ti := common.WrapTableInfo("test", &timodel.TableInfo{
+		ID: 100, Name: ast.NewCIStr("ordered"), PKIsHandle: true,
+		Columns: []*timodel.ColumnInfo{{ID: 1, Name: ast.NewCIStr("id"), State: timodel.StatePublic, FieldType: *pk}},
+	})
+	makeEvent := func(id int64) *commonEvent.DMLEvent {
+		e := commonEvent.NewDMLEvent(common.DispatcherID{Low: 1}, 100, 1, 2, ti)
+		e.SetRows(chunk.NewChunkWithCapacity(ti.GetFieldSlice(), 1))
+		e.Rows.AppendInt64(0, id)
+		e.RowTypes = []common.RowType{common.RowTypeInsert}
+		e.Length = 1
+		return e
+	}
+	first, second := makeEvent(1), makeEvent(2)
+	require.NotEqual(t, ConflictKeys(first, nil), ConflictKeys(second, nil))
+	f, err := ordering.NewTxnOrderMatcher([]string{"test.ordered"}, false)
+	require.NoError(t, err)
+	want := map[uint64]struct{}{uint64(100) | (1 << 63): {}}
+	require.Equal(t, want, ConflictKeys(first, f))
+	require.Equal(t, want, ConflictKeys(second, f))
+	second.PhysicalTableID = 101
+	require.NotEqual(t, want, ConflictKeys(second, f))
+}
 
 func TestGenKeyListUsesSchemaIndexWithVirtualGeneratedColumn(t *testing.T) {
 	t.Parallel()
@@ -358,7 +385,7 @@ func TestConflictKeysSecondaryUniqueIndexes(t *testing.T) {
 				}
 				return false
 			}
-			require.Equal(t, tc.wantConflict, hasConflict(ConflictKeys(events[1]), ConflictKeys(events[3])))
+			require.Equal(t, tc.wantConflict, hasConflict(ConflictKeys(events[1], nil), ConflictKeys(events[3], nil)))
 			redoKeys := func(event *commonEvent.DMLEvent) map[uint64]struct{} {
 				row, ok := event.GetNextRow()
 				require.True(t, ok)
@@ -375,7 +402,7 @@ func TestConflictKeysSecondaryUniqueIndexes(t *testing.T) {
 				replayed := decoded.RedoRow.ToDMLEvent()
 				replayed.DispatcherID = dispatcherID
 				t.Cleanup(replayed.PostFlush)
-				return ConflictKeys(replayed)
+				return ConflictKeys(replayed, nil)
 			}
 			redoEventKeys := make([]map[uint64]struct{}, len(events))
 			for i, event := range events {
@@ -388,11 +415,11 @@ func TestConflictKeysSecondaryUniqueIndexes(t *testing.T) {
 				after := makeEvent(common.RowTypeInsert, 4, tc.values[1], tc.suffixes[1])
 				before.RowTypes[0] = common.RowTypeUpdate
 				before.Rows.AppendRow(after.Rows.GetRow(0))
-				updateKeys := ConflictKeys(before)
+				updateKeys := ConflictKeys(before, nil)
 				// UPDATE must retain both the old and the new unique values,
 				// including when they do not conflict with one another.
-				require.True(t, hasConflict(updateKeys, ConflictKeys(events[1])))
-				require.True(t, hasConflict(updateKeys, ConflictKeys(events[3])))
+				require.True(t, hasConflict(updateKeys, ConflictKeys(events[1], nil)))
+				require.True(t, hasConflict(updateKeys, ConflictKeys(events[3], nil)))
 				redoUpdateKeys := redoKeys(before)
 				require.True(t, hasConflict(redoUpdateKeys, redoEventKeys[1]))
 				require.True(t, hasConflict(redoUpdateKeys, redoEventKeys[3]))
@@ -403,7 +430,7 @@ func TestConflictKeysSecondaryUniqueIndexes(t *testing.T) {
 				// safe-mode replay in the unsafe order T100, T103, T101, T102.
 				slots := NewSlots(1024)
 				for i, event := range events {
-					node := slots.AllocNode(ConflictKeys(event))
+					node := slots.AllocNode(ConflictKeys(event, nil))
 					node.RandCacheID = func() int64 { return 0 }
 					slots.Add(node)
 					if i > 0 {
@@ -592,14 +619,14 @@ func TestConflictKeysReconstructedSchemas(t *testing.T) {
 						event.DispatcherID = common.DispatcherID{Low: 1, High: 2}
 						t.Cleanup(event.PostFlush)
 					}
-					first, second := ConflictKeys(events[0]), ConflictKeys(events[1])
+					first, second := ConflictKeys(events[0], nil), ConflictKeys(events[1], nil)
 					require.NotEmpty(t, first)
 					for key := range first {
 						require.NotContains(t, second, key, "independent reconstructed rows must not conflict")
 					}
-					require.Equal(t, first, ConflictKeys(events[2]), "repeated rows must retain their dependencies")
+					require.Equal(t, first, ConflictKeys(events[2], nil), "repeated rows must retain their dependencies")
 					if tc.uniqueType != 0 {
-						uniqueKeys := ConflictKeys(events[3])
+						uniqueKeys := ConflictKeys(events[3], nil)
 						sharedKeys := 0
 						for key := range first {
 							if _, ok := uniqueKeys[key]; ok {

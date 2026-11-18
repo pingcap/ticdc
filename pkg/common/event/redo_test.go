@@ -18,7 +18,11 @@ import (
 
 	commonType "github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/tidb/pkg/meta/model"
+<<<<<<< HEAD
 	parser_model "github.com/pingcap/tidb/pkg/parser/model"
+=======
+	"github.com/pingcap/tidb/pkg/parser/ast"
+>>>>>>> c68c69d88 (sink: support per-table transaction ordering for MySQL sinks (#6860))
 	"github.com/pingcap/tidb/pkg/parser/mysql"
 	"github.com/pingcap/tidb/pkg/testkit"
 	"github.com/pingcap/tidb/pkg/types"
@@ -98,7 +102,7 @@ func TestRedoUsesRoutedTableNames(t *testing.T) {
 	defer helper.Close()
 
 	helper.Tk().MustExec("use test")
-	job := helper.DDL2Job(`create table test.t(id int primary key, name varchar(32))`)
+	job := helper.DDL2Job(`create table test.t(id int primary key, name varchar(32), unique key uk_name(name(4)))`)
 	require.NotNil(t, job)
 
 	sourceTableInfo := helper.GetTableInfo(job)
@@ -157,6 +161,17 @@ func TestRedoUsesRoutedTableNames(t *testing.T) {
 	require.Equal(t, "target_table", redoRow.Row.Table.Table)
 	require.Empty(t, redoRow.Row.Table.TargetSchema)
 	require.Empty(t, redoRow.Row.Table.TargetTable)
+	require.NotNil(t, redoRow.Row.SourceTable)
+	require.Equal(t, "test", redoRow.Row.SourceTable.Schema)
+	require.Equal(t, "t", redoRow.Row.SourceTable.Table)
+	require.Equal(t, [][]int{{types.UnspecifiedLength}, {4}}, redoRow.Row.IndexColumnLengths)
+	data, err := redoRow.MarshalMsg(nil)
+	require.NoError(t, err)
+	var restored RedoDMLEvent
+	_, err = restored.UnmarshalMsg(data)
+	require.NoError(t, err)
+	require.Equal(t, redoRow.Row.SourceTable, restored.Row.SourceTable)
+	require.Equal(t, redoRow.Row.IndexColumnLengths, restored.Row.IndexColumnLengths)
 
 	decoded := redoRow.ToDMLEvent()
 	require.Equal(t, "target_db", decoded.TableInfo.GetSchemaName())
@@ -202,7 +217,11 @@ func TestRedoDDLEventToRedoLogWithoutRouting(t *testing.T) {
 func TestRedoDDLEventRoundTripPreservesColumnMetadata(t *testing.T) {
 	originalTableInfo := commonType.NewTableInfo4Decoder("test", &model.TableInfo{
 		ID:   1001,
+<<<<<<< HEAD
 		Name: parser_model.NewCIStr("t_redo"),
+=======
+		Name: ast.NewCIStr("t_redo"),
+>>>>>>> c68c69d88 (sink: support per-table transaction ordering for MySQL sinks (#6860))
 		Columns: []*model.ColumnInfo{
 			newRedoDDLTestColumn(t, 1, "id", mysql.TypeLonglong, nil, model.CurrLatestColumnInfoVersion),
 			newRedoDDLTestColumn(t, 2, "status", mysql.TypeVarchar, "ready", model.CurrLatestColumnInfoVersion),
@@ -376,7 +395,11 @@ func newRedoDDLTestColumn(
 	column := &model.ColumnInfo{
 		ID:        id,
 		Offset:    int(id - 1),
+<<<<<<< HEAD
 		Name:      parser_model.NewCIStr(name),
+=======
+		Name:      ast.NewCIStr(name),
+>>>>>>> c68c69d88 (sink: support per-table transaction ordering for MySQL sinks (#6860))
 		State:     model.StatePublic,
 		FieldType: *fieldType,
 		Version:   version,

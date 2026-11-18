@@ -1727,6 +1727,24 @@ func TestFinishBootstrapReplacesTerminalSpanOfAddedTable(t *testing.T) {
 }
 
 func TestFinishBootstrapAddedTableHistory(t *testing.T) {
+	t.Run("validation error in history aborts bootstrap", func(t *testing.T) {
+		env := newMergeBootstrapTestEnv(t)
+		schemaStore := eventservice.NewMockSchemaStore()
+		schemaStore.SetResolvedTs(200)
+		schemaStore.AppendDDLEvent(common.DDLSpanTableID, commonEvent.DDLEvent{
+			FinishedTs: 112,
+			Err: cerrors.WrapChangefeedUnretryableErr(cerrors.ErrInvalidReplicaConfig.GenWithStackByArgs(
+				"sink.mysql-config.txn-order-tables does not support partitioned table test.ordered")).Error(),
+			NeedAddedTables: []commonEvent.Table{{TableID: 1, SchemaID: 1}},
+		})
+		appcontext.SetService(appcontext.SchemaStore, schemaStore)
+		spanInfo := env.bootstrapSpan(env.sourceDispatcherID1, env.mergedSpan, heartbeatpb.ComponentState_Working)
+		spanInfo.CheckpointTs = 112
+		_, err := env.controller.FinishBootstrap(context.Background(), env.bootstrapResponses(nil, spanInfo), false)
+		require.ErrorContains(t, err, "txn-order-tables does not support partitioned table")
+		require.True(t, cerrors.ShouldFailChangefeed(err))
+		require.False(t, env.controller.bootstrapped)
+	})
 	t.Run("paginated history", func(t *testing.T) {
 		env := newMergeBootstrapTestEnv(t)
 		schemaStore := eventservice.NewMockSchemaStore()

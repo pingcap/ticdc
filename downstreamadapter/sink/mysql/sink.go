@@ -190,11 +190,21 @@ func newMySQLSinkWithDBs(
 				Size:          1024,
 				BlockStrategy: causality.BlockStrategyWaitEmpty,
 			},
+<<<<<<< HEAD
 			changefeedID),
 		isNormal:   atomic.NewBool(true),
 		cfg:        cfg,
 		maxTxnRows: cfg.MaxTxnRow,
 		bdrMode:    bdrMode,
+=======
+			changefeedID, cfg.TxnOrderMatcher),
+		isNormal:                       atomic.NewBool(true),
+		cfg:                            cfg,
+		maxTxnRows:                     cfg.MaxTxnRow,
+		bdrMode:                        bdrMode,
+		enableActiveActive:             enableActiveActive,
+		activeActiveSyncStatsCollector: activeActiveSyncStatsCollector,
+>>>>>>> c68c69d88 (sink: support per-table transaction ordering for MySQL sinks (#6860))
 	}
 	for i := 0; i < len(result.dmlWriter); i++ {
 		result.dmlWriter[i] = mysql.NewWriter(ctx, i, dmlDB, cfg, changefeedID, stat)
@@ -261,6 +271,9 @@ func (s *Sink) runDMLWriter(ctx context.Context, idx int) error {
 			singleFlushStart := time.Now()
 
 			flushEvent := func(beginIndex, endIndex int, rowCount int32) error {
+				if beginIndex == endIndex {
+					return nil
+				}
 				workerHandledRows.Add(float64(rowCount))
 				err := writer.Flush(txnEvents[beginIndex:endIndex])
 				if err != nil {
@@ -271,18 +284,28 @@ func (s *Sink) runDMLWriter(ctx context.Context, idx int) error {
 				return nil
 			}
 
-			beginIndex, rowCount := 0, txnEvents[0].Len()
-			workerEventRowCount.Observe(float64(rowCount))
-			for i := 1; i < len(txnEvents); i++ {
-				workerEventRowCount.Observe(float64(txnEvents[i].Len()))
-				if rowCount+txnEvents[i].Len() > int32(s.maxTxnRows) {
+			beginIndex, rowCount := 0, int32(0)
+			for i, txnEvent := range txnEvents {
+				eventRowCount := txnEvent.Len()
+				workerEventRowCount.Observe(float64(eventRowCount))
+				tableInfo := txnEvent.TableInfo
+				if s.cfg.TxnOrderMatcher != nil && s.cfg.TxnOrderMatcher.Match(tableInfo.GetSchemaName(), tableInfo.GetTableName()) {
 					if err := flushEvent(beginIndex, i, rowCount); err != nil {
 						return errors.Trace(err)
 					}
-					beginIndex, rowCount = i, txnEvents[i].Len()
-				} else {
-					rowCount += txnEvents[i].Len()
+					if err := flushEvent(i, i+1, eventRowCount); err != nil {
+						return errors.Trace(err)
+					}
+					beginIndex, rowCount = i+1, 0
+					continue
 				}
+				if rowCount+eventRowCount > int32(s.maxTxnRows) {
+					if err := flushEvent(beginIndex, i, rowCount); err != nil {
+						return errors.Trace(err)
+					}
+					beginIndex, rowCount = i, 0
+				}
+				rowCount += eventRowCount
 			}
 			// flush last batch
 			if err := flushEvent(beginIndex, len(txnEvents), rowCount); err != nil {
@@ -328,6 +351,20 @@ func (s *Sink) AddDMLEvent(event *commonEvent.DMLEvent) {
 
 func (s *Sink) FlushDMLBeforeBlock(_ commonEvent.BlockEvent) error {
 	return nil
+}
+
+// IsTablePartitioned checks the current downstream schema before replaying legacy DDLs.
+func (s *Sink) IsTablePartitioned(ctx context.Context, schema, table string) (bool, error) {
+	const query = "SELECT EXISTS(SELECT 1 FROM information_schema.partitions WHERE table_schema = ? AND table_name = ? AND partition_name IS NOT NULL)"
+	var partitioned bool
+	if err := s.controlDB.QueryRowContext(ctx, query, schema, table).Scan(&partitioned); err != nil {
+		if ctx.Err() != nil {
+			return false, ctx.Err()
+		}
+		// Downstream errors can contain arbitrary server text, including credentials.
+		return false, errors.ErrMySQLQueryError.GenWithStack("partition metadata query failed (%T)", err)
+	}
+	return partitioned, nil
 }
 
 func (s *Sink) WriteBlockEvent(event commonEvent.BlockEvent) error {
