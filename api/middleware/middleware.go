@@ -50,6 +50,15 @@ const ClientVersionHeader = "X-client-version"
 
 const ctxKeyspaceKey = "ctx-keyspace"
 
+// errorResponseStatus returns the status code ErrorHandleMiddleware writes for
+// an error collected from a handler.
+func errorResponseStatus(err error) int {
+	if api.IsHTTPBadRequestError(err) {
+		return http.StatusBadRequest
+	}
+	return http.StatusInternalServerError
+}
+
 // ErrorHandleMiddleware puts the error into response
 func ErrorHandleMiddleware() gin.HandlerFunc {
 	return func(c *gin.Context) {
@@ -58,13 +67,7 @@ func ErrorHandleMiddleware() gin.HandlerFunc {
 		// there will be only one error in c.Errors
 		lastError := c.Errors.Last()
 		if lastError != nil {
-			err := lastError.Err
-			// put the error into response
-			if api.IsHTTPBadRequestError(err) {
-				c.IndentedJSON(http.StatusBadRequest, api.NewHTTPError(err))
-			} else {
-				c.IndentedJSON(http.StatusInternalServerError, api.NewHTTPError(err))
-			}
+			c.IndentedJSON(errorResponseStatus(lastError.Err), api.NewHTTPError(lastError.Err))
 			c.Abort()
 			return
 		}
@@ -264,6 +267,10 @@ func loadKeyspaceFromQuery(c *gin.Context) bool {
 	// if the classic mode supports multiple keyspaces in future
 	// we need to remove this if block
 	if kerneltype.IsClassic() {
+		return true
+	}
+	// The node authentication middleware may have resolved the keyspace already.
+	if _, ok := c.Get(ctxKeyspaceKey); ok {
 		return true
 	}
 
