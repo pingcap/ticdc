@@ -19,10 +19,10 @@ import (
 
 	"github.com/IBM/sarama"
 	"github.com/pingcap/log"
+	"github.com/pingcap/ticdc/downstreamadapter/sink/statistics"
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/errors"
 	codecCommon "github.com/pingcap/ticdc/pkg/sink/codec/common"
-	"github.com/pingcap/ticdc/pkg/statistics"
 	"go.uber.org/atomic"
 	"go.uber.org/zap"
 )
@@ -37,7 +37,6 @@ type saramaAsyncProducer struct {
 }
 
 type messageMetadata struct {
-	rowCount int
 	callback func()
 	logInfo  *codecCommon.MessageLogInfo
 }
@@ -103,13 +102,15 @@ func (p *saramaAsyncProducer) AsyncRunCallback(
 			return context.Cause(ctx)
 		case ack := <-p.producer.Successes():
 			if ack != nil {
-				meta, ok := ack.Metadata.(*messageMetadata)
-				if !ok {
+				switch meta := ack.Metadata.(type) {
+				case *messageMetadata:
+					if meta != nil && meta.callback != nil {
+						meta.callback()
+					}
+				default:
 					log.Error("kafka producer received unknown message metadata type",
 						zap.Any("metadata", ack.Metadata))
-					continue
 				}
-				p.handleSuccess(meta)
 			}
 		case err := <-p.producer.Errors():
 			// We should not wrap a nil pointer if the pointer
@@ -120,12 +121,15 @@ func (p *saramaAsyncProducer) AsyncRunCallback(
 			if err == nil {
 				return nil
 			}
-			return p.handleFailure(extractRowCount(err.Msg), p.handleProducerError(err.Err, extractLogInfo(err.Msg)))
+			return p.handleProducerError(err.Err, extractLogInfo(err.Msg))
 		}
 	}
 }
 
 func (p *saramaAsyncProducer) handleProducerError(err error, logInfo *codecCommon.MessageLogInfo) error {
+	if p.statistics != nil {
+		p.statistics.RecordDMLError()
+	}
 	log.Error("kafka message send failed",
 		zap.String("keyspace", p.changefeedID.Keyspace()),
 		zap.String("changefeed", p.changefeedID.Name()),
@@ -140,10 +144,9 @@ func (p *saramaAsyncProducer) AsyncSend(
 	ctx context.Context, topic string, partition int32, message *codecCommon.Message,
 ) error {
 	if p.closed.Load() {
-		return p.handleFailure(message.GetRowsCount(), errors.ErrKafkaSinkClosed.GenWithStackByArgs())
+		return errors.ErrKafkaSinkClosed.GenWithStackByArgs()
 	}
 	meta := &messageMetadata{
-		rowCount: message.GetRowsCount(),
 		callback: message.Callback,
 		logInfo:  message.LogInfo,
 	}
@@ -156,54 +159,13 @@ func (p *saramaAsyncProducer) AsyncSend(
 	}
 	select {
 	case <-ctx.Done():
-		return p.handleFailure(message.GetRowsCount(), context.Cause(ctx))
+		return context.Cause(ctx)
 	case p.producer.Input() <- msg:
 	}
 	return nil
 }
 
-// handleSuccess records a successful delivery and runs the message callback.
-// It only touches ticdc-owned types so the statistics behavior can be
-// unit-tested without any broker machinery.
-func (p *saramaAsyncProducer) handleSuccess(meta *messageMetadata) {
-	if meta == nil {
-		return
-	}
-	p.recordDMLResult(meta.rowCount, nil)
-	if meta.callback != nil {
-		meta.callback()
-	}
-}
-
-// handleFailure records a failed delivery attempt and returns the error.
-func (p *saramaAsyncProducer) handleFailure(rowCount int, err error) error {
-	p.recordDMLResult(rowCount, err)
-	return err
-}
-
-func (p *saramaAsyncProducer) recordDMLResult(rowCount int, err error) {
-	if p.statistics != nil {
-		p.statistics.RecordDMLResult(rowCount, err)
-	}
-}
-
-func extractRowCount(msg *sarama.ProducerMessage) int {
-	meta := extractMessageMetadata(msg)
-	if meta == nil {
-		return 0
-	}
-	return meta.rowCount
-}
-
 func extractLogInfo(msg *sarama.ProducerMessage) *codecCommon.MessageLogInfo {
-	meta := extractMessageMetadata(msg)
-	if meta == nil {
-		return nil
-	}
-	return meta.logInfo
-}
-
-func extractMessageMetadata(msg *sarama.ProducerMessage) *messageMetadata {
 	if msg == nil {
 		return nil
 	}
@@ -211,5 +173,5 @@ func extractMessageMetadata(msg *sarama.ProducerMessage) *messageMetadata {
 	if !ok || meta == nil {
 		return nil
 	}
-	return meta
+	return meta.logInfo
 }

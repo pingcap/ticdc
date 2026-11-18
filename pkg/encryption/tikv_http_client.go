@@ -158,7 +158,6 @@ func (c *tikvEncryptionHTTPClient) getEncryptionMetaFromStore(ctx context.Contex
 			zap.String("url", storeURL),
 			zap.String("contentType", contentType),
 			zap.Int("bodySize", len(body)),
-			zap.String("body", truncateBytesForLog(body, 256)),
 			zap.Error(decodeErr))
 		return nil, errors.Trace(decodeErr)
 	}

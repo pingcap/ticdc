@@ -21,7 +21,6 @@ import (
 	"time"
 
 	"github.com/cockroachdb/pebble"
-	"github.com/pingcap/kvproto/pkg/cdcpb"
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/logservice/logpuller"
@@ -41,13 +40,13 @@ type trackingSubscriptionClient struct {
 	nextID        atomic.Uint64
 	mu            sync.Mutex
 	subscriptions map[logpuller.SubscriptionID]struct{}
-	priorities    map[logpuller.SubscriptionID]cdcpb.ScanPriority
+	priorities    map[logpuller.SubscriptionID]logpuller.ScanPriorityLevel
 }
 
 func newTrackingSubscriptionClient() *trackingSubscriptionClient {
 	return &trackingSubscriptionClient{
 		subscriptions: make(map[logpuller.SubscriptionID]struct{}),
-		priorities:    make(map[logpuller.SubscriptionID]cdcpb.ScanPriority),
+		priorities:    make(map[logpuller.SubscriptionID]logpuller.ScanPriorityLevel),
 	}
 }
 
@@ -69,7 +68,7 @@ func (s *trackingSubscriptionClient) Subscribe(
 	_ func(uint64),
 	_ int64,
 	_ bool,
-	priority cdcpb.ScanPriority,
+	priority logpuller.ScanPriorityLevel,
 ) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -91,10 +90,10 @@ func (s *trackingSubscriptionClient) contains(subID logpuller.SubscriptionID) bo
 	return ok
 }
 
-func (s *trackingSubscriptionClient) subscriptionPriorities() []cdcpb.ScanPriority {
+func (s *trackingSubscriptionClient) subscriptionPriorities() []logpuller.ScanPriorityLevel {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	priorities := make([]cdcpb.ScanPriority, 0, len(s.priorities))
+	priorities := make([]logpuller.ScanPriorityLevel, 0, len(s.priorities))
 	for _, priority := range s.priorities {
 		priorities = append(priorities, priority)
 	}
@@ -176,7 +175,7 @@ func TestRemoveTombstoneKeyspace(t *testing.T) {
 		nil,
 		0,
 		false,
-		cdcpb.ScanPriority_SCAN_PRIORITY_LOW,
+		logpuller.ScanPriorityLow,
 	)
 	fetcher.resolvedTsTracker.resolvedTsItemMap[subID] = &resolvedTsItem{}
 

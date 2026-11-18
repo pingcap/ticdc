@@ -24,7 +24,6 @@ import (
 	commonType "github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
-	"github.com/pingcap/ticdc/pkg/sink/pulsar"
 	"go.uber.org/zap"
 )
 
@@ -105,7 +104,11 @@ func (p *ddlProducers) syncBroadcastMessage(ctx context.Context, topic string, m
 // SyncSendMessage sends a message
 // partitionNum is not used, pulsar consume all partitions
 func (p *ddlProducers) syncSendMessage(ctx context.Context, topic string, message *common.Message, messageType common.MessageType) error {
-	pulsar.IncPublishedDDLCount(topic, p.changefeedID.String(), messageType)
+	counter := publishedDDLSchemaTableCount
+	if messageType == common.MessageTypeResolved {
+		counter = publishedMessageTypeResolvedCount
+	}
+	counter.WithLabelValues(topic, p.changefeedID.String(), "count").Inc()
 	producer, err := p.getProducerByTopic(topic)
 	if err != nil {
 		log.Error("ddl SyncSendMessage GetProducerByTopic fail", zap.Error(err))
@@ -119,14 +122,14 @@ func (p *ddlProducers) syncSendMessage(ctx context.Context, topic string, messag
 	mID, err := producer.Send(ctx, data)
 	if err != nil {
 		log.Error("ddl producer send fail", zap.Error(err))
-		pulsar.IncPublishedDDLFail(topic, p.changefeedID.String(), messageType)
+		counter.WithLabelValues(topic, p.changefeedID.String(), "fail").Inc()
 		return err
 	}
 
 	log.Debug("ddlProducers SyncSendMessage success",
 		zap.Any("mID", mID), zap.String("topic", topic))
 
-	pulsar.IncPublishedDDLSuccess(topic, p.changefeedID.String(), messageType)
+	counter.WithLabelValues(topic, p.changefeedID.String(), "success").Inc()
 	return nil
 }
 

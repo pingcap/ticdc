@@ -20,6 +20,7 @@ import (
 	"github.com/pingcap/ticdc/downstreamadapter/sink/columnselector"
 	"github.com/pingcap/ticdc/downstreamadapter/sink/eventrouter"
 	"github.com/pingcap/ticdc/downstreamadapter/sink/helper"
+	"github.com/pingcap/ticdc/downstreamadapter/sink/statistics"
 	"github.com/pingcap/ticdc/downstreamadapter/sink/topicmanager"
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/config"
@@ -28,7 +29,6 @@ import (
 	"github.com/pingcap/ticdc/pkg/sink/codec/schemamanager"
 	"github.com/pingcap/ticdc/pkg/sink/kafka"
 	"github.com/pingcap/ticdc/pkg/sink/kafka/claimcheck"
-	"github.com/pingcap/ticdc/pkg/statistics"
 	"github.com/pingcap/tidb/br/pkg/utils"
 )
 
@@ -64,7 +64,7 @@ func newKafkaSinkComponent(
 	sinkURI *url.URL,
 	sinkConfig *config.SinkConfig,
 	caseSensitive bool,
-	stat *statistics.Statistics,
+	stats *statistics.Statistics,
 ) (components, config.Protocol, error) {
 	var (
 		comp components
@@ -92,7 +92,7 @@ func newKafkaSinkComponent(
 	}
 	options.Topic = topic
 
-	comp.factory, err = kafka.NewFactory(ctx, options, changefeedID, stat)
+	comp.factory, err = kafka.NewFactory(ctx, options, changefeedID, stats)
 	if err != nil {
 		return comp, protocol, err
 	}

@@ -21,6 +21,14 @@ import (
 )
 
 var (
+	captureLastWriteAdmissionTimestamp = prometheus.NewGauge(
+		prometheus.GaugeOpts{
+			Namespace: "ticdc",
+			Subsystem: "server",
+			Name:      "capture_last_write_admission_timestamp_seconds",
+			Help:      "Unix timestamp of the most recent downstream write admitted by this capture.",
+		})
+
 	execDMLEventRowsAffectedCounter = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
 			Namespace: "ticdc",
@@ -37,72 +45,13 @@ var (
 			Name:      "active_active_conflict_skip_rows_total",
 			Help:      "Total number of rows skipped due to last-write-wins conflict resolution in TiDB active-active replication.",
 		}, []string{metrics.GetKeyspaceLabel(), "changefeed"})
-
-	// ConflictDetectDuration records the duration of detecting conflict.
-	ConflictDetectDuration = prometheus.NewHistogramVec(
-		prometheus.HistogramOpts{
-			Namespace: "ticdc",
-			Subsystem: "sink",
-			Name:      "txn_conflict_detect_duration",
-			Help:      "Bucketed histogram of conflict detect time (s) for single DML statement.",
-			Buckets:   prometheus.ExponentialBuckets(0.001, 2, 20), // 1ms~524s
-		}, []string{metrics.GetKeyspaceLabel(), "changefeed"})
-
-	WorkerBatchFlushDuration = prometheus.NewHistogramVec(
-		prometheus.HistogramOpts{
-			Namespace: "ticdc",
-			Subsystem: "sink",
-			Name:      "txn_worker_batch_flush_duration",
-			Help:      "Flush duration (s) for txn worker.",
-			Buckets:   prometheus.ExponentialBuckets(0.001, 2, 20), // 1ms~524s
-		}, []string{metrics.GetKeyspaceLabel(), "changefeed", "id"})
-
-	WorkerFlushDuration = prometheus.NewHistogramVec(
-		prometheus.HistogramOpts{
-			Namespace: "ticdc",
-			Subsystem: "sink",
-			Name:      "txn_worker_flush_duration",
-			Help:      "Flush duration (s) for txn worker.",
-			Buckets:   prometheus.ExponentialBuckets(0.001, 2, 20), // 1ms~524s
-		}, []string{metrics.GetKeyspaceLabel(), "changefeed", "id"})
-
-	WorkerTotalDuration = prometheus.NewHistogramVec(
-		prometheus.HistogramOpts{
-			Namespace: "ticdc",
-			Subsystem: "sink",
-			Name:      "txn_worker_total_duration",
-			Help:      "total duration (s) for txn worker.",
-			Buckets:   prometheus.ExponentialBuckets(0.001, 2, 20), // 1ms~524s
-		}, []string{metrics.GetKeyspaceLabel(), "changefeed", "id"})
-
-	WorkerHandledRows = prometheus.NewCounterVec(
-		prometheus.CounterOpts{
-			Namespace: "ticdc",
-			Subsystem: "sink",
-			Name:      "txn_worker_handled_rows",
-			Help:      "Busy ratio (X ms in 1s) for all workers.",
-		}, []string{metrics.GetKeyspaceLabel(), "changefeed", "id"})
-
-	WorkerEventRowCount = prometheus.NewHistogramVec(
-		prometheus.HistogramOpts{
-			Namespace: "ticdc",
-			Subsystem: "sink",
-			Name:      "txn_worker_event_row_count",
-			Help:      "Row count number for a single DML event handled by txn sink worker.",
-			Buckets:   prometheus.ExponentialBuckets(1, 2, 12), // 1~2048
-		}, []string{metrics.GetKeyspaceLabel(), "changefeed", "id"})
 )
 
-// InitMetrics registers MySQL sink metrics.
-func InitMetrics(registry *prometheus.Registry) {
+// RegisterMetrics registers MySQL sink metrics.
+func RegisterMetrics(registry *prometheus.Registry) {
+	registry.MustRegister(captureLastWriteAdmissionTimestamp)
 	registry.MustRegister(execDMLEventRowsAffectedCounter)
 	registry.MustRegister(activeActiveConflictSkipRowsCounter)
-	registry.MustRegister(ConflictDetectDuration)
-	registry.MustRegister(WorkerBatchFlushDuration)
-	registry.MustRegister(WorkerFlushDuration)
-	registry.MustRegister(WorkerTotalDuration)
-	registry.MustRegister(WorkerHandledRows)
-	registry.MustRegister(WorkerEventRowCount)
 }
 
 // DeleteDMLEventRowsAffectedMetrics deletes affected-row metric series for a MySQL sink.

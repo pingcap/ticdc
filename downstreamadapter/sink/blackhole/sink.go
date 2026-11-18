@@ -17,9 +17,9 @@ import (
 	"context"
 
 	"github.com/pingcap/log"
+	"github.com/pingcap/ticdc/downstreamadapter/sink/statistics"
 	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
-	"github.com/pingcap/ticdc/pkg/statistics"
 	"github.com/pingcap/ticdc/pkg/writelease"
 	"github.com/pingcap/ticdc/utils/chann"
 	"go.uber.org/zap"
@@ -58,7 +58,6 @@ func (s *Sink) AddDMLEvent(event *commonEvent.DMLEvent) {
 	// ref: https://github.com/pingcap/ticdc/blob/da834db76e0662ff15ef12645d1f37bfa6506d83/tests/integration_tests/lossy_ddl/run.sh#L23
 	// Use zap.Stringer to call String() method which applies log redaction
 	log.Debug("BlackHoleSink: WriteEvents", zap.Stringer("dml", event))
-	s.statistics.TrackDMLEvent(event)
 	s.eventCh.Push(event)
 }
 
@@ -73,9 +72,8 @@ func (s *Sink) WriteBlockEvent(event commonEvent.BlockEvent) error {
 		// NOTE: don't change the log, integration test `lossy_ddl` depends on it.
 		// ref: https://github.com/pingcap/ticdc/blob/da834db76e0662ff15ef12645d1f37bfa6506d83/tests/integration_tests/lossy_ddl/run.sh#L17
 		log.Debug("BlackHoleSink: DDL Event", zap.String("ddl", e.GetDDLQuery()))
-		ddlType := e.GetDDLType().String()
-		err := s.statistics.RecordDDLExecution(func() (string, error) {
-			return ddlType, nil
+		err := s.statistics.RecordDDLExecution(e.GetDDLType().String(), func() error {
+			return nil
 		})
 		if err != nil {
 			return err
@@ -109,7 +107,7 @@ func (s *Sink) Run(ctx context.Context) error {
 				log.Info("blackhole sink event channel closed")
 				return nil
 			}
-			s.statistics.RecordDMLResult(int(event.Len()), nil)
+			s.statistics.RecordDMLBatch(int(event.Len()), event.GetSize())
 			event.PostFlush()
 		}
 	}

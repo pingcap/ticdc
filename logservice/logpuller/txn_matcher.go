@@ -18,7 +18,6 @@ import (
 
 	"github.com/pingcap/kvproto/pkg/cdcpb"
 	"github.com/pingcap/log"
-	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/util"
 	"go.uber.org/zap"
 )
@@ -29,8 +28,8 @@ const (
 )
 
 var (
-	prewriteCacheRowNum = metrics.LogPullerPrewriteCacheRowNum
-	matcherCount        = metrics.LogPullerMatcherCount
+	prewriteCacheRowNum = logPullerPrewriteCacheRowNum
+	matcherCount        = logPullerMatcherCount
 )
 
 type matchKey struct {

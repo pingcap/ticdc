@@ -21,11 +21,11 @@ import (
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/pingcap/ticdc/downstreamadapter/sink/helper"
+	"github.com/pingcap/ticdc/downstreamadapter/sink/statistics"
 	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
-	cerror "github.com/pingcap/ticdc/pkg/errors"
-	"github.com/pingcap/ticdc/pkg/statistics"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/writelease"
 	"github.com/pingcap/ticdc/utils/chann"
 	"github.com/stretchr/testify/require"
@@ -49,7 +49,7 @@ func newPulsarSinkForTest(t *testing.T) (*sink, error) {
 	comp, protocol, err := newPulsarSinkComponentForTest(ctx, changefeedID, sinkURI, replicaConfig.Sink, false)
 	require.NoError(t, err)
 
-	statistics := statistics.New(changefeedID, common.DefaultKeyspaceID)
+	stats := statistics.New(changefeedID, common.DefaultKeyspaceID)
 	pulsarSink := &sink{
 		changefeedID: changefeedID,
 		dmlProducer:  newMockDMLProducer(),
@@ -64,7 +64,7 @@ func newPulsarSinkForTest(t *testing.T) (*sink, error) {
 		comp:          comp,
 
 		isNormal:   atomic.NewBool(true),
-		statistics: statistics,
+		statistics: stats,
 		ctx:        ctx,
 	}
 	return pulsarSink, nil
@@ -79,7 +79,7 @@ func TestPulsarSinkBasicFunctionality(t *testing.T) {
 		runDone <- pulsarSink.Run(ctx)
 	}()
 
-	var count, dmlFlushCount atomic.Int64
+	var count atomic.Int64
 
 	helper := commonEvent.NewEventTestHelper(t)
 	defer helper.Close()
@@ -104,55 +104,23 @@ func TestPulsarSinkBasicFunctionality(t *testing.T) {
 		},
 	}
 
-	ddlEvent2 := &commonEvent.DDLEvent{
-		Query:      job.Query,
-		SchemaName: job.SchemaName,
-		TableName:  job.TableName,
-		FinishedTs: 4,
-		BlockedTables: &commonEvent.InfluencedTables{
-			InfluenceType: commonEvent.InfluenceTypeNormal,
-			TableIDs:      []int64{0},
-		},
-		NeedAddedTables: []commonEvent.Table{{TableID: 1, SchemaID: 1}},
-		PostTxnFlushed: []func(){
-			func() { count.Add(1) },
-		},
-	}
-
 	dmlEvent := helper.DML2Event("test", "t", "insert into t values (1, 'test')", "insert into t values (2, 'test2');")
 	dmlEvent.PostTxnFlushed = []func(){
-		func() {
-			count.Add(1)
-			dmlFlushCount.Add(1)
-		},
+		func() { count.Add(1) },
 	}
 	dmlEvent.CommitTs = 2
-	producer := pulsarSink.dmlProducer.(*mockProducer)
-	producer.ackCh = make(chan func(), 2)
 
 	err = pulsarSink.WriteBlockEvent(ddlEvent)
 	require.NoError(t, err)
 
 	pulsarSink.AddDMLEvent(dmlEvent)
 	require.Eventually(t, func() bool {
-		return len(producer.ackCh) == 2
-	}, 5*time.Second, 10*time.Millisecond)
-	require.Zero(t, dmlFlushCount.Load())
+		return count.Load() == 2
+	}, 5*time.Second, 10*time.Millisecond, "the DML event should be flushed")
 
-	(<-producer.ackCh)()
-	require.Zero(t, dmlFlushCount.Load())
-
-	(<-producer.ackCh)()
-	require.Eventually(t, func() bool {
-		return dmlFlushCount.Load() == 1
-	}, 5*time.Second, 10*time.Millisecond)
-
-	ddlEvent2.PostFlush()
-
-	require.Len(t, producer.GetAllEvents(), 2)
+	require.Len(t, pulsarSink.dmlProducer.(*mockProducer).GetAllEvents(), 2)
 	require.Len(t, pulsarSink.ddlProducer.(*mockProducer).GetAllEvents(), 1)
 
-	require.Equal(t, count.Load(), int64(3))
 	cancel()
 	require.ErrorIs(t, <-runDone, context.Canceled)
 	pulsarSink.Close()
@@ -198,7 +166,7 @@ func TestPulsarSinkBatchConfig(t *testing.T) {
 
 func TestPulsarSinkNewWithComponentReturnsDMLProducerError(t *testing.T) {
 	changefeedID := common.NewChangefeedID4Test("test", "test")
-	expectedErr := cerror.ErrPulsarNewProducer.GenWithStackByArgs()
+	expectedErr := errors.ErrPulsarNewProducer.GenWithStackByArgs()
 	ddlProducerCreated := false
 	var err error
 
@@ -210,7 +178,7 @@ func TestPulsarSinkNewWithComponentReturnsDMLProducerError(t *testing.T) {
 			&config.SinkConfig{},
 			component{},
 			config.ProtocolCanalJSON,
-			func(common.ChangeFeedID, component, chan error) (dmlProducer, error) {
+			func(common.ChangeFeedID, component, chan error, *statistics.Statistics) (dmlProducer, error) {
 				var producer *dmlProducers
 				return producer, expectedErr
 			},
@@ -228,7 +196,7 @@ func TestPulsarSinkNewWithComponentReturnsDMLProducerError(t *testing.T) {
 
 func TestPulsarSinkNewWithComponentReturnsDDLProducerError(t *testing.T) {
 	changefeedID := common.NewChangefeedID4Test("test", "test")
-	expectedErr := cerror.ErrPulsarNewProducer.GenWithStackByArgs()
+	expectedErr := errors.ErrPulsarNewProducer.GenWithStackByArgs()
 	var err error
 
 	require.NotPanics(t, func() {
@@ -239,7 +207,7 @@ func TestPulsarSinkNewWithComponentReturnsDDLProducerError(t *testing.T) {
 			&config.SinkConfig{},
 			component{},
 			config.ProtocolCanalJSON,
-			func(common.ChangeFeedID, component, chan error) (dmlProducer, error) {
+			func(common.ChangeFeedID, component, chan error, *statistics.Statistics) (dmlProducer, error) {
 				return newMockDMLProducer(), nil
 			},
 			func(common.ChangeFeedID, component, *config.SinkConfig) (ddlProducer, error) {

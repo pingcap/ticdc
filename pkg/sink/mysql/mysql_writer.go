@@ -20,13 +20,12 @@ import (
 	"sync"
 	"time"
 
-	lru "github.com/hashicorp/golang-lru"
+	"github.com/hashicorp/golang-lru"
 	"github.com/pingcap/log"
+	"github.com/pingcap/ticdc/downstreamadapter/sink/statistics"
 	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/errors"
-	"github.com/pingcap/ticdc/pkg/metrics"
-	"github.com/pingcap/ticdc/pkg/statistics"
 	"github.com/pingcap/ticdc/pkg/writelease"
 	"github.com/prometheus/client_golang/prometheus"
 	"go.uber.org/zap"
@@ -108,7 +107,7 @@ func NewWriter(
 	db *sql.DB,
 	cfg *Config,
 	changefeedID common.ChangeFeedID,
-	statistics *statistics.Statistics,
+	stats *statistics.Statistics,
 	activeActiveSyncStatsCollector *ActiveActiveSyncStatsCollector,
 ) *Writer {
 	writerCtx, cancel := context.WithCancel(ctx)
@@ -123,7 +122,7 @@ func NewWriter(
 		lastCleanSyncPointTime:         time.Now(),
 		ddlTsTableInit:                 false,
 		stmtCache:                      cfg.stmtCache,
-		statistics:                     statistics,
+		statistics:                     stats,
 		maxDDLTsBatch:                  cfg.MaxTxnRow,
 		dmlSession:                     *NewDMLSession(dmlConnIdleTimeout),
 		isInErrorCausedSafeMode:        false,
@@ -159,7 +158,7 @@ func (w *Writer) SetWriteGate(gate *writelease.Gate) {
 // the writer is shutting down, so callers must not execute the downstream write.
 func (w *Writer) grantWrite() bool {
 	if w.writeGate == nil {
-		metrics.CaptureLastWriteAdmissionTimestamp.SetToCurrentTime()
+		captureLastWriteAdmissionTimestamp.SetToCurrentTime()
 		return true
 	}
 	for {
@@ -167,7 +166,7 @@ func (w *Writer) grantWrite() bool {
 			return false
 		}
 		if w.writeGate.IsWritable() {
-			metrics.CaptureLastWriteAdmissionTimestamp.SetToCurrentTime()
+			captureLastWriteAdmissionTimestamp.SetToCurrentTime()
 			return true
 		}
 	}
@@ -281,10 +280,9 @@ func (w *Writer) Flush(events []*commonEvent.DMLEvent) error {
 			}
 			err = w.execDMLWithMaxRetries(dmls)
 		}
-
 	} else {
 		w.tryDryRunBlock()
-		w.statistics.RecordDMLResult(dmls.rowCount, nil)
+		w.statistics.RecordDMLBatch(dmls.rowCount, dmls.approximateSize)
 	}
 
 	if err != nil {

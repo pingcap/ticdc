@@ -34,7 +34,6 @@ import (
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
-	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/ticdc/pkg/pdutil"
 	"github.com/pingcap/ticdc/pkg/routing"
@@ -251,18 +250,18 @@ func NewDispatcherManager(
 		sinkQuota:             cfConfig.MemoryQuota,
 		redoEnabled:           isRedoConfigEnabled(cfConfig),
 
-		metricTableTriggerEventDispatcherCount: metrics.TableTriggerEventDispatcherGauge.WithLabelValues(changefeedID.Keyspace(), changefeedID.Name(), "eventDispatcher"),
-		metricEventDispatcherCount:             metrics.EventDispatcherGauge.WithLabelValues(changefeedID.Keyspace(), changefeedID.Name(), "eventDispatcher"),
-		metricCreateDispatcherDuration:         metrics.CreateDispatcherDuration.WithLabelValues(changefeedID.Keyspace(), changefeedID.Name(), "eventDispatcher"),
-		metricCheckpointTs:                     metrics.DispatcherManagerCheckpointTsGauge.WithLabelValues(changefeedID.Keyspace(), changefeedID.Name()),
-		metricCheckpointTsLag:                  metrics.DispatcherManagerCheckpointTsLagGauge.WithLabelValues(changefeedID.Keyspace(), changefeedID.Name()),
-		metricResolvedTs:                       metrics.DispatcherManagerResolvedTsGauge.WithLabelValues(changefeedID.Keyspace(), changefeedID.Name()),
-		metricResolvedTsLag:                    metrics.DispatcherManagerResolvedTsLagGauge.WithLabelValues(changefeedID.Keyspace(), changefeedID.Name()),
-		metricBlockStatusesChanLen:             metrics.DispatcherManagerBlockStatusesChanLenGauge.WithLabelValues(changefeedID.Keyspace(), changefeedID.Name()),
+		metricTableTriggerEventDispatcherCount: tableTriggerEventDispatcherGauge.WithLabelValues(changefeedID.Keyspace(), changefeedID.Name(), "eventDispatcher"),
+		metricEventDispatcherCount:             eventDispatcherGauge.WithLabelValues(changefeedID.Keyspace(), changefeedID.Name(), "eventDispatcher"),
+		metricCreateDispatcherDuration:         createDispatcherDuration.WithLabelValues(changefeedID.Keyspace(), changefeedID.Name(), "eventDispatcher"),
+		metricCheckpointTs:                     dispatcherManagerCheckpointTsGauge.WithLabelValues(changefeedID.Keyspace(), changefeedID.Name()),
+		metricCheckpointTsLag:                  dispatcherManagerCheckpointTsLagGauge.WithLabelValues(changefeedID.Keyspace(), changefeedID.Name()),
+		metricResolvedTs:                       dispatcherManagerResolvedTsGauge.WithLabelValues(changefeedID.Keyspace(), changefeedID.Name()),
+		metricResolvedTsLag:                    dispatcherManagerResolvedTsLagGauge.WithLabelValues(changefeedID.Keyspace(), changefeedID.Name()),
+		metricBlockStatusesChanLen:             dispatcherManagerBlockStatusesChanLenGauge.WithLabelValues(changefeedID.Keyspace(), changefeedID.Name()),
 
-		metricTableTriggerRedoDispatcherCount: metrics.TableTriggerEventDispatcherGauge.WithLabelValues(changefeedID.Keyspace(), changefeedID.Name(), "redoDispatcher"),
-		metricRedoEventDispatcherCount:        metrics.EventDispatcherGauge.WithLabelValues(changefeedID.Keyspace(), changefeedID.Name(), "redoDispatcher"),
-		metricRedoCreateDispatcherDuration:    metrics.CreateDispatcherDuration.WithLabelValues(changefeedID.Keyspace(), changefeedID.Name(), "redoDispatcher"),
+		metricTableTriggerRedoDispatcherCount: tableTriggerEventDispatcherGauge.WithLabelValues(changefeedID.Keyspace(), changefeedID.Name(), "redoDispatcher"),
+		metricRedoEventDispatcherCount:        eventDispatcherGauge.WithLabelValues(changefeedID.Keyspace(), changefeedID.Name(), "redoDispatcher"),
+		metricRedoCreateDispatcherDuration:    createDispatcherDuration.WithLabelValues(changefeedID.Keyspace(), changefeedID.Name(), "redoDispatcher"),
 	}
 
 	// Trust only the explicit request maintainer epoch for receiver fencing. The
@@ -310,9 +309,10 @@ func NewDispatcherManager(
 	if sinkType != common.KafkaSinkType {
 		ignoreUpdateOnlyColumnsRuleCount := countIgnoreUpdateOnlyColumnsRules(cfConfig.Filter)
 		if ignoreUpdateOnlyColumnsRuleCount > 0 {
+			_, downstreamType := config.ParseSinkURI(manager.config.SinkURI)
 			log.Warn("ignore update only columns is configured but does not take effect for this sink",
 				zap.Stringer("changefeedID", changefeedID),
-				zap.String("sinkType", metrics.DownstreamTypeFromSinkURI(manager.config.SinkURI)),
+				zap.String("sinkType", downstreamType),
 				zap.Int("eventFilterRuleCount", ignoreUpdateOnlyColumnsRuleCount))
 		}
 	}
@@ -682,7 +682,7 @@ func (e *DispatcherManager) newEventDispatchers(infos map[common.DispatcherID]di
 		log.Info("new dispatcher created",
 			zap.Stringer("changefeedID", e.changefeedID),
 			zap.Stringer("dispatcherID", id),
-			zap.String("tableSpan", common.FormatTableSpan(tableSpans[idx])),
+			zap.Int64("tableID", tableSpans[idx].TableID),
 			zap.Int64("startTs", newStartTsList[idx]),
 			zap.Bool("skipDMLAsStartTs", skipDMLAsStartTs))
 	}
@@ -753,6 +753,10 @@ func (e *DispatcherManager) collectErrors(ctx context.Context) {
 
 // collectBlockStatusRequest collect the block status from the block status channel and report to the maintainer.
 func (e *DispatcherManager) collectBlockStatusRequest(ctx context.Context) {
+	e.collectBlockStatusRequestWithWindow(ctx, 10*time.Millisecond)
+}
+
+func (e *DispatcherManager) collectBlockStatusRequestWithWindow(ctx context.Context, batchWindow time.Duration) {
 	enqueueBlockStatus := func(blockStatusMessage []*heartbeatpb.TableSpanBlockStatus, mode int64) {
 		// Split oversized batches so one protobuf message does not monopolize
 		// serialization, transport, and maintainer-side processing.
@@ -782,10 +786,10 @@ func (e *DispatcherManager) collectBlockStatusRequest(ctx context.Context) {
 			redoBlockStatusMessage = append(redoBlockStatusMessage, blockStatus)
 		}
 
-		// Batch from the first observed status for up to 10ms. We drain ready
+		// Batch from the first observed status for up to the window. We drain ready
 		// entries first, then keep waiting until the same deadline so late arrivals
 		// still join the current request instead of being delayed to the next batch.
-		deadline := time.Now().Add(10 * time.Millisecond)
+		deadline := time.Now().Add(batchWindow)
 	loop:
 		for {
 			var ok bool
@@ -1038,7 +1042,7 @@ func (e *DispatcherManager) mergeEventDispatcher(dispatcherIDs []common.Dispatch
 	log.Info("new dispatcher created(merge dispatcher)",
 		zap.Stringer("changefeedID", e.changefeedID),
 		zap.Stringer("dispatcherID", mergedDispatcherID),
-		zap.String("tableSpan", common.FormatTableSpan(mergedSpan)))
+		zap.Int64("tableID", mergedSpan.TableID))
 
 	e.writePathMu.Lock()
 	if e.writePathClosed.Load() {
@@ -1052,6 +1056,11 @@ func (e *DispatcherManager) mergeEventDispatcher(dispatcherIDs []common.Dispatch
 }
 
 // ==== remove and clean related functions ====
+
+// IsClosingOrClosed reports whether shutdown has started or completed.
+func (e *DispatcherManager) IsClosingOrClosed() bool {
+	return e.closing.Load() || e.closed.Load()
+}
 
 func (e *DispatcherManager) TryClose(removeChangefeed bool) bool {
 	if removeChangefeed {
@@ -1257,10 +1266,6 @@ func (e *DispatcherManager) cleanEventDispatcher(id common.DispatcherID, schemaI
 	e.dispatcherMap.Delete(id)
 	e.schemaIDToDispatchers.Delete(schemaID, id)
 	e.currentOperatorMap.Delete(id)
-	log.Debug("delete current working remove operator",
-		zap.String("changefeedID", e.changefeedID.String()),
-		zap.String("dispatcherID", id.String()),
-	)
 	tableTriggerEventDispatcher := e.GetTableTriggerEventDispatcher()
 	if tableTriggerEventDispatcher != nil && tableTriggerEventDispatcher.GetId() == id {
 		e.SetTableTriggerEventDispatcher(nil)
@@ -1275,18 +1280,18 @@ func (e *DispatcherManager) cleanEventDispatcher(id common.DispatcherID, schemaI
 }
 
 func (e *DispatcherManager) cleanMetrics() {
-	metrics.TableTriggerEventDispatcherGauge.DeleteLabelValues(e.changefeedID.Keyspace(), e.changefeedID.Name(), "eventDispatcher")
-	metrics.EventDispatcherGauge.DeleteLabelValues(e.changefeedID.Keyspace(), e.changefeedID.Name(), "eventDispatcher")
-	metrics.CreateDispatcherDuration.DeleteLabelValues(e.changefeedID.Keyspace(), e.changefeedID.Name(), "eventDispatcher")
-	metrics.DispatcherManagerCheckpointTsGauge.DeleteLabelValues(e.changefeedID.Keyspace(), e.changefeedID.Name())
-	metrics.DispatcherManagerResolvedTsGauge.DeleteLabelValues(e.changefeedID.Keyspace(), e.changefeedID.Name())
-	metrics.DispatcherManagerCheckpointTsLagGauge.DeleteLabelValues(e.changefeedID.Keyspace(), e.changefeedID.Name())
-	metrics.DispatcherManagerResolvedTsLagGauge.DeleteLabelValues(e.changefeedID.Keyspace(), e.changefeedID.Name())
-	metrics.DispatcherManagerBlockStatusesChanLenGauge.DeleteLabelValues(e.changefeedID.Keyspace(), e.changefeedID.Name())
+	tableTriggerEventDispatcherGauge.DeleteLabelValues(e.changefeedID.Keyspace(), e.changefeedID.Name(), "eventDispatcher")
+	eventDispatcherGauge.DeleteLabelValues(e.changefeedID.Keyspace(), e.changefeedID.Name(), "eventDispatcher")
+	createDispatcherDuration.DeleteLabelValues(e.changefeedID.Keyspace(), e.changefeedID.Name(), "eventDispatcher")
+	dispatcherManagerCheckpointTsGauge.DeleteLabelValues(e.changefeedID.Keyspace(), e.changefeedID.Name())
+	dispatcherManagerResolvedTsGauge.DeleteLabelValues(e.changefeedID.Keyspace(), e.changefeedID.Name())
+	dispatcherManagerCheckpointTsLagGauge.DeleteLabelValues(e.changefeedID.Keyspace(), e.changefeedID.Name())
+	dispatcherManagerResolvedTsLagGauge.DeleteLabelValues(e.changefeedID.Keyspace(), e.changefeedID.Name())
+	dispatcherManagerBlockStatusesChanLenGauge.DeleteLabelValues(e.changefeedID.Keyspace(), e.changefeedID.Name())
 
-	metrics.TableTriggerEventDispatcherGauge.DeleteLabelValues(e.changefeedID.Keyspace(), e.changefeedID.Name(), "redoDispatcher")
-	metrics.EventDispatcherGauge.DeleteLabelValues(e.changefeedID.Keyspace(), e.changefeedID.Name(), "redoDispatcher")
-	metrics.CreateDispatcherDuration.DeleteLabelValues(e.changefeedID.Keyspace(), e.changefeedID.Name(), "redoDispatcher")
+	tableTriggerEventDispatcherGauge.DeleteLabelValues(e.changefeedID.Keyspace(), e.changefeedID.Name(), "redoDispatcher")
+	eventDispatcherGauge.DeleteLabelValues(e.changefeedID.Keyspace(), e.changefeedID.Name(), "redoDispatcher")
+	createDispatcherDuration.DeleteLabelValues(e.changefeedID.Keyspace(), e.changefeedID.Name(), "redoDispatcher")
 }
 
 // ==== remove and clean related functions END ====

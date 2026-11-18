@@ -24,7 +24,6 @@ import (
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
-	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/redo"
 	misc "github.com/pingcap/ticdc/pkg/redo/common"
 	"github.com/pingcap/ticdc/pkg/util"
@@ -81,9 +80,9 @@ func NewRedoMeta(
 		cfg:               cfg,
 		startTs:           checkpoint,
 		flushIntervalInMs: util.GetOrZero(cfg.MetaFlushIntervalInMs),
-		metricCheckpointTs: metrics.RedoCheckpointTsGauge.
+		metricCheckpointTs: redoCheckpointTsGauge.
 			WithLabelValues(changefeedID.Keyspace(), changefeedID.Name()),
-		metricResolvedTs: metrics.RedoResolvedTsGauge.
+		metricResolvedTs: redoResolvedTsGauge.
 			WithLabelValues(changefeedID.Keyspace(), changefeedID.Name()),
 	}
 
@@ -130,7 +129,7 @@ func (m *RedoMeta) PreStart(ctx context.Context) (err error) {
 		}
 	}()
 
-	m.metricFlushLogDuration = metrics.RedoFlushLogDurationHistogram.
+	m.metricFlushLogDuration = redoFlushLogDurationHistogram.
 		WithLabelValues(m.changeFeedID.Keyspace(), m.changeFeedID.Name(), redo.RedoMetaFileType)
 
 	err = m.preCleanupExtStorage(ctx)
@@ -398,10 +397,6 @@ func (m *RedoMeta) maybeFlushMeta(ctx context.Context) error {
 		return nil
 	}
 
-	log.Debug("Flush redo meta",
-		zap.String("keyspace", m.changeFeedID.Keyspace()),
-		zap.String("changefeed", m.changeFeedID.Name()),
-		zap.Any("meta", unflushed))
 	if err := m.flush(ctx, unflushed); err != nil {
 		return err
 	}
@@ -468,19 +463,14 @@ func (m *RedoMeta) flush(ctx context.Context, meta misc.LogMeta) error {
 	}
 	m.preMetaFile = metaFile
 
-	log.Debug("flush meta to s3",
-		zap.String("keyspace", m.changeFeedID.Keyspace()),
-		zap.String("changefeed", m.changeFeedID.Name()),
-		zap.String("metaFile", metaFile),
-		zap.Any("cost", time.Since(start).Milliseconds()))
 	m.metricFlushLogDuration.Observe(time.Since(start).Seconds())
 	return nil
 }
 
 func (m *RedoMeta) CleanupMetrics() {
-	metrics.RedoCheckpointTsGauge.DeleteLabelValues(m.changeFeedID.Keyspace(), m.changeFeedID.Name())
-	metrics.RedoResolvedTsGauge.DeleteLabelValues(m.changeFeedID.Keyspace(), m.changeFeedID.Name())
-	metrics.RedoFlushLogDurationHistogram.
+	redoCheckpointTsGauge.DeleteLabelValues(m.changeFeedID.Keyspace(), m.changeFeedID.Name())
+	redoResolvedTsGauge.DeleteLabelValues(m.changeFeedID.Keyspace(), m.changeFeedID.Name())
+	redoFlushLogDurationHistogram.
 		DeleteLabelValues(m.changeFeedID.Keyspace(), m.changeFeedID.Name(), redo.RedoMetaFileType)
 }
 
@@ -530,7 +520,7 @@ func (m *RedoMeta) bgGC(egCtx context.Context) error {
 	ticker := time.NewTicker(time.Duration(redo.DefaultGCIntervalInMs) * time.Millisecond)
 	defer ticker.Stop()
 
-	preCkpt := uint64(0)
+	var preCkpt uint64
 	for {
 		select {
 		case <-egCtx.Done():
@@ -547,10 +537,6 @@ func (m *RedoMeta) bgGC(egCtx context.Context) error {
 				continue
 			}
 			preCkpt = ckpt
-			log.Debug("redo meta GC is triggered",
-				zap.Uint64("checkpointTs", ckpt),
-				zap.String("keyspace", m.changeFeedID.Keyspace()),
-				zap.String("changefeed", m.changeFeedID.Name()))
 			err := util.RemoveFilesIf(egCtx, m.extStorage, func(path string) bool {
 				return m.shouldRemoved(path, ckpt)
 			}, nil)

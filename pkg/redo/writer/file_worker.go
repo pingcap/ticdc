@@ -22,12 +22,13 @@ import (
 	"time"
 
 	"github.com/pierrec/lz4/v4"
+	"github.com/pingcap/failpoint"
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/compression"
 	"github.com/pingcap/ticdc/pkg/errors"
-	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/redo"
+	redoCommon "github.com/pingcap/ticdc/pkg/redo/common"
 	"github.com/pingcap/ticdc/pkg/uuid"
 	"github.com/pingcap/ticdc/pkg/writelease"
 	"github.com/pingcap/tidb/pkg/objstore/storeapi"
@@ -133,11 +134,11 @@ func newFileWorkerGroup(
 		},
 		flushCh:    make(chan *fileCache, 32),
 		completeCh: make(chan *fileCache, workerNum),
-		metricWriteBytes: metrics.RedoWriteBytesGauge.
+		metricWriteBytes: redoWriteBytesGauge.
 			WithLabelValues(cfg.ChangeFeedID().Keyspace(), cfg.ChangeFeedID().Name(), redo.RedoRowLogFileType),
-		metricFlushAllDuration: metrics.RedoFlushAllDurationHistogram.
+		metricFlushAllDuration: redoFlushAllDurationHistogram.
 			WithLabelValues(cfg.ChangeFeedID().Keyspace(), cfg.ChangeFeedID().Name(), redo.RedoRowLogFileType),
-		metricBusyRatio: metrics.RedoWorkerBusyRatio.
+		metricBusyRatio: redoCommon.RedoWorkerBusyRatio.
 			WithLabelValues(cfg.ChangeFeedID().Keyspace(), cfg.ChangeFeedID().Name(), redo.RedoRowLogFileType),
 	}
 }
@@ -170,11 +171,11 @@ func (f *fileWorkerGroup) Run(
 }
 
 func (f *fileWorkerGroup) close() {
-	metrics.RedoFlushAllDurationHistogram.
+	redoFlushAllDurationHistogram.
 		DeleteLabelValues(f.cfg.ChangeFeedID().Keyspace(), f.cfg.ChangeFeedID().Name(), redo.RedoRowLogFileType)
-	metrics.RedoWriteBytesGauge.
+	redoWriteBytesGauge.
 		DeleteLabelValues(f.cfg.ChangeFeedID().Keyspace(), f.cfg.ChangeFeedID().Name(), redo.RedoRowLogFileType)
-	metrics.RedoWorkerBusyRatio.
+	redoCommon.RedoWorkerBusyRatio.
 		DeleteLabelValues(f.cfg.ChangeFeedID().Keyspace(), f.cfg.ChangeFeedID().Name(), redo.RedoRowLogFileType)
 }
 
@@ -264,6 +265,9 @@ func (f *fileWorkerGroup) bgWriteLogs(
 }
 
 func (f *fileWorkerGroup) syncWriteFile(egCtx context.Context, file *fileCache) error {
+	failpoint.Inject("PauseRedoFileUpload", func() {
+		failpoint.Inject("WaitRedoFileUpload", nil)
+	})
 	var err error
 	if err = writelease.WaitForWrite(egCtx, f.writeGate); err != nil {
 		return err
@@ -396,7 +400,9 @@ func (f *fileWorkerGroup) flushAll(egCtx context.Context) error {
 		return errors.Trace(err)
 	}
 
-	for !file.completed {
+	// Uploads may finish out of order. Drain every file before accepting more
+	// writes so an uploaded tail cannot be reused after its buffer is pooled.
+	for len(f.files) > 0 {
 		select {
 		case <-egCtx.Done():
 			return errors.Trace(egCtx.Err())
@@ -404,6 +410,11 @@ func (f *fileWorkerGroup) flushAll(egCtx context.Context) error {
 			f.completeFile(completed)
 		}
 	}
+	failpoint.Inject("CheckRedoFileLifecycle", func() {
+		if len(f.files) != 0 {
+			log.Panic("redo flush returned with pending files", zap.Int("pendingFiles", len(f.files)))
+		}
+	})
 	return nil
 }
 
@@ -424,6 +435,11 @@ func (f *fileWorkerGroup) sendFileToFlush(ctx context.Context, file *fileCache) 
 }
 
 func (f *fileWorkerGroup) completeFile(file *fileCache) {
+	failpoint.Inject("CheckRedoFileLifecycle", func() {
+		if len(f.files) > 1 && file == f.files[len(f.files)-1] && !f.files[0].completed {
+			log.Info("inject redo tail upload completed before older files")
+		}
+	})
 	file.completed = true
 
 	released := 0

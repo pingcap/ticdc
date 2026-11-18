@@ -29,7 +29,6 @@ import (
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/messaging"
-	"github.com/pingcap/ticdc/pkg/metrics"
 	pkgRedo "github.com/pingcap/ticdc/pkg/redo"
 	"github.com/pingcap/ticdc/pkg/util"
 	"go.uber.org/zap"
@@ -92,9 +91,9 @@ func initRedoComponet(
 		}
 	}
 	// register redo metrics
-	manager.metricTableTriggerRedoDispatcherCount = metrics.TableTriggerEventDispatcherGauge.WithLabelValues(changefeedID.Keyspace(), changefeedID.Name(), "redoDispatcher")
-	manager.metricRedoEventDispatcherCount = metrics.EventDispatcherGauge.WithLabelValues(changefeedID.Keyspace(), changefeedID.Name(), "redoDispatcher")
-	manager.metricRedoCreateDispatcherDuration = metrics.CreateDispatcherDuration.WithLabelValues(changefeedID.Keyspace(), changefeedID.Name(), "redoDispatcher")
+	manager.metricTableTriggerRedoDispatcherCount = tableTriggerEventDispatcherGauge.WithLabelValues(changefeedID.Keyspace(), changefeedID.Name(), "redoDispatcher")
+	manager.metricRedoEventDispatcherCount = eventDispatcherGauge.WithLabelValues(changefeedID.Keyspace(), changefeedID.Name(), "redoDispatcher")
+	manager.metricRedoCreateDispatcherDuration = createDispatcherDuration.WithLabelValues(changefeedID.Keyspace(), changefeedID.Name(), "redoDispatcher")
 
 	// RedoMessageDs need register on every node
 	manager.writePathMu.Lock()
@@ -241,7 +240,6 @@ func (e *DispatcherManager) newRedoDispatchers(infos map[common.DispatcherID]dis
 		log.Info("new redo dispatcher created",
 			zap.Stringer("changefeedID", e.changefeedID),
 			zap.Stringer("dispatcherID", id),
-			zap.String("tableSpan", common.FormatTableSpan(tableSpans[idx])),
 			zap.Int64("startTs", startTsList[idx]),
 			zap.Bool("skipDMLAsStartTs", scheduleSkipDMLAsStartTsList[idx]))
 	}
@@ -289,7 +287,7 @@ func (e *DispatcherManager) mergeRedoDispatcher(dispatcherIDs []common.Dispatche
 	log.Info("new redo dispatcher created(merge dispatcher)",
 		zap.Stringer("changefeedID", e.changefeedID),
 		zap.Stringer("dispatcherID", mergedDispatcherID),
-		zap.String("tableSpan", common.FormatTableSpan(mergedSpan)))
+		zap.Int64("tableID", mergedSpan.TableID))
 
 	e.writePathMu.Lock()
 	if e.writePathClosed.Load() {
@@ -306,10 +304,6 @@ func (e *DispatcherManager) cleanRedoDispatcher(id common.DispatcherID, schemaID
 	e.redoDispatcherMap.Delete(id)
 	e.redoSchemaIDToDispatchers.Delete(schemaID, id)
 	e.currentOperatorMap.Delete(id)
-	log.Debug("delete current working remove operator for redo dispatcher",
-		zap.String("changefeedID", e.changefeedID.String()),
-		zap.String("dispatcherID", id.String()),
-	)
 	tableTriggerRedoDispatcher := e.GetTableTriggerRedoDispatcher()
 	if tableTriggerRedoDispatcher != nil && tableTriggerRedoDispatcher.GetId() == id {
 		e.SetTableTriggerRedoDispatcher(nil)

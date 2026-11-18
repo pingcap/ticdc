@@ -23,13 +23,13 @@ import (
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/downstreamadapter/sink/columnselector"
 	"github.com/pingcap/ticdc/downstreamadapter/sink/helper"
+	"github.com/pingcap/ticdc/downstreamadapter/sink/metrics"
+	"github.com/pingcap/ticdc/downstreamadapter/sink/statistics"
 	"github.com/pingcap/ticdc/pkg/cloudstorage"
 	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
-	"github.com/pingcap/ticdc/pkg/metrics"
-	"github.com/pingcap/ticdc/pkg/statistics"
 	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/ticdc/pkg/writelease"
 	"github.com/pingcap/tidb/pkg/meta/model"
@@ -105,6 +105,8 @@ func Verify(ctx context.Context, changefeedID common.ChangeFeedID, sinkURI *url.
 	return nil
 }
 
+// New creates a cloud storage sink using the supplied changefeed configuration.
+//
 //nolint:revive // Keep the constructor shape consistent with other sink implementations.
 func New(
 	ctx context.Context, changefeedID common.ChangeFeedID, sinkURI *url.URL, sinkConfig *config.SinkConfig, caseSensitive bool, enableTableAcrossNodes bool,
@@ -138,14 +140,17 @@ func New(
 	if err != nil {
 		return nil, err
 	}
-	statistics := statistics.New(changefeedID, keyspaceID)
+	stats := statistics.New(changefeedID, keyspaceID)
 	defer func() {
 		if err != nil {
-			statistics.Close()
+			stats.Close()
 			storage.Close()
 		}
 	}()
-	dmlWriters, err := newDMLWriters(changefeedID, storage, cfg, encoderConfig, ext, statistics, columnSelectors)
+	dmlWriters, err := newDMLWriters(
+		changefeedID, storage, cfg, encoderConfig,
+		util.GetOrZero(sinkConfig.EncoderConcurrency), ext, stats, columnSelectors,
+	)
 	if err != nil {
 		return nil, err
 	}
@@ -159,7 +164,7 @@ func New(
 		checkpointChan:           make(chan uint64, 16),
 		lastSendCheckpointTsTime: time.Now(),
 		outputRawChangeEvent:     sinkConfig.CloudStorageConfig.GetOutputRawChangeEvent(),
-		statistics:               statistics,
+		statistics:               stats,
 		isNormal:                 atomic.NewBool(true),
 
 		ctx: ctx,
@@ -205,10 +210,9 @@ func (s *sink) AddDMLEvent(event *commonEvent.DMLEvent) {
 		log.Warn("ignore dml event because sink is not normal",
 			zap.String("keyspace", s.changefeedID.Keyspace()),
 			zap.String("changefeed", s.changefeedID.Name()),
-			zap.String("dispatcher", event.GetDispatcherID().String()))
+			zap.String("dispatcherID", event.GetDispatcherID().String()))
 		return
 	}
-	s.statistics.TrackDMLEvent(event)
 	s.dmlWriters.addDMLEvent(event)
 }
 
@@ -273,10 +277,9 @@ func (s *sink) writeDDLEvent(event *commonEvent.DDLEvent) error {
 		)
 		var sourceSchemaFile cloudstorage.SchemaFile
 		sourceSchemaFile.Build(&sourceEvent, s.cfg.OutputColumnID)
-		// Source schema file carries table structure only. The DDL is replayed
-		// from the exchanged table schema file.
+		// Replay the DDL only from the exchanged table schema file, but retain
+		// the type here so schema reuse still recognizes the exchange boundary.
 		sourceSchemaFile.Query = ""
-		sourceSchemaFile.Type = 0
 		if err := s.writeFile(&sourceEvent, sourceSchemaFile); err != nil {
 			return err
 		}
@@ -295,7 +298,7 @@ func (s *sink) writeDDLEvent(event *commonEvent.DDLEvent) error {
 		zap.String("changefeed", s.changefeedID.Name()),
 		zap.String("schema", event.GetTargetSchemaName()),
 		zap.String("table", event.GetTargetTableName()),
-		zap.String("dispatcher", event.GetDispatcherID().String()),
+		zap.String("dispatcherID", event.GetDispatcherID().String()),
 		zap.String("query", event.GetDDLQuery()),
 		zap.Uint64("finishedTs", event.GetCommitTs()),
 		zap.Stringer("ddlType", event.GetDDLType()))
@@ -312,12 +315,8 @@ func (s *sink) writeFile(v *commonEvent.DDLEvent, schemaFile cloudstorage.Schema
 	if err := writelease.WaitForWrite(s.ctx, s.writeGate); err != nil {
 		return err
 	}
-	return s.statistics.RecordDDLExecution(func() (string, error) {
-		err := s.storage.WriteFile(s.ctx, path, encodedSchemaFile)
-		if err != nil {
-			return "", err
-		}
-		return v.GetDDLType().String(), nil
+	return s.statistics.RecordDDLExecution(v.GetDDLType().String(), func() error {
+		return s.storage.WriteFile(s.ctx, path, encodedSchemaFile)
 	})
 }
 

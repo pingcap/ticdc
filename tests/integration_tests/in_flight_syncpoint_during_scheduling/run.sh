@@ -145,8 +145,8 @@ EOF
 	move_table_with_retry "127.0.0.1:8301" $table_id "$CHANGEFEED_ID" 10
 
 	# The moved dispatcher must not start from (syncpoint_ts-1), otherwise it may replay events with commitTs <= syncpoint_ts.
-	ensure 30 "grep \"new dispatcher created\" $WORK_DIR/cdc1.log | grep -q \"tableID: ${table_id}\""
-	dispatcher_start_ts=$(grep "new dispatcher created" $WORK_DIR/cdc1.log | grep "tableID: ${table_id}" | tail -n 1 | grep -oE 'startTs[^0-9]*[0-9]+' | tail -n 1 | grep -oE '[0-9]+' || true)
+	ensure 30 "grep \"new dispatcher created\" $WORK_DIR/cdc1.log | grep -Fq \"[tableID=${table_id}]\""
+	dispatcher_start_ts=$(grep "new dispatcher created" $WORK_DIR/cdc1.log | grep -F "[tableID=${table_id}]" | tail -n 1 | grep -oE 'startTs[^0-9]*[0-9]+' | tail -n 1 | grep -oE '[0-9]+' || true)
 	if [ "$dispatcher_start_ts" -lt "$syncpoint_ts" ]; then
 		echo "unexpected dispatcher startTs, got: $dispatcher_start_ts, want >= $syncpoint_ts"
 		exit 1

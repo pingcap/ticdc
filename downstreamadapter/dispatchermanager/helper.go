@@ -344,21 +344,10 @@ func handleScheduleCreate(
 		SchemaID:         config.SchemaID,
 		SkipDMLAsStartTs: config.SkipDMLAsStartTs,
 	}
+	dispatcherManager.currentOperatorMap.Store(dispatcherID, req)
 	if common.IsRedoMode(config.Mode) {
-		dispatcherManager.currentOperatorMap.Store(dispatcherID, req)
-		log.Debug("store current working add operator for redo dispatcher",
-			zap.String("changefeedID", req.ChangefeedID.String()),
-			zap.String("dispatcherID", dispatcherID.String()),
-			zap.Any("operator", req),
-		)
 		redoInfos[dispatcherID] = info
 	} else {
-		dispatcherManager.currentOperatorMap.Store(dispatcherID, req)
-		log.Debug("store current working add operator",
-			zap.String("changefeedID", req.ChangefeedID.String()),
-			zap.String("dispatcherID", dispatcherID.String()),
-			zap.Any("operator", req),
-		)
 		infos[dispatcherID] = info
 	}
 }
@@ -377,17 +366,6 @@ func handleScheduleRemove(
 		}
 		if _, exists := dispatcherManager.redoDispatcherMap.Get(dispatcherID); exists {
 			dispatcherManager.currentOperatorMap.Store(dispatcherID, req)
-			log.Debug("store current working remove operator for redo dispatcher",
-				zap.String("changefeedID", req.ChangefeedID.String()),
-				zap.String("dispatcherID", dispatcherID.String()),
-				zap.Any("operator", req),
-			)
-		} else {
-			log.Debug("redo dispatcher not found, skip remove operator store",
-				zap.String("changefeedID", req.ChangefeedID.String()),
-				zap.String("dispatcherID", dispatcherID.String()),
-				zap.Any("operator", req),
-			)
 		}
 		// Even if the dispatcher doesn't exist, we still call removeDispatcher so the dispatcher manager
 		// can emit a terminal status back to the maintainer and help it converge.
@@ -397,17 +375,6 @@ func handleScheduleRemove(
 		// Otherwise, the operator may never be cleaned up because cleanEventDispatcher won't be called.
 		if _, exists := dispatcherManager.dispatcherMap.Get(dispatcherID); exists {
 			dispatcherManager.currentOperatorMap.Store(dispatcherID, req)
-			log.Debug("store current working remove operator",
-				zap.String("changefeedID", req.ChangefeedID.String()),
-				zap.String("dispatcherID", dispatcherID.String()),
-				zap.Any("operator", req),
-			)
-		} else {
-			log.Debug("dispatcher not found, skip remove operator store",
-				zap.String("changefeedID", req.ChangefeedID.String()),
-				zap.String("dispatcherID", dispatcherID.String()),
-				zap.Any("operator", req),
-			)
 		}
 		// Even if the dispatcher doesn't exist, we still call removeDispatcher so the dispatcher manager
 		// can emit a terminal status back to the maintainer and help it converge.
@@ -433,7 +400,7 @@ func createDispatcherByInfo(
 			}
 			dispatcherManager.handleError(context.Background(), err)
 		}
-		deleteCreatedOperators(dispatcherManager, redoInfos, dispatcherManager.redoDispatcherMap, "redo dispatcher")
+		deleteCreatedOperators(dispatcherManager, redoInfos, dispatcherManager.redoDispatcherMap)
 	}
 	if len(infos) > 0 {
 		err := dispatcherManager.newEventDispatchers(infos, false)
@@ -448,7 +415,7 @@ func createDispatcherByInfo(
 			}
 			dispatcherManager.handleError(context.Background(), err)
 		}
-		deleteCreatedOperators(dispatcherManager, infos, dispatcherManager.dispatcherMap, "dispatcher")
+		deleteCreatedOperators(dispatcherManager, infos, dispatcherManager.dispatcherMap)
 	}
 }
 
@@ -456,7 +423,6 @@ func deleteCreatedOperators[T dispatcher.Dispatcher](
 	dispatcherManager *DispatcherManager,
 	infos map[common.DispatcherID]dispatcherCreateInfo,
 	dispatcherMap *DispatcherMap[T],
-	dispatcherKind string,
 ) {
 	for _, info := range infos {
 		if _, exists := dispatcherMap.Get(info.ID); !exists {
@@ -467,12 +433,6 @@ func deleteCreatedOperators[T dispatcher.Dispatcher](
 		if v, ok := dispatcherManager.currentOperatorMap.Load(info.ID); ok {
 			req := v.(SchedulerDispatcherRequest)
 			if req.ScheduleAction == heartbeatpb.ScheduleAction_Create {
-				log.Debug("delete current working add operator",
-					zap.String("changefeedID", dispatcherManager.changefeedID.String()),
-					zap.String("dispatcherID", info.ID.String()),
-					zap.String("dispatcherKind", dispatcherKind),
-					zap.Any("operator", req),
-				)
 				dispatcherManager.currentOperatorMap.Delete(info.ID)
 			}
 		}

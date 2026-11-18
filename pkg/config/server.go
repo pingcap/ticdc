@@ -26,6 +26,7 @@ import (
 	"github.com/pingcap/log"
 	cerror "github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/security"
+	"github.com/pingcap/ticdc/pkg/util"
 	"go.uber.org/zap"
 )
 
@@ -194,8 +195,47 @@ func (c *ServerConfig) Unmarshal(data []byte) error {
 
 // String implements the Stringer interface
 func (c *ServerConfig) String() string {
-	s, _ := c.Marshal()
+	s, _ := c.MaskedForDisplay().Marshal()
 	return s
+}
+
+// MaskedForDisplay returns a copy suitable for logs and API responses.
+// It does not modify the active server configuration.
+func (c *ServerConfig) MaskedForDisplay() *ServerConfig {
+	if c == nil {
+		return nil
+	}
+	masked := *c
+	if c.Encryption != nil {
+		encryption := *c.Encryption
+		masked.Encryption = &encryption
+		if c.Encryption.KMS != nil {
+			kms := *c.Encryption.KMS
+			encryption.KMS = &kms
+			if kms.AWS != nil {
+				aws := *kms.AWS
+				aws.Endpoint = util.MaskSensitiveDataInURIForError(aws.Endpoint)
+				aws.AccessKey = maskConfiguredSecret(aws.AccessKey)
+				aws.SecretAccessKey = maskConfiguredSecret(aws.SecretAccessKey)
+				aws.SessionToken = maskConfiguredSecret(aws.SessionToken)
+				kms.AWS = &aws
+			}
+			if kms.GCP != nil {
+				gcp := *kms.GCP
+				gcp.Endpoint = util.MaskSensitiveDataInURIForError(gcp.Endpoint)
+				gcp.CredentialsJSON = maskConfiguredSecret(gcp.CredentialsJSON)
+				kms.GCP = &gcp
+			}
+		}
+	}
+	return &masked
+}
+
+func maskConfiguredSecret(value string) string {
+	if value == "" {
+		return ""
+	}
+	return "xxxxx"
 }
 
 // Clone clones a replication

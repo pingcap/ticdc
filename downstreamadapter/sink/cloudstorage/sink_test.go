@@ -54,6 +54,46 @@ func newSinkForTest(
 	return result, nil
 }
 
+// TestCloudStorageEncoderConcurrency completes changefeed metadata and creates
+// a local sink, checking encoder concurrency and independent writer counts.
+func TestCloudStorageEncoderConcurrency(t *testing.T) {
+	tests := []struct {
+		name        string
+		concurrency *int
+		expected    int
+	}{
+		{name: "default", concurrency: config.GetDefaultReplicaConfig().Sink.EncoderConcurrency, expected: config.DefaultEncoderGroupConcurrency},
+		{name: "single", concurrency: util.AddressOf(1), expected: 1},
+		{name: "custom", concurrency: util.AddressOf(16), expected: 16},
+		{name: "unset", expected: defaultEncodingConcurrency},
+		{name: "zero", concurrency: util.AddressOf(0), expected: defaultEncodingConcurrency},
+	}
+	for _, protocol := range []string{"csv", "canal-json"} {
+		for _, tt := range tests {
+			// Each case passes its setting through validation and metadata cleanup;
+			// the resulting sink must use it, falling back only for unset or zero.
+			t.Run(protocol+"/"+tt.name, func(t *testing.T) {
+				sinkURI, err := url.Parse(fmt.Sprintf("file://%s?protocol=%s&worker-count=3", t.TempDir(), protocol))
+				require.NoError(t, err)
+				cfg := config.GetDefaultReplicaConfig()
+				cfg.Sink.EncoderConcurrency = tt.concurrency
+				cfg.Sink.CloudStorageConfig = &config.CloudStorageConfig{SpoolBaseDir: util.AddressOf(t.TempDir())}
+				require.NoError(t, cfg.ValidateAndAdjust(sinkURI))
+				info := &config.ChangeFeedInfo{SinkURI: sinkURI.String(), Config: cfg}
+				info.VerifyAndComplete()
+
+				s, err := newSinkForTest(t.Context(), info.Config, sinkURI, nil)
+				require.NoError(t, err)
+				t.Cleanup(s.Close)
+				require.Equal(t, tt.expected, s.dmlWriters.encodeGroup.concurrency)
+				require.Len(t, s.dmlWriters.encodeGroup.inputCh, tt.expected)
+				require.Len(t, s.dmlWriters.encodeGroup.outputCh, 3)
+				require.Len(t, s.dmlWriters.writers, 3)
+			})
+		}
+	}
+}
+
 func TestBasicFunctionality(t *testing.T) {
 	uri := fmt.Sprintf("file:///%s?protocol=csv&flush-interval=3600s&file-size=1024", t.TempDir())
 	sinkURI, err := url.Parse(uri)
@@ -686,11 +726,67 @@ func TestWriteExchangePartitionDDLEventUsesTargetNames(t *testing.T) {
 	require.Equal(t, "target_db", partitionedSchemaFile.Schema)
 	require.Equal(t, "partitioned_routed", partitionedSchemaFile.Table)
 	require.Empty(t, partitionedSchemaFile.Query)
-	require.Zero(t, partitionedSchemaFile.Type)
+	require.Equal(t, byte(timodel.ActionExchangeTablePartition), partitionedSchemaFile.Type)
 	require.Equal(t, "exchange_value", partitionedSchemaFile.Columns[1].Name)
 
 	_, err = os.Stat(filepath.Join(parentDir, "source_db"))
 	require.ErrorIs(t, err, os.ErrNotExist)
+}
+
+func TestSchemaReuseRespectsExchangePartitionBoundary(t *testing.T) {
+	ctx := t.Context()
+	sinkURI, err := url.Parse(fmt.Sprintf("file://%s?protocol=csv", t.TempDir()))
+	require.NoError(t, err)
+	replicaConfig := config.GetDefaultReplicaConfig()
+	require.NoError(t, replicaConfig.ValidateAndAdjust(sinkURI))
+	cloudStorageSink, err := newSinkForTest(ctx, replicaConfig, sinkURI, nil)
+	require.NoError(t, err)
+	t.Cleanup(cloudStorageSink.Close)
+
+	newTableInfo := func(id int64, name string) *common.TableInfo {
+		return common.WrapTableInfo("test", &timodel.TableInfo{
+			ID: id, Name: ast.NewCIStr(name),
+			Columns: []*timodel.ColumnInfo{{
+				ID: 1, Name: ast.NewCIStr("id"),
+				FieldType: *types.NewFieldType(mysql.TypeLong), State: timodel.StatePublic,
+			}},
+		})
+	}
+	partitionedTableInfo := newTableInfo(20, "partitioned")
+	exchangeTableInfo := newTableInfo(21, "exchange_table")
+	ddl := &commonEvent.DDLEvent{
+		Query:           "alter table test.partitioned exchange partition p0 with table test.exchange_table",
+		Type:            byte(timodel.ActionExchangeTablePartition),
+		SchemaName:      "test",
+		TableName:       "partitioned",
+		ExtraSchemaName: "test",
+		ExtraTableName:  "exchange_table",
+		FinishedTs:      200,
+		TableInfo:       partitionedTableInfo,
+		MultipleTableInfos: []*common.TableInfo{
+			partitionedTableInfo, exchangeTableInfo,
+		},
+	}
+	require.NoError(t, cloudStorageSink.WriteBlockEvent(ddl))
+
+	var beforeExchange cloudstorage.SchemaFile
+	beforeExchange.Build(&commonEvent.DDLEvent{
+		TableInfo: partitionedTableInfo, FinishedTs: 100,
+	}, cloudStorageSink.cfg.OutputColumnID)
+	require.NoError(t, cloudStorageSink.storage.WriteFile(ctx, beforeExchange.Path(false, 20), beforeExchange.Marshal()))
+
+	generator := cloudstorage.NewFilePathGenerator(
+		cloudStorageSink.changefeedID, cloudStorageSink.cfg, cloudStorageSink.storage, ".csv")
+	table := cloudstorage.VersionedTableName{
+		TableNameWithPhysicTableID: partitionedTableInfo.TableName,
+		TableInfoVersion:           150,
+	}
+	version, err := generator.CheckOrWriteSchema(ctx, table, partitionedTableInfo)
+	require.NoError(t, err)
+	require.Equal(t, uint64(100), version, "old DML must stay before the exchange written by the sink")
+	version, err = generator.CheckOrWriteSchema(ctx, table, partitionedTableInfo)
+	require.NoError(t, err)
+	require.Equal(t, uint64(100), version, "cached schema reuse must preserve the exchange boundary")
 }
 
 func TestWriteCheckpointEvent(t *testing.T) {

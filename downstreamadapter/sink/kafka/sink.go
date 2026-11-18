@@ -22,18 +22,18 @@ import (
 	"github.com/pingcap/ticdc/downstreamadapter/sink/columnselector"
 	"github.com/pingcap/ticdc/downstreamadapter/sink/eventrouter"
 	"github.com/pingcap/ticdc/downstreamadapter/sink/helper"
+	"github.com/pingcap/ticdc/downstreamadapter/sink/metrics"
+	"github.com/pingcap/ticdc/downstreamadapter/sink/statistics"
 	"github.com/pingcap/ticdc/downstreamadapter/sink/topicmanager"
 	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
-	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/sink/codec"
 	codecCommon "github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"github.com/pingcap/ticdc/pkg/sink/codec/schemamanager"
 	"github.com/pingcap/ticdc/pkg/sink/kafka"
 	"github.com/pingcap/ticdc/pkg/sink/kafka/claimcheck"
-	"github.com/pingcap/ticdc/pkg/statistics"
 	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/ticdc/pkg/writelease"
 	"github.com/pingcap/ticdc/utils/chann"
@@ -154,22 +154,21 @@ func Verify(ctx context.Context, changefeedID common.ChangeFeedID, uri *url.URL,
 func New(
 	ctx context.Context, changefeedID common.ChangeFeedID, sinkURI *url.URL, sinkConfig *config.SinkConfig, caseSensitive bool, keyspaceID uint32,
 ) (*sink, error) {
-	stat := statistics.New(changefeedID, keyspaceID)
-	comp, protocol, err := newKafkaSinkComponent(ctx, changefeedID, sinkURI, sinkConfig, caseSensitive, stat)
+	stats := statistics.New(changefeedID, keyspaceID)
+	comp, protocol, err := newKafkaSinkComponent(ctx, changefeedID, sinkURI, sinkConfig, caseSensitive, stats)
 	if err != nil {
-		stat.Close()
+		stats.Close()
 		return nil, err
 	}
-	return newWithComponents(ctx, changefeedID, keyspaceID, protocol, comp, stat)
+	return newWithComponents(ctx, changefeedID, stats, protocol, comp)
 }
 
 func newWithComponents(
 	ctx context.Context,
 	changefeedID common.ChangeFeedID,
-	keyspaceID uint32,
+	stats *statistics.Statistics,
 	protocol config.Protocol,
 	comp components,
-	stat *statistics.Statistics,
 ) (*sink, error) {
 	var (
 		err           error
@@ -187,7 +186,7 @@ func newWithComponents(
 			asyncProducer.Close()
 		}
 		comp.close()
-		stat.Close()
+		stats.Close()
 	}()
 
 	asyncProducer, err = comp.factory.AsyncProducer(ctx)
@@ -208,7 +207,7 @@ func newWithComponents(
 		partitionRule: helper.GetDDLDispatchRule(protocol),
 		protocol:      protocol,
 		comp:          comp,
-		statistics:    stat,
+		statistics:    stats,
 
 		checkpointChan: make(chan uint64, 16),
 		eventChan:      chann.NewUnlimitedChannelDefault[*commonEvent.DMLEvent](),
@@ -249,7 +248,6 @@ func (s *sink) AddDMLEvent(event *commonEvent.DMLEvent) {
 	if !s.isNormal.Load() {
 		return
 	}
-	s.statistics.TrackDMLEvent(event)
 	s.eventChan.Push(event)
 }
 
@@ -454,12 +452,8 @@ func (s *sink) sendMessages(ctx context.Context) error {
 					return err
 				}
 				start := time.Now()
-				message.SetPartitionKey(future.Key.PartitionKey)
-				if err = s.dmlProducer.AsyncSend(
-					ctx,
-					future.Key.Topic,
-					future.Key.Partition,
-					message); err != nil {
+				helper.TrackDMLMessage(message, s.statistics)
+				if err = s.dmlProducer.AsyncSend(ctx, future.Key.Topic, future.Key.Partition, message); err != nil {
 					return err
 				}
 				metricSendMessageDuration.Observe(time.Since(start).Seconds())
@@ -497,16 +491,12 @@ func (s *sink) sendDDLEvent(event *commonEvent.DDLEvent) error {
 		if err := writelease.WaitForWrite(s.ctx, s.writeGate); err != nil {
 			return err
 		}
-		ddlType := e.GetDDLType().String()
-		if s.partitionRule == helper.PartitionAll {
-			err = s.statistics.RecordDDLExecution(func() (string, error) {
-				return ddlType, s.ddlProducer.SendMessages(s.ctx, topic, partitionNum, message)
-			})
-		} else {
-			err = s.statistics.RecordDDLExecution(func() (string, error) {
-				return ddlType, s.ddlProducer.SendMessage(s.ctx, topic, 0, message)
-			})
-		}
+		err = s.statistics.RecordDDLExecution(e.GetDDLType().String(), func() error {
+			if s.partitionRule == helper.PartitionAll {
+				return s.ddlProducer.SendMessages(s.ctx, topic, partitionNum, message)
+			}
+			return s.ddlProducer.SendMessage(s.ctx, topic, 0, message)
+		})
 		if err != nil {
 			return err
 		}

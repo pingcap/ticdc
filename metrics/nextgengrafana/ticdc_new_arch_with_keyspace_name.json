@@ -342,7 +342,7 @@
           "dashLength": 10,
           "dashes": false,
           "datasource": "${DS_TEST-CLUSTER}",
-          "description": "The number of dml events that sink flushes to downstream per second.",
+          "description": "The number of DML rows that sink flushes to downstream per second.",
           "fieldConfig": {
             "defaults": {
               "links": []
@@ -441,7 +441,6 @@
           "dashLength": 10,
           "dashes": false,
           "datasource": "${DS_TEST-CLUSTER}",
-          "description": "Approximate raw-entry bytes of DML events successfully written to downstream.",
           "fieldConfig": {
             "defaults": {},
             "overrides": []
@@ -484,19 +483,19 @@
           "targets": [
             {
               "exemplar": true,
-              "expr": "sum(rate(ticdc_sink_write_bytes_total{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", keyspace_name=~\"$keyspace_name\", changefeed=~\"$changefeed\",instance=~\"$ticdc_instance\"}[1m])) by (keyspace_name, changefeed, instance)",
+              "expr": "sum(rate(ticdc_sink_batch_write_bytes_sum{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", keyspace_name=~\"$keyspace_name\", changefeed=~\"$changefeed\",instance=~\"$ticdc_instance\"}[1m])) by (instance, changefeed)",
               "hide": false,
               "interval": "",
-              "legendFormat": "{{keyspace_name}}-{{changefeed}}-{{instance}}",
+              "legendFormat": "{{instance}}-{{changefeed}}",
               "queryType": "randomWalk",
               "refId": "A"
             },
             {
               "exemplar": true,
-              "expr": "avg_over_time(sum(rate(ticdc_sink_write_bytes_total{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", keyspace_name=~\"$keyspace_name\", changefeed=~\"$changefeed\",instance=~\"$ticdc_instance\"}[1m])) by (keyspace_name, changefeed, instance)[1m:])",
+              "expr": "avg_over_time(sum(rate(ticdc_sink_batch_write_bytes_sum{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", keyspace_name=~\"$keyspace_name\", changefeed=~\"$changefeed\",instance=~\"$ticdc_instance\"}[1m])) by (instance, changefeed)[1m:])",
               "hide": true,
               "interval": "",
-              "legendFormat": "{{keyspace_name}}-{{changefeed}}-{{instance}}-AVG",
+              "legendFormat": "{{instance}}-{{changefeed}}-AVG",
               "refId": "B"
             }
           ],
@@ -2338,7 +2337,7 @@
         },
         {
           "datasource": "${DS_TEST-CLUSTER}",
-          "description": "Downstream type of each changefeed. For MySQL-compatible sinks, it shows \"mysql/tidb\" unless the downstream is confirmed to be TiDB.",
+          "description": "Downstream type of each changefeed, derived from the sink URI scheme. MySQL URIs show \"mysql\"; confirmed TiDB downstreams show \"tidb\".",
           "fieldConfig": {
             "defaults": {
               "custom": {
@@ -5455,7 +5454,7 @@
           "targets": [
             {
               "exemplar": true,
-              "expr": "sum(increase(ticdc_sink_execution_error{k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",keyspace_name=~\"$keyspace_name\",changefeed=~\"$changefeed\",instance=~\"$ticdc_instance\"}[1m])) by (keyspace_name,changefeed,instance,event_type)",
+              "expr": "sum(delta(ticdc_sink_execution_error{k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",keyspace_name=~\"$keyspace_name\",changefeed=~\"$changefeed\",instance=~\"$ticdc_instance\"}[1m])) by (keyspace_name,changefeed,instance,event_type)",
               "interval": "",
               "legendFormat": "{{keyspace_name}}-{{changefeed}}-{{instance}}-{{event_type}}",
               "queryType": "randomWalk",
@@ -11701,7 +11700,7 @@
           "targets": [
             {
               "exemplar": true,
-              "expr": "sum(increase(ticdc_ddl_execution{k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",keyspace_name=~\"$keyspace_name\",changefeed=~\"$changefeed\",instance=~\"$ticdc_instance\"}[1m])) by (keyspace_name,changefeed,ddl_type)",
+              "expr": "sum(delta(ticdc_ddl_execution{k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",keyspace_name=~\"$keyspace_name\",changefeed=~\"$changefeed\",instance=~\"$ticdc_instance\"}[1m])) by (keyspace_name,changefeed,ddl_type)",
               "interval": "",
               "legendFormat": "{{keyspace_name}}-{{changefeed}}-{{ddl_type}}",
               "queryType": "randomWalk",

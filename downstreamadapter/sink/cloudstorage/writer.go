@@ -20,12 +20,11 @@ import (
 	"time"
 
 	"github.com/pingcap/log"
-	"github.com/pingcap/ticdc/downstreamadapter/sink/metrics"
+	"github.com/pingcap/ticdc/downstreamadapter/sink/statistics"
 	"github.com/pingcap/ticdc/pkg/cloudstorage"
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/sink/spool"
-	"github.com/pingcap/ticdc/pkg/statistics"
 	"github.com/pingcap/ticdc/pkg/writelease"
 	"github.com/pingcap/tidb/pkg/objstore/storeapi"
 	"github.com/prometheus/client_golang/prometheus"
@@ -81,7 +80,7 @@ func newWriter(
 	storage storeapi.Storage,
 	config *cloudstorage.Config,
 	extension string,
-	statistics *statistics.Statistics,
+	stats *statistics.Statistics,
 	spoolBuffer *spool.Spool,
 ) *writer {
 	var (
@@ -95,11 +94,11 @@ func newWriter(
 		config:            config,
 		spool:             spoolBuffer,
 		flushCh:           make(chan flushTask, 64),
-		statistics:        statistics,
+		statistics:        stats,
 		filePathGenerator: cloudstorage.NewFilePathGenerator(changefeedID, config, storage, extension),
 
-		metricFlushBytes:    metrics.CloudStorageFlushBytesHist.WithLabelValues(keyspace, changefeed),
-		metricFlushDuration: metrics.CloudStorageFlushDurationHistogram.WithLabelValues(keyspace, changefeed),
+		metricFlushBytes:    cloudStorageFlushBytesHist.WithLabelValues(keyspace, changefeed),
+		metricFlushDuration: cloudStorageFlushDurationHistogram.WithLabelValues(keyspace, changefeed),
 	}
 	d.bufferManager = newBufferManager(d.changeFeedID, d.config, d.spool, d.enqueueFlushTask)
 	return d
@@ -123,10 +122,10 @@ func (d *writer) flushMessages(ctx context.Context) error {
 
 	overseerTicker := time.NewTicker(d.config.FlushInterval * 2)
 	writerLabel := strconv.Itoa(d.shardID)
-	metricBusyRatio := metrics.CloudStorageWorkerBusyRatio.WithLabelValues(keyspace, changefeed, writerLabel)
+	metricBusyRatio := cloudStorageWorkerBusyRatio.WithLabelValues(keyspace, changefeed, writerLabel)
 	defer func() {
 		overseerTicker.Stop()
-		metrics.CloudStorageWorkerBusyRatio.DeleteLabelValues(keyspace, changefeed, writerLabel)
+		cloudStorageWorkerBusyRatio.DeleteLabelValues(keyspace, changefeed, writerLabel)
 	}()
 
 	for {
@@ -154,7 +153,7 @@ func (d *writer) flushMessages(ctx context.Context) error {
 					continue
 				}
 
-				tableVersion, hasNewerSchemaVersion, err := d.filePathGenerator.CheckOrWriteSchema(ctx, table, tableTask.tableInfo)
+				tableVersion, err := d.filePathGenerator.CheckOrWriteSchema(ctx, table, tableTask.tableInfo)
 				if err != nil {
 					log.Error("failed to write schema file to external storage",
 						zap.String("keyspace", keyspace),
@@ -162,18 +161,6 @@ func (d *writer) flushMessages(ctx context.Context) error {
 						zap.Int("shardID", d.shardID),
 						zap.Error(err))
 					return err
-				}
-				if hasNewerSchemaVersion {
-					d.discardEntries(tableTask.entries)
-					tableTask.entries = nil
-					log.Warn("ignore messages belonging to an old schema version",
-						zap.String("keyspace", keyspace),
-						zap.String("changefeed", changefeed),
-						zap.String("schema", table.TableNameWithPhysicTableID.Schema),
-						zap.String("table", table.TableNameWithPhysicTableID.Table),
-						zap.Uint64("version", table.TableInfoVersion),
-						zap.Int("shardID", d.shardID))
-					continue
 				}
 				table.TableInfoVersion = tableVersion
 
@@ -203,14 +190,6 @@ func (d *writer) flushMessages(ctx context.Context) error {
 					return err
 				}
 				tableTask.entries = nil
-
-				log.Debug("write file to storage success",
-					zap.String("keyspace", keyspace),
-					zap.String("changefeed", changefeed),
-					zap.String("path", dataFilePath),
-					zap.String("schema", table.TableNameWithPhysicTableID.Schema),
-					zap.String("table", table.TableNameWithPhysicTableID.Table),
-					zap.Int("shardID", d.shardID))
 			}
 
 			flushDuration := time.Since(start)
@@ -219,40 +198,32 @@ func (d *writer) flushMessages(ctx context.Context) error {
 	}
 }
 
-func (d *writer) discardEntries(entries []*spool.Entry) {
-	for _, entry := range entries {
-		d.spool.Discard(entry)
-	}
-}
-
-func (d *writer) writeDataFile(ctx context.Context, dataFilePath, indexFilePath string, payload *payload) (err error) {
-	defer func() {
-		d.statistics.RecordDMLResult(payload.rowsCount, err)
-	}()
-
+func (d *writer) writeDataFile(ctx context.Context, dataFilePath, indexFilePath string, payload *payload) error {
+	keyspace := d.changeFeedID.Keyspace()
+	changefeed := d.changeFeedID.Name()
 	if err := writelease.WaitForWrite(ctx, d.writeGate); err != nil {
 		return err
 	}
 	start := time.Now()
-	err = d.writeData(ctx, dataFilePath, payload.data)
-	if err != nil {
+	if err := d.writeFile(ctx, dataFilePath, payload.data); err != nil {
+		d.statistics.RecordDMLError()
 		return err
 	}
-
 	if err := writelease.WaitForWrite(ctx, d.writeGate); err != nil {
 		return err
 	}
-	err = d.storage.WriteFile(ctx, indexFilePath, []byte(path.Base(dataFilePath)+"\n"))
-	if err != nil {
+	if err := d.storage.WriteFile(ctx, indexFilePath, []byte(path.Base(dataFilePath)+"\n")); err != nil {
 		log.Error("failed to write index file to external storage",
-			zap.String("keyspace", d.changeFeedID.Keyspace()),
-			zap.String("changefeed", d.changeFeedID.Name()),
+			zap.String("keyspace", keyspace),
+			zap.String("changefeed", changefeed),
 			zap.String("path", indexFilePath),
 			zap.Int("shardID", d.shardID),
 			zap.Error(err))
+		d.statistics.RecordDMLError()
 		return err
 	}
 
+	d.statistics.RecordDMLBatch(payload.rowsCount, payload.nBytes)
 	d.metricFlushDuration.Observe(time.Since(start).Seconds())
 	d.metricFlushBytes.Observe(float64(payload.nBytes))
 
@@ -269,35 +240,30 @@ func (d *writer) writeDataFile(ctx context.Context, dataFilePath, indexFilePath 
 	return nil
 }
 
-func (d *writer) writeData(ctx context.Context, dataFilePath string, data []byte) error {
+func (d *writer) writeFile(ctx context.Context, filePath string, data []byte) error {
 	if d.config.FlushConcurrency <= 1 {
-		return d.storage.WriteFile(ctx, dataFilePath, data)
+		return d.storage.WriteFile(ctx, filePath, data)
 	}
-
-	writer, err := d.storage.Create(ctx, dataFilePath, &storeapi.WriterOption{
+	writer, err := d.storage.Create(ctx, filePath, &storeapi.WriterOption{
 		Concurrency: d.config.FlushConcurrency,
 	})
 	if err != nil {
 		return err
 	}
-
-	_, err = writer.Write(ctx, data)
-	if err != nil {
-		closeErr := writer.Close(ctx)
-		if closeErr != nil {
+	keyspace := d.changeFeedID.Keyspace()
+	changefeed := d.changeFeedID.Name()
+	if _, err = writer.Write(ctx, data); err != nil {
+		if closeErr := writer.Close(ctx); closeErr != nil {
 			log.Warn("failed to close writer after write failure",
-				zap.String("keyspace", d.changeFeedID.Keyspace()),
-				zap.String("changefeed", d.changeFeedID.Name()),
-				zap.String("path", dataFilePath), zap.Error(closeErr))
+				zap.String("keyspace", keyspace), zap.String("changefeed", changefeed),
+				zap.String("path", filePath), zap.Error(closeErr))
 		}
 		return err
 	}
-
 	if err = writer.Close(ctx); err != nil {
 		log.Error("failed to close concurrency writer",
-			zap.String("keyspace", d.changeFeedID.Keyspace()),
-			zap.String("changefeed", d.changeFeedID.Name()),
-			zap.String("path", dataFilePath), zap.Error(err))
+			zap.String("keyspace", keyspace), zap.String("changefeed", changefeed),
+			zap.String("path", filePath), zap.Error(err))
 		return err
 	}
 	return nil

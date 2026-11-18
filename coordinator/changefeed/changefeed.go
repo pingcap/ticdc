@@ -14,7 +14,6 @@
 package changefeed
 
 import (
-	"net/url"
 	"sync"
 
 	"github.com/pingcap/failpoint"
@@ -62,18 +61,13 @@ func NewChangefeed(cfID common.ChangeFeedID,
 	if info.Config == nil {
 		log.Panic("changefeed config is nil", zap.Stringer("changefeedID", cfID))
 	}
-	uri, err := url.Parse(info.SinkURI)
-	if err != nil {
-		log.Panic("unable to parse sink-uri",
-			zap.String("url", util.MaskSensitiveDataInURIForError(info.SinkURI)),
-			zap.Error(util.MaskSensitiveDataInURLError(err)))
-	}
+	sinkType, _ := config.ParseSinkURI(info.SinkURI)
 	res := &Changefeed{
 		ID:                       cfID,
 		info:                     atomic.NewPointer(info),
 		lastSavedCheckpointTs:    atomic.NewUint64(checkpointTs),
 		logCoordinatorResolvedTs: atomic.NewUint64(checkpointTs),
-		sinkType:                 getSinkType(uri.Scheme),
+		sinkType:                 sinkType,
 		// Initialize the status
 		status: atomic.NewPointer(
 			&heartbeatpb.MaintainerStatus{
@@ -360,18 +354,4 @@ func RemoveMaintainerMessage(
 			KeyspaceId:      keyspaceID,
 			MaintainerEpoch: maintainerEpoch,
 		})
-}
-
-// getSinkType returns the sink type of the url.
-func getSinkType(scheme string) common.SinkType {
-	if config.IsMySQLCompatibleScheme(scheme) {
-		return common.MysqlSinkType
-	}
-	if config.IsMQScheme(scheme) {
-		return common.KafkaSinkType
-	}
-	if config.IsStorageScheme(scheme) {
-		return common.CloudStorageSinkType
-	}
-	return common.BlackHoleSinkType
 }

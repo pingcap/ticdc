@@ -108,6 +108,16 @@ func TestGetCandidateNodes(t *testing.T) {
 	span1 := common.TableIDToComparableSpan(common.DefaultKeyspaceID, tableID1)
 	span2 := common.TableIDToComparableSpan(common.DefaultKeyspaceID, tableID2)
 	startTs := uint64(100)
+	request1 := &logservicepb.ReusableEventServiceRequest{
+		ID:      common.NewDispatcherID().ToPB(),
+		Span:    &span1,
+		StartTs: startTs,
+	}
+	request2 := &logservicepb.ReusableEventServiceRequest{
+		ID:      common.NewDispatcherID().ToPB(),
+		Span:    &span2,
+		StartTs: startTs,
+	}
 
 	// initialize event store states
 	coordinator.updateEventStoreState(nodeID1, &logservicepb.EventStoreState{
@@ -190,19 +200,19 @@ func TestGetCandidateNodes(t *testing.T) {
 
 	// check get candidates
 	{
-		nodes := coordinator.getCandidateNodes(nodeID1, &span1, startTs)
+		nodes := coordinator.getCandidateNodes(requestAndTarget{req: request1, target: nodeID1})
 		assert.Equal(t, []string{nodeID2.String()}, nodes)
 	}
 	{
-		nodes := coordinator.getCandidateNodes(nodeID3, &span1, startTs)
+		nodes := coordinator.getCandidateNodes(requestAndTarget{req: request1, target: nodeID3})
 		assert.Equal(t, []string{nodeID2.String(), nodeID1.String()}, nodes)
 	}
 	{
-		nodes := coordinator.getCandidateNodes(nodeID1, &span2, startTs)
+		nodes := coordinator.getCandidateNodes(requestAndTarget{req: request2, target: nodeID1})
 		assert.Equal(t, []string{nodeID3.String(), nodeID2.String()}, nodes)
 	}
 	{
-		nodes := coordinator.getCandidateNodes(nodeID3, &span2, startTs)
+		nodes := coordinator.getCandidateNodes(requestAndTarget{req: request2, target: nodeID3})
 		assert.Equal(t, []string{nodeID2.String()}, nodes)
 	}
 
@@ -222,7 +232,7 @@ func TestGetCandidateNodes(t *testing.T) {
 		},
 	})
 	{
-		nodes := coordinator.getCandidateNodes(nodeID3, &span1, startTs)
+		nodes := coordinator.getCandidateNodes(requestAndTarget{req: request1, target: nodeID3})
 		assert.Equal(t, []string{nodeID1.String(), nodeID2.String()}, nodes)
 	}
 
@@ -248,14 +258,14 @@ func TestGetCandidateNodes(t *testing.T) {
 		},
 	})
 	{
-		nodes := coordinator.getCandidateNodes(nodeID3, &span1, startTs)
+		nodes := coordinator.getCandidateNodes(requestAndTarget{req: request1, target: nodeID3})
 		assert.Equal(t, []string{nodeID2.String(), nodeID1.String()}, nodes)
 	}
 
 	// remove node1 and check again
 	delete(coordinator.nodes.m, nodeID1)
 	{
-		nodes := coordinator.getCandidateNodes(nodeID3, &span1, startTs)
+		nodes := coordinator.getCandidateNodes(requestAndTarget{req: request1, target: nodeID3})
 		assert.Equal(t, []string{nodeID2.String()}, nodes)
 	}
 	// STOPPING brokers keep reusable subscriptions in the event store, but
@@ -264,7 +274,7 @@ func TestGetCandidateNodes(t *testing.T) {
 	state := coordinator.eventBrokerStates.m[nodeID2]
 	state.receivedAt = time.Now().Add(-eventBrokerReportTTL)
 	coordinator.eventBrokerStates.m[nodeID2] = state
-	require.Empty(t, coordinator.getCandidateNodes(nodeID3, &span1, startTs))
+	require.Empty(t, coordinator.getCandidateNodes(requestAndTarget{req: request1, target: nodeID3}))
 }
 
 func TestGetCandidateNodesIgnoreDifferentKeyspace(t *testing.T) {
@@ -297,7 +307,14 @@ func TestGetCandidateNodesIgnoreDifferentKeyspace(t *testing.T) {
 		},
 	})
 
-	nodes := coordinator.getCandidateNodes(requestNodeID, &requestedSpan, 100)
+	nodes := coordinator.getCandidateNodes(requestAndTarget{
+		req: &logservicepb.ReusableEventServiceRequest{
+			ID:      common.NewDispatcherID().ToPB(),
+			Span:    &requestedSpan,
+			StartTs: 100,
+		},
+		target: requestNodeID,
+	})
 	require.Empty(t, nodes)
 }
 
@@ -328,12 +345,23 @@ func TestGetCandidateNodesIgnoreResolvedEqCheckpoint(t *testing.T) {
 		},
 	})
 
-	nodes := coordinator.getCandidateNodes(nodeID1, &span, startTs)
+	nodes := coordinator.getCandidateNodes(requestAndTarget{
+		req: &logservicepb.ReusableEventServiceRequest{
+			ID:      common.NewDispatcherID().ToPB(),
+			Span:    &span,
+			StartTs: startTs,
+		},
+		target: nodeID1,
+	})
 	require.Empty(t, nodes, "resolvedTs equal to checkpointTs should not be reused")
 }
 
 func TestUpdateChangefeedStates(t *testing.T) {
 	c := newLogCoordinatorForTest()
+	c.handleNodeChange(map[node.ID]*node.Info{
+		"node-1": {ID: "node-1"},
+		"node-2": {ID: "node-2"},
+	})
 
 	cfID1 := common.NewChangefeedID4Test("default", "test1")
 	cfID2 := common.NewChangefeedID4Test("default", "test2")
@@ -426,8 +454,55 @@ func TestUpdateChangefeedStates(t *testing.T) {
 	require.False(t, ok)
 }
 
+func TestResolvedTsMetricsAfterDelayedReportFromRemovedNode(t *testing.T) {
+	c := newLogCoordinatorForTest()
+	clock := pdutil.NewClock4Test()
+	clock.(*pdutil.Clock4Test).SetTS(oracle.ComposeTS(400_000, 0))
+	c.pdClock = clock
+
+	cfID := common.NewChangefeedID4Test("default", "delayed-node-report")
+	t.Cleanup(func() {
+		changefeedResolvedTsGauge.DeleteLabelValues(cfID.Keyspace(), cfID.Name())
+		changefeedResolvedTsLagGauge.DeleteLabelValues(cfID.Keyspace(), cfID.Name())
+	})
+	removedNode := node.ID("removed-node")
+	liveNode := node.ID("live-node")
+	c.handleNodeChange(map[node.ID]*node.Info{
+		removedNode: {ID: removedNode},
+		liveNode:    {ID: liveNode},
+	})
+	report := func(from node.ID, physicalTs int64) {
+		c.updateChangefeedStates(from, &logservicepb.ChangefeedStates{
+			States: []*logservicepb.ChangefeedStateEntry{
+				{ChangefeedID: cfID.ToPB(), ResolvedTs: oracle.ComposeTS(physicalTs, 0)},
+			},
+		})
+	}
+	report(removedNode, 100_000)
+	report(liveNode, 200_000)
+	require.Equal(t, oracle.ComposeTS(100_000, 0), c.getMinLogServiceResolvedTs(cfID))
+
+	c.handleNodeChange(map[node.ID]*node.Info{liveNode: {ID: liveNode}})
+	require.NotContains(t, c.changefeedStates.m[cfID.ID()].nodeStates, removedNode)
+	// Deliver an in-flight report after node removal to reproduce the race.
+	report(removedNode, 100_000)
+	report(liveNode, 300_000)
+
+	// A departed node must not pin resolved TS or inflate its lag.
+	state := c.changefeedStates.m[cfID.ID()]
+	assert.NotContains(t, state.nodeStates, removedNode)
+	assert.Equal(t, float64(300_000), testutil.ToFloat64(state.resolvedTsGauge),
+		"resolved TS must follow the live node")
+	assert.Equal(t, float64(100), testutil.ToFloat64(state.resolvedTsLagGauge),
+		"lag must be PD time (400s) minus the live resolved TS (300s)")
+}
+
 func TestUpdateChangefeedStatesRefreshesMetricsImmediately(t *testing.T) {
 	c := newLogCoordinatorForTest()
+	c.handleNodeChange(map[node.ID]*node.Info{
+		"node-1": {ID: "node-1"},
+		"node-2": {ID: "node-2"},
+	})
 	mockPDClock := c.pdClock.(*pdutil.Clock4Test)
 	pdTime := time.Now().Truncate(time.Millisecond)
 	mockPDClock.SetTS(oracle.GoTimeToTS(pdTime))
@@ -460,6 +535,11 @@ func TestUpdateChangefeedStatesRefreshesMetricsImmediately(t *testing.T) {
 
 func TestUpdateChangefeedStatesWaitsForCompleteReportingRound(t *testing.T) {
 	c := newLogCoordinatorForTest()
+	c.handleNodeChange(map[node.ID]*node.Info{
+		"node-1": {ID: "node-1"},
+		"node-2": {ID: "node-2"},
+		"node-3": {ID: "node-3"},
+	})
 	mockPDClock := c.pdClock.(*pdutil.Clock4Test)
 	pdTime := time.Now().Truncate(time.Millisecond)
 	mockPDClock.SetTS(oracle.GoTimeToTS(pdTime))
@@ -509,6 +589,10 @@ func TestUpdateChangefeedStatesWaitsForCompleteReportingRound(t *testing.T) {
 
 func TestPartialReportingRoundKeepsLastPublishedMetrics(t *testing.T) {
 	c := newLogCoordinatorForTest()
+	c.handleNodeChange(map[node.ID]*node.Info{
+		"node-1": {ID: "node-1"},
+		"node-2": {ID: "node-2"},
+	})
 	mockPDClock := c.pdClock.(*pdutil.Clock4Test)
 	pdTime := time.Now().Truncate(time.Millisecond)
 	mockPDClock.SetTS(oracle.GoTimeToTS(pdTime))

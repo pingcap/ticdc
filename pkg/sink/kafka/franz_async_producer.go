@@ -18,10 +18,10 @@ import (
 	"sync/atomic"
 
 	"github.com/pingcap/log"
+	"github.com/pingcap/ticdc/downstreamadapter/sink/statistics"
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/errors"
 	codecCommon "github.com/pingcap/ticdc/pkg/sink/codec/common"
-	"github.com/pingcap/ticdc/pkg/statistics"
 	"github.com/twmb/franz-go/pkg/kgo"
 	"go.uber.org/zap"
 )
@@ -36,7 +36,6 @@ type asyncProducer struct {
 }
 
 type asyncProduceResult struct {
-	rowCount int
 	callback func()
 	logInfo  *codecCommon.MessageLogInfo
 	err      error
@@ -52,12 +51,7 @@ func (p *asyncProducer) Close() {
 		zap.String("changefeed", p.changefeedID.Name()))
 }
 
-func (p *asyncProducer) AsyncSend(ctx context.Context, topic string, partition int32, message *codecCommon.Message) (err error) {
-	defer func() {
-		if err != nil && p.statistics != nil {
-			p.statistics.RecordDMLResult(message.GetRowsCount(), err)
-		}
-	}()
+func (p *asyncProducer) AsyncSend(ctx context.Context, topic string, partition int32, message *codecCommon.Message) error {
 	if p.closed.Load() {
 		return errors.ErrKafkaSinkClosed.GenWithStackByArgs()
 	}
@@ -69,12 +63,10 @@ func (p *asyncProducer) AsyncSend(ctx context.Context, topic string, partition i
 		Value:     message.Value,
 	}
 
-	rowCount := message.GetRowsCount()
 	callback := message.Callback
 	logInfo := message.LogInfo
 	promise := func(_ *kgo.Record, err error) {
 		result := asyncProduceResult{
-			rowCount: rowCount,
 			callback: callback,
 			logInfo:  logInfo,
 			err:      err,
@@ -105,10 +97,10 @@ func (p *asyncProducer) AsyncRunCallback(ctx context.Context) error {
 		case <-p.client.Context().Done():
 			return context.Cause(p.client.Context())
 		case result := <-p.resultCh:
-			if p.statistics != nil {
-				p.statistics.RecordDMLResult(result.rowCount, result.err)
-			}
 			if result.err != nil {
+				if p.statistics != nil {
+					p.statistics.RecordDMLError()
+				}
 				log.Error("kafka message send failed",
 					zap.String("keyspace", p.changefeedID.Keyspace()),
 					zap.String("changefeed", p.changefeedID.Name()),

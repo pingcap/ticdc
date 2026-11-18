@@ -33,7 +33,6 @@ import (
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/eventservice"
 	"github.com/pingcap/ticdc/pkg/messaging"
-	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/ticdc/pkg/pdutil"
 	"github.com/pingcap/ticdc/pkg/util"
@@ -205,7 +204,7 @@ func (m *mockDispatcherManager) onDispatchRequest(
 			log.Warn("dispatcher already exists",
 				zap.String("from", msg.From.String()),
 				zap.String("self", m.self.String()),
-				zap.String("dispatcher", common.NewDispatcherIDFromPB(request.Config.DispatcherID).String()))
+				zap.String("dispatcherID", common.NewDispatcherIDFromPB(request.Config.DispatcherID).String()))
 			return
 		}
 		status := &heartbeatpb.TableSpanStatus{
@@ -700,6 +699,31 @@ func TestMaintainerCalculateNewCheckpointTs(t *testing.T) {
 	})
 }
 
+func TestMaintainerIgnoresRedoMessagesWhenRedoIsDisabled(t *testing.T) {
+	m, selfNodeID := newMaintainerForCheckpointCalculationTest(t)
+	m.initialized.Store(true)
+
+	require.NotPanics(t, func() {
+		m.onBlockStateRequest(&messaging.TargetMessage{
+			From: selfNodeID,
+			Type: messaging.TypeBlockStatusRequest,
+			Message: []messaging.IOTypeT{&heartbeatpb.BlockStatusRequest{
+				ChangefeedID: m.changefeedID.ToPB(),
+				Mode:         common.RedoMode,
+			}},
+		})
+	})
+
+	require.NotPanics(t, func() {
+		m.controller.handleStatus(selfNodeID, []*heartbeatpb.TableSpanStatus{{
+			ID:              common.NewDispatcherID().ToPB(),
+			ComponentStatus: heartbeatpb.ComponentState_Working,
+			CheckpointTs:    1,
+			Mode:            common.RedoMode,
+		}}, true)
+	})
+}
+
 func TestMaintainerCalCheckpointTsSkipsInvalidGlobalCheckpoint(t *testing.T) {
 	m, selfNodeID := newMaintainerForCheckpointCalculationTest(t)
 	m.initialized.Store(true)
@@ -936,8 +960,8 @@ func TestUpdateMetricsSyncPoint(t *testing.T) {
 	m.watermark.Watermark = &heartbeatpb.Watermark{CheckpointTs: 1, ResolvedTs: 1}
 
 	// The vecs are global, so compare against the series count left by other tests.
-	tsSeries := func() int { return promtestutil.CollectAndCount(metrics.MaintainerSyncPointTsGauge) }
-	lagSeries := func() int { return promtestutil.CollectAndCount(metrics.MaintainerSyncPointTsLagGauge) }
+	tsSeries := func() int { return promtestutil.CollectAndCount(maintainerSyncPointTsGauge) }
+	lagSeries := func() int { return promtestutil.CollectAndCount(maintainerSyncPointTsLagGauge) }
 	baseTs, baseLag := tsSeries(), lagSeries()
 
 	// no syncpoint written by this maintainer yet: no series
@@ -961,6 +985,6 @@ func TestUpdateMetricsSyncPoint(t *testing.T) {
 	m.cleanupMetrics()
 	require.Equal(t, baseTs, tsSeries())
 	require.Equal(t, baseLag, lagSeries())
-	require.False(t, metrics.MaintainerSyncPointTsGauge.DeleteLabelValues(cfID.Keyspace(), cfID.Name()))
-	require.False(t, metrics.MaintainerSyncPointTsLagGauge.DeleteLabelValues(cfID.Keyspace(), cfID.Name()))
+	require.False(t, maintainerSyncPointTsGauge.DeleteLabelValues(cfID.Keyspace(), cfID.Name()))
+	require.False(t, maintainerSyncPointTsLagGauge.DeleteLabelValues(cfID.Keyspace(), cfID.Name()))
 }

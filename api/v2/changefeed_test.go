@@ -433,11 +433,11 @@ func (c *resumeNormalCoordinator) GetChangefeed(ctx context.Context, changefeedD
 	}
 	changefeedID := common.NewChangeFeedIDWithName(changefeedDisplayName.Name, changefeedDisplayName.Keyspace)
 	return &config.ChangeFeedInfo{
-			ChangefeedID: changefeedID,
-			State:        config.StateNormal,
-		}, &config.ChangeFeedStatus{
-			CheckpointTs: 123,
-		}, nil
+		ChangefeedID: changefeedID,
+		State:        config.StateNormal,
+	}, &config.ChangeFeedStatus{
+		CheckpointTs: 123,
+	}, nil
 }
 
 func (c *resumeNormalCoordinator) GetPersistedChangefeedInfo(ctx context.Context, id common.ChangeFeedID) (*config.ChangeFeedInfo, error) {

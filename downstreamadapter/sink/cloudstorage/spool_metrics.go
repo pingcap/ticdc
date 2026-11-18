@@ -14,7 +14,6 @@
 package cloudstorage
 
 import (
-	sinkmetrics "github.com/pingcap/ticdc/downstreamadapter/sink/metrics"
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/sink/spool"
 )
@@ -23,23 +22,23 @@ func newSpoolMetrics(changefeedID common.ChangeFeedID) *spool.Metrics {
 	keyspace := changefeedID.Keyspace()
 	changefeed := changefeedID.Name()
 	return &spool.Metrics{
-		MemoryBytes:        sinkmetrics.CloudStorageSpoolMemoryBytesGauge.WithLabelValues(keyspace, changefeed),
-		DiskBytes:          sinkmetrics.CloudStorageSpoolDiskBytesGauge.WithLabelValues(keyspace, changefeed),
-		PendingPostEnqueue: sinkmetrics.CloudStoragePendingPostEnqueueGauge.WithLabelValues(keyspace, changefeed),
-		DiskQuotaWaiters:   sinkmetrics.CloudStorageSpoolDiskQuotaWaitersGauge.WithLabelValues(keyspace, changefeed),
-		DiskQuotaWait:      sinkmetrics.CloudStorageSpoolDiskQuotaWaitDurationHistogram.WithLabelValues(keyspace, changefeed),
-		LoadedBytes:        sinkmetrics.CloudStorageLoadBytesHistogram.WithLabelValues(keyspace, changefeed),
-		RotatedCount:       sinkmetrics.CloudStorageRotateCountCounter.WithLabelValues(keyspace, changefeed),
-		SegmentCount:       sinkmetrics.CloudStorageSpoolSegmentCountGauge.WithLabelValues(keyspace, changefeed),
+		MemoryBytes:        cloudStorageSpoolMemoryBytesGauge.WithLabelValues(keyspace, changefeed),
+		DiskBytes:          cloudStorageSpoolDiskBytesGauge.WithLabelValues(keyspace, changefeed),
+		PendingPostEnqueue: cloudStoragePendingPostEnqueueGauge.WithLabelValues(keyspace, changefeed),
+		DiskQuotaWaiters:   cloudStorageSpoolDiskQuotaWaitersGauge.WithLabelValues(keyspace, changefeed),
+		DiskQuotaWait:      cloudStorageSpoolDiskQuotaWaitDurationHistogram.WithLabelValues(keyspace, changefeed),
+		LoadedBytes:        cloudStorageLoadBytesHistogram.WithLabelValues(keyspace, changefeed),
+		RotatedCount:       cloudStorageRotateCountCounter.WithLabelValues(keyspace, changefeed),
+		SegmentCount:       cloudStorageSpoolSegmentCountGauge.WithLabelValues(keyspace, changefeed),
 		Close: func() {
-			sinkmetrics.CloudStorageSpoolMemoryBytesGauge.DeleteLabelValues(keyspace, changefeed)
-			sinkmetrics.CloudStorageSpoolDiskBytesGauge.DeleteLabelValues(keyspace, changefeed)
-			sinkmetrics.CloudStoragePendingPostEnqueueGauge.DeleteLabelValues(keyspace, changefeed)
-			sinkmetrics.CloudStorageSpoolDiskQuotaWaitersGauge.DeleteLabelValues(keyspace, changefeed)
-			sinkmetrics.CloudStorageSpoolDiskQuotaWaitDurationHistogram.DeleteLabelValues(keyspace, changefeed)
-			sinkmetrics.CloudStorageLoadBytesHistogram.DeleteLabelValues(keyspace, changefeed)
-			sinkmetrics.CloudStorageRotateCountCounter.DeleteLabelValues(keyspace, changefeed)
-			sinkmetrics.CloudStorageSpoolSegmentCountGauge.DeleteLabelValues(keyspace, changefeed)
+			cloudStorageSpoolMemoryBytesGauge.DeleteLabelValues(keyspace, changefeed)
+			cloudStorageSpoolDiskBytesGauge.DeleteLabelValues(keyspace, changefeed)
+			cloudStoragePendingPostEnqueueGauge.DeleteLabelValues(keyspace, changefeed)
+			cloudStorageSpoolDiskQuotaWaitersGauge.DeleteLabelValues(keyspace, changefeed)
+			cloudStorageSpoolDiskQuotaWaitDurationHistogram.DeleteLabelValues(keyspace, changefeed)
+			cloudStorageLoadBytesHistogram.DeleteLabelValues(keyspace, changefeed)
+			cloudStorageRotateCountCounter.DeleteLabelValues(keyspace, changefeed)
+			cloudStorageSpoolSegmentCountGauge.DeleteLabelValues(keyspace, changefeed)
 		},
 	}
 }

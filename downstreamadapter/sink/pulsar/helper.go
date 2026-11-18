@@ -29,7 +29,6 @@ import (
 	"github.com/pingcap/ticdc/pkg/sink/codec"
 	codecCommon "github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"github.com/pingcap/ticdc/pkg/sink/pulsar"
-	"github.com/pingcap/ticdc/pkg/statistics"
 	putil "github.com/pingcap/ticdc/pkg/util"
 	"go.uber.org/zap"
 )
@@ -42,8 +41,6 @@ type component struct {
 	eventRouter    *eventrouter.EventRouter
 	topicManager   topicmanager.TopicManager
 	client         pulsarClient.Client
-	// statistics is a construction dependency owned by the sink.
-	statistics *statistics.Statistics
 }
 
 func (c component) close() {

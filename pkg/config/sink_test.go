@@ -24,6 +24,34 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestDecodeAWSMSKIAMConfig(t *testing.T) {
+	t.Parallel()
+
+	var replicaConfig ReplicaConfig
+	metadata, err := toml.Decode(`
+[sink.kafka-config]
+sasl-mechanism = "OAUTHBEARER"
+sasl-oauth-provider = "AWS_MSK_IAM"
+enable-tls = true
+
+[sink.kafka-config.aws-msk-iam]
+region = "ap-northeast-1"
+role-arn = "arn:aws:iam::123456789012:role/TiCDCMSKProducer"
+role-session-name = "ticdc"
+external-id = "external-id"
+`, &replicaConfig)
+	require.NoError(t, err)
+	require.Empty(t, metadata.Undecoded())
+	require.NotNil(t, replicaConfig.Sink)
+	require.NotNil(t, replicaConfig.Sink.KafkaConfig)
+	require.Equal(t, &AWSMSKIAMConfig{
+		Region:          "ap-northeast-1",
+		RoleARN:         "arn:aws:iam::123456789012:role/TiCDCMSKProducer",
+		RoleSessionName: "ticdc",
+		ExternalID:      "external-id",
+	}, replicaConfig.Sink.KafkaConfig.AWSMSKIAM)
+}
+
 func TestDateSeparatorSerialization(t *testing.T) {
 	t.Parallel()
 
@@ -330,6 +358,16 @@ func TestCheckCompatibilityWithSinkURI(t *testing.T) {
 		require.Equal(t, tc.expectedProtocol, tc.newSinkConfig.Protocol)
 		require.Equal(t, tc.expectedTxnAtomicity, tc.newSinkConfig.TxnAtomicity)
 	}
+}
+
+func TestCheckCompatibilityWithSinkURIMasksCredentialsInParseError(t *testing.T) {
+	t.Parallel()
+
+	err := new(SinkConfig).CheckCompatibilityWithSinkURI(
+		new(SinkConfig), "mysql://root:verysecure@127.0.0.1/%zz")
+	require.Error(t, err)
+	require.NotContains(t, err.Error(), "verysecure")
+	require.Contains(t, err.Error(), "invalid URL escape")
 }
 
 func TestValidateTableRoute(t *testing.T) {

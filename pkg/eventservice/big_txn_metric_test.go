@@ -16,7 +16,6 @@ package eventservice
 import (
 	"testing"
 
-	"github.com/pingcap/ticdc/pkg/metrics"
 	dto "github.com/prometheus/client_model/go"
 	"github.com/stretchr/testify/require"
 )
@@ -82,7 +81,7 @@ func readBigTxnSizeMetric(t *testing.T) (uint64, float64) {
 	t.Helper()
 
 	metric := &dto.Metric{}
-	require.NoError(t, metrics.EventServiceBigTxnSize.Write(metric))
+	require.NoError(t, eventServiceBigTxnSize.Write(metric))
 	histogram := metric.GetHistogram()
 	require.NotNil(t, histogram)
 	return histogram.GetSampleCount(), histogram.GetSampleSum()
@@ -92,7 +91,7 @@ func readBigTxnCountMetric(t *testing.T) float64 {
 	t.Helper()
 
 	metric := &dto.Metric{}
-	require.NoError(t, metrics.EventServiceBigTxnCount.Write(metric))
+	require.NoError(t, eventServiceBigTxnCount.Write(metric))
 	counter := metric.GetCounter()
 	require.NotNil(t, counter)
 	return counter.GetValue()

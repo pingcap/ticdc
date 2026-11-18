@@ -19,6 +19,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/pingcap/ticdc/downstreamadapter/sink/statistics"
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/errors"
 	codecCommon "github.com/pingcap/ticdc/pkg/sink/codec/common"
@@ -28,6 +29,12 @@ import (
 	"github.com/twmb/franz-go/pkg/kgo"
 	"github.com/twmb/franz-go/pkg/kmsg"
 )
+
+func newTestStatistics(t *testing.T) *statistics.Statistics {
+	stats := statistics.New(common.NewChangefeedID4Test(common.DefaultKeyspaceName, t.Name()), common.DefaultKeyspaceID)
+	t.Cleanup(stats.Close)
+	return stats
+}
 
 func TestAsyncSendClosed(t *testing.T) {
 	producer := &asyncProducer{}
@@ -73,6 +80,7 @@ func TestAsyncCallbackStopsWithClient(t *testing.T) {
 	client, err := kgo.NewClient(kgo.SeedBrokers("127.0.0.1:1"))
 	require.NoError(t, err)
 	producer := &asyncProducer{
+		statistics:   newTestStatistics(t),
 		client:       client,
 		changefeedID: common.NewChangefeedID4Test(common.DefaultKeyspaceName, "async-callback-close"),
 		resultCh:     make(chan asyncProduceResult, 1),
@@ -121,12 +129,11 @@ func TestAsyncCallbackOnce(t *testing.T) {
 	client, err := kgo.NewClient(append(testClientOptions(t, o), producerOptions(o)...)...)
 	require.NoError(t, err)
 	defer client.Close()
-	stat, reg := newTestStatistics(t, "async-success")
 	producer := &asyncProducer{
+		statistics:   newTestStatistics(t),
 		client:       client,
 		changefeedID: common.NewChangefeedID4Test(common.DefaultKeyspaceName, "async-success"),
 		resultCh:     make(chan asyncProduceResult, producerMaxBufferedRecords),
-		statistics:   stat,
 	}
 	defer producer.Close()
 
@@ -139,13 +146,9 @@ func TestAsyncCallbackOnce(t *testing.T) {
 			called <- struct{}{}
 		},
 	}
-	message.SetRowsCount(3)
 	require.NoError(t, producer.AsyncSend(t.Context(), topic, 0, message))
 	require.Eventually(t, func() bool { return producer.client.BufferedProduceRecords() == 0 }, time.Second, time.Millisecond)
 	require.Zero(t, calls.Load())
-	hist := gatherMetric(t, reg, "ticdc_sink_batch_row_count", "changefeed", "async-success")
-	require.NotNil(t, hist)
-	require.Zero(t, hist.GetHistogram().GetSampleCount())
 
 	callbackCtx, cancel := context.WithCancel(t.Context())
 	done := make(chan error, 1)
@@ -161,10 +164,6 @@ func TestAsyncCallbackOnce(t *testing.T) {
 	require.Equal(t, int32(1), calls.Load())
 	cancel()
 	require.ErrorIs(t, <-done, context.Canceled)
-	hist = gatherMetric(t, reg, "ticdc_sink_batch_row_count", "changefeed", "async-success")
-	require.NotNil(t, hist)
-	require.Equal(t, uint64(1), hist.GetHistogram().GetSampleCount())
-	require.Equal(t, float64(3), hist.GetHistogram().GetSampleSum())
 }
 
 func TestAsyncCallbackIsolation(t *testing.T) {
@@ -177,6 +176,7 @@ func TestAsyncCallbackIsolation(t *testing.T) {
 	require.NoError(t, err)
 	defer client.Close()
 	producer := &asyncProducer{
+		statistics:   newTestStatistics(t),
 		client:       client,
 		changefeedID: common.NewChangefeedID4Test(common.DefaultKeyspaceName, "async-callback-isolation"),
 		resultCh:     make(chan asyncProduceResult, producerMaxBufferedRecords),
@@ -236,12 +236,11 @@ func TestAsyncProduceFailure(t *testing.T) {
 	client, err := kgo.NewClient(append(testClientOptions(t, o), producerOptions(o)...)...)
 	require.NoError(t, err)
 	defer client.Close()
-	stat, reg := newTestStatistics(t, "async-error")
 	producer := &asyncProducer{
+		statistics:   newTestStatistics(t),
 		client:       client,
 		changefeedID: common.NewChangefeedID4Test(common.DefaultKeyspaceName, "async-error"),
 		resultCh:     make(chan asyncProduceResult, producerMaxBufferedRecords),
-		statistics:   stat,
 	}
 	defer producer.Close()
 
@@ -250,7 +249,6 @@ func TestAsyncProduceFailure(t *testing.T) {
 		Value:    []byte("value"),
 		Callback: func() { callbackCalled.Store(true) },
 	}
-	message.SetRowsCount(5)
 	require.NoError(t, producer.AsyncSend(t.Context(), topic, 0, message))
 
 	callbackCtx, cancel := context.WithTimeout(t.Context(), time.Second)
@@ -259,13 +257,6 @@ func TestAsyncProduceFailure(t *testing.T) {
 	err = producer.AsyncRunCallback(callbackCtx)
 	requireKafkaSendError(t, err, kerr.InvalidTopicException)
 	require.False(t, callbackCalled.Load())
-	errMetric := gatherMetric(t, reg, "ticdc_sink_execution_error",
-		"changefeed", "async-error", "event_type", "dml")
-	require.NotNil(t, errMetric)
-	require.Equal(t, float64(1), errMetric.GetCounter().GetValue())
-	hist := gatherMetric(t, reg, "ticdc_sink_batch_row_count", "changefeed", "async-error")
-	require.NotNil(t, hist)
-	require.Zero(t, hist.GetHistogram().GetSampleCount())
 }
 
 func TestBufferBackpressure(t *testing.T) {
