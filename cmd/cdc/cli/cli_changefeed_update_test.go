@@ -224,51 +224,6 @@ func TestTxnOrderUpdateConfigs(t *testing.T) {
 	}
 }
 
-func TestChangefeedUpdateTxnOrderRulePrecedence(t *testing.T) {
-	oldRules := []string{"app.*", "!app.orders"}
-	for _, tc := range []struct {
-		name  string
-		rules []string
-	}{
-		{name: "reordered", rules: []string{"!app.orders", "app.*"}},
-		{name: "unchanged", rules: oldRules},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			f := newMockFactory(gomock.NewController(t))
-			replica := config.GetDefaultReplicaConfig()
-			replica.Sink.MySQLConfig = &config.MySQLConfig{TxnOrderTables: oldRules}
-			oldInfo := &v2.ChangeFeedInfo{
-				ID: "abc", SinkURI: "mysql://127.0.0.1:3306/",
-				Config: v2.ToAPIReplicaConfig(replica),
-			}
-			f.changefeeds.EXPECT().Get(gomock.Any(), "default", "abc").Return(oldInfo, nil)
-			if tc.name == "reordered" {
-				f.changefeeds.EXPECT().GetAllTables(gomock.Any(), gomock.Any(), "default").Return(&v2.Tables{}, nil)
-				f.changefeeds.EXPECT().Update(gomock.Any(), gomock.Any(), "default", "abc").
-					DoAndReturn(func(_ context.Context, cfg *v2.ChangefeedConfig, _, _ string) (*v2.ChangeFeedInfo, error) {
-						require.Equal(t, tc.rules, cfg.ReplicaConfig.Sink.MySQLConfig.TxnOrderTables)
-						return oldInfo, nil
-					})
-			}
-			rules, err := json.Marshal(tc.rules)
-			require.NoError(t, err)
-			path := filepath.Join(t.TempDir(), "changefeed.toml")
-			require.NoError(t, os.WriteFile(path, []byte("[sink.mysql-config]\ntxn-order-tables = "+string(rules)+"\n"), 0o600))
-			cmd := newCmdUpdateChangefeed(f)
-			cmd.SetContext(t.Context())
-			cmd.SetArgs([]string{"--changefeed-id=abc", "--no-confirm=true", "--config=" + path})
-			output := new(bytes.Buffer)
-			cmd.SetOut(output)
-			require.NoError(t, cmd.Execute())
-			if tc.name == "reordered" {
-				require.Contains(t, output.String(), "TxnOrderTables")
-			} else {
-				require.Contains(t, output.String(), "do nothing")
-			}
-		})
-	}
-}
-
 func TestChangefeedUpdatePassword(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()

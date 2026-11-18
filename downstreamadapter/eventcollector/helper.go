@@ -134,8 +134,7 @@ func (h *EventsHandler) GetType(event dispatcher.DispatcherEvent) dynstream.Even
 	case commonEvent.TypeBatchDMLEvent:
 		return dynstream.EventType{DataGroup: DataGroupResolvedTsOrDML, Property: dynstream.BatchableData, Droppable: true}
 	case commonEvent.TypeDDLEvent:
-		ddl, ok := event.Event.(*commonEvent.DDLEvent)
-		return dynstream.EventType{DataGroup: DataGroupDDL, Property: dynstream.NonBatchable, Droppable: !ok || ddl.Seq != 0 || ddl.Err == ""}
+		return dynstream.EventType{DataGroup: DataGroupDDL, Property: dynstream.NonBatchable, Droppable: true}
 	case commonEvent.TypeSyncPointEvent:
 		return dynstream.EventType{DataGroup: DataGroupSyncPoint, Property: dynstream.NonBatchable, Droppable: true}
 	case commonEvent.TypeHandshakeEvent:

@@ -26,7 +26,6 @@ import (
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	"github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
-	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/integrity"
 	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/metrics"
@@ -213,11 +212,10 @@ func (s *eventService) registerDispatcher(ctx context.Context, info DispatcherIn
 		s.brokers[clusterID] = c
 	}
 
-	if err := c.addDispatcher(info); err != nil {
+	// FIXME: Send message to the dispatcherManager to handle the error.
+	err := c.addDispatcher(info)
+	if err != nil {
 		log.Error("add dispatcher to eventBroker failed", zap.Stringer("dispatcherID", info.GetID()), zap.Error(err))
-		if errors.ErrInvalidReplicaConfig.Equal(err) {
-			c.sendDispatcherConfigError(info, err)
-		}
 	}
 }
 
@@ -236,12 +234,8 @@ func (s *eventService) resetDispatcher(dispatcherInfo DispatcherInfo) {
 	if !ok {
 		return
 	}
-	if err := c.resetDispatcher(dispatcherInfo); err != nil {
-		log.Error("reset dispatcher in eventBroker failed", zap.Stringer("dispatcherID", dispatcherInfo.GetID()), zap.Error(err))
-		if errors.ErrInvalidReplicaConfig.Equal(err) {
-			c.sendDispatcherConfigError(dispatcherInfo, err)
-		}
-	}
+	// TODO: handle the error
+	_ = c.resetDispatcher(dispatcherInfo)
 }
 
 func (s *eventService) handleDispatcherHeartbeat(heartbeat *DispatcherHeartBeatWithServerID) {

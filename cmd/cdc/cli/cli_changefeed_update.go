@@ -14,7 +14,6 @@
 package cli
 
 import (
-	"slices"
 	"strings"
 
 	"github.com/BurntSushi/toml"
@@ -91,27 +90,6 @@ func (o *updateChangefeedOptions) complete(f factory.Factory) error {
 	return nil
 }
 
-func diffChangefeedConfig(old, updated *v2.ChangeFeedInfo) (diff.Changelog, error) {
-	changes, err := diff.Diff(old, updated)
-	if err != nil || old.Config == nil || old.Config.Sink == nil || old.Config.Sink.MySQLConfig == nil ||
-		updated.Config == nil || updated.Config.Sink == nil || updated.Config.Sink.MySQLConfig == nil {
-		return changes, err
-	}
-	before := old.Config.Sink.MySQLConfig.TxnOrderTables
-	after := updated.Config.Sink.MySQLConfig.TxnOrderTables
-	if slices.Equal(before, after) {
-		return changes, nil
-	}
-	// The generic diff ignores slice order, but later table rules take precedence.
-	path := []string{"Config", "Sink", "MySQLConfig", "TxnOrderTables"}
-	for _, change := range changes {
-		if len(change.Path) >= len(path) && slices.Equal(change.Path[:len(path)], path) {
-			return changes, nil
-		}
-	}
-	return append(changes, diff.Change{Type: diff.UPDATE, Path: path, From: before, To: after}), nil
-}
-
 // run the `cli changefeed update` command.
 func (o *updateChangefeedOptions) run(cmd *cobra.Command) error {
 	ctx := cmd.Context()
@@ -130,7 +108,7 @@ func (o *updateChangefeedOptions) run(cmd *cobra.Command) error {
 	if newInfo.SinkURI == "" {
 		old.SinkURI = ""
 	}
-	changelog, err := diffChangefeedConfig(old, newInfo)
+	changelog, err := diff.Diff(old, newInfo)
 	if err != nil {
 		return err
 	}
@@ -148,7 +126,7 @@ func (o *updateChangefeedOptions) run(cmd *cobra.Command) error {
 	if err != nil {
 		return err
 	}
-	safeChangelog, err := diffChangefeedConfig(safeOld, safeNew)
+	safeChangelog, err := diff.Diff(safeOld, safeNew)
 	if err != nil {
 		return err
 	}

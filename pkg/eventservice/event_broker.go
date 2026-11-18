@@ -299,24 +299,6 @@ func (c *eventBroker) sendDML(remoteID node.ID, batchEvent *event.BatchDMLEvent,
 	doSendDML(batchEvent)
 }
 
-// sendDispatcherConfigError reports a rejected register or reset request. The
-// zero sequence identifies a control response before the data handshake.
-func (c *eventBroker) sendDispatcherConfigError(info DispatcherInfo, err error) {
-	id := info.GetID()
-	e := &event.DDLEvent{
-		Version:      event.DDLEventVersion1,
-		DispatcherID: id,
-		FinishedTs:   info.GetStartTs(),
-		Epoch:        info.GetEpoch(),
-		Err:          errors.WrapChangefeedUnretryableErr(err).Error(),
-	}
-	worker := common.GID(id).Hash(uint64(len(c.messageCh)))
-	select {
-	case <-c.ctx.Done():
-	case c.getMessageCh(worker, common.IsRedoMode(info.GetMode())) <- newWrapDDLEvent(node.ID(info.GetServerID()), e):
-	}
-}
-
 func (c *eventBroker) sendDDL(ctx context.Context, remoteID node.ID, e *event.DDLEvent, d *dispatcherStat) {
 	if e.Err == "" {
 		c.emitSyncPointEventIfNeeded(e.FinishedTs, d, remoteID)
@@ -1576,6 +1558,17 @@ func (c *eventBroker) resetDispatcher(dispatcherInfo DispatcherInfo) error {
 		return err
 	}
 
+	// Mark the old dispatcher as removed and cancel its scan before cleaning up
+	// resources shared with that scan.
+	oldStat.markRemoved()
+	c.removeSchemaBlockedDispatcher(oldStat)
+	if err := c.cleanupLargeTxnState(oldStat); err != nil {
+		log.Warn("cleanup large txn state failed when resetting dispatcher, scheduled retry",
+			zap.Stringer("changefeedID", dispatcherInfo.GetChangefeedID()),
+			zap.Stringer("dispatcherID", dispatcherID),
+			zap.Error(err))
+	}
+
 	// Create a new dispatcherStat and replace the old one.
 	// The new dispatcherStat will be used for all future operations.
 	changefeedID := dispatcherInfo.GetChangefeedID()
@@ -1598,17 +1591,6 @@ func (c *eventBroker) resetDispatcher(dispatcherInfo DispatcherInfo) error {
 			return err
 		}
 	}
-	// Mark the old dispatcher as removed and cancel its scan before cleaning up
-	// resources shared with that scan.
-	oldStat.markRemoved()
-	c.removeSchemaBlockedDispatcher(oldStat)
-	if err := c.cleanupLargeTxnState(oldStat); err != nil {
-		log.Warn("cleanup large txn state failed when resetting dispatcher, scheduled retry",
-			zap.Stringer("changefeedID", dispatcherInfo.GetChangefeedID()),
-			zap.Stringer("dispatcherID", dispatcherID),
-			zap.Error(err))
-	}
-
 	newStat := newDispatcherStat(dispatcherInfo, uint64(len(c.scanTaskQueues)), uint64(len(c.messageCh)), tableInfo, status)
 	newStat.copyStatistics(oldStat)
 
@@ -1712,7 +1694,7 @@ func (c *eventBroker) tryGetOrSetChangefeedStatus(info DispatcherInfo) (*changef
 	changefeedFilter, err := filter.GetSharedFilterStorage().GetOrSetFilter(
 		changefeedID, filterConfig, c.timezone)
 	if err != nil {
-		return nil, errors.WrapError(errors.ErrInvalidReplicaConfig, err, "invalid dispatcher filter config")
+		return nil, err
 	}
 
 	status := newChangefeedStatus(changefeedID, info.GetSyncPointInterval())

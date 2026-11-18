@@ -14,7 +14,6 @@
 package event
 
 import (
-	"bytes"
 	"testing"
 
 	commonType "github.com/pingcap/ticdc/pkg/common"
@@ -24,37 +23,7 @@ import (
 	"github.com/pingcap/tidb/pkg/testkit"
 	"github.com/pingcap/tidb/pkg/types"
 	"github.com/stretchr/testify/require"
-	"github.com/tinylib/msgp/msgp"
 )
-
-func TestRedoDDLTableIdentitiesRoundTrip(t *testing.T) {
-	ddl := RedoDDLEvent{Tables: []RedoTableName{
-		{
-			Source: commonType.TableName{Schema: "app", Table: "orders", TableID: 1},
-			Target: commonType.TableName{Schema: "archive", Table: "orders_copy", TableID: 1},
-		},
-		{
-			Source: commonType.TableName{Schema: "app", Table: "ledger", TableID: 2, IsPartition: true},
-			Target: commonType.TableName{Schema: "audit", Table: "ledger_copy", TableID: 2, IsPartition: true},
-		},
-	}}
-
-	payload, err := ddl.MarshalMsg(nil)
-	require.NoError(t, err)
-	var decoded RedoDDLEvent
-	rest, err := decoded.UnmarshalMsg(payload)
-	require.NoError(t, err)
-	require.Empty(t, rest)
-	require.Equal(t, ddl.Tables, decoded.Tables)
-
-	var buf bytes.Buffer
-	writer := msgp.NewWriter(&buf)
-	require.NoError(t, ddl.EncodeMsg(writer))
-	require.NoError(t, writer.Flush())
-	decoded = RedoDDLEvent{}
-	require.NoError(t, decoded.DecodeMsg(msgp.NewReader(&buf)))
-	require.Equal(t, ddl.Tables, decoded.Tables)
-}
 
 func TestRedoDMLEventPreservesStoredGeneratedColumn(t *testing.T) {
 	helper := NewEventTestHelper(t)

@@ -112,53 +112,6 @@ func TestTryGetOrSetChangefeedStatusRejectsInvalidFilter(t *testing.T) {
 	require.Nil(t, status)
 }
 
-func TestDispatcherConfigRejection(t *testing.T) {
-	for _, reset := range []bool{false, true} {
-		name := "register"
-		if reset {
-			name = "reset"
-		}
-		t.Run(name, func(t *testing.T) {
-			broker, _, _, _ := newEventBrokerForTest()
-			broker.close()
-			broker.ctx = t.Context()
-			info := newMockDispatcherInfoForTest(t)
-			service := &eventService{brokers: map[uint64]*eventBroker{info.GetClusterID(): broker}}
-			var old *dispatcherStat
-			if reset {
-				require.NoError(t, broker.addDispatcher(info))
-				old = broker.getDispatcher(info.GetID()).Load()
-			}
-
-			rejected := *info
-			rejected.filterConfig = nil
-			if reset {
-				rejected.epoch = old.epoch + 1
-				service.resetDispatcher(&rejected)
-				require.Same(t, old, broker.getDispatcher(info.GetID()).Load())
-				require.False(t, old.isRemoved.Load())
-			} else {
-				service.registerDispatcher(t.Context(), &rejected)
-				require.Nil(t, broker.getDispatcher(info.GetID()))
-			}
-
-			worker := common.GID(info.GetID()).Hash(uint64(len(broker.messageCh)))
-			select {
-			case message := <-broker.getMessageCh(worker, false):
-				ddl, ok := message.e.(*event.DDLEvent)
-				require.True(t, ok)
-				require.Equal(t, info.GetID(), ddl.DispatcherID)
-				require.Equal(t, rejected.epoch, ddl.Epoch)
-				require.Zero(t, ddl.Seq)
-				require.ErrorContains(t, ddl.GetError(), "dispatcher filter config is required")
-				require.ErrorContains(t, ddl.GetError(), "CDC:ErrChangefeedUnretryable")
-			default:
-				t.Fatal("expected an error response to the rejected dispatcher")
-			}
-		})
-	}
-}
-
 func popScanTask(t *testing.T, broker *eventBroker, workerIndex int) scanTask {
 	t.Helper()
 	task, ok := broker.scanTaskQueues[workerIndex].pop()

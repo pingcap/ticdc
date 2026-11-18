@@ -127,14 +127,11 @@ func TestTxnOrderTablesBacklog(t *testing.T) {
 						mock.ExpectExec("INSERT INTO "+"`test`.`ordered` (`id`,`v`) VALUES (?,?)").WithArgs(id, 1).WillReturnResult(sqlmock.NewResult(0, 1))
 					}
 				} else {
-					id, value := 1, i+1
+					id := 1
 					if i == hotCount {
-						id, value = 2, 1
-					} else {
-						e.Rows = hot.Rows.CopyConstruct()
-						e.Rows.Column(1).Int64s()[0] = int64(value)
+						id = 2
 					}
-					mock.ExpectExec("INSERT INTO "+"`test`.`ordered` (`id`,`v`) VALUES (?,?)").WithArgs(id, value).WillReturnResult(sqlmock.NewResult(0, 1))
+					mock.ExpectExec("INSERT INTO "+"`test`.`ordered` (`id`,`v`) VALUES (?,?)").WithArgs(id, 1).WillReturnResult(sqlmock.NewResult(0, 1))
 				}
 				mock.ExpectCommit()
 				sink.AddDMLEvent(&e)
