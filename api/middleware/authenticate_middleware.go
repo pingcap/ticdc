@@ -42,6 +42,32 @@ func AuthenticateMiddleware(server server.Server) gin.HandlerFunc {
 	}
 }
 
+// AdminMiddleware authenticates the request and requires the client to be an
+// administrative user. It guards node level operations that change the server
+// behavior or bypass changefeed isolation, such as the log level, failpoints,
+// owner resignation and the unsafe APIs.
+func AdminMiddleware(server server.Server) gin.HandlerFunc {
+	return func(ctx *gin.Context) {
+		if !AuthenticateRequest(ctx, server) {
+			return
+		}
+		security := config.GetGlobalServerConfig().Security
+		if security == nil || !security.ClientUserRequired {
+			ctx.Next()
+			return
+		}
+		username, _, _ := ctx.Request.BasicAuth()
+		if !slices.Contains(security.ClientAdminUser, username) {
+			err := errors.ErrUnauthorized.GenWithStackByArgs(username,
+				"The user is not allowed to perform administrative operations.")
+			ctx.IndentedJSON(http.StatusForbidden, api.NewHTTPError(err))
+			ctx.Abort()
+			return
+		}
+		ctx.Next()
+	}
+}
+
 // AuthenticateRequest authenticates a request when client user authentication
 // is enabled. It can be called from a handler after the target changefeed has
 // supplied its persisted keyspace ID.
