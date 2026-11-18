@@ -168,10 +168,7 @@ func (w *Writer) writeDDL(ctx context.Context, result *ddlWrite) error {
 	if err := w.target.FlushDMLBeforeBlock(result.ddl); err != nil {
 		return err
 	}
-	if err := w.target.WriteBlockEvent(result.ddl); err != nil {
-		return err
-	}
-	return nil
+	return w.target.WriteBlockEvent(result.ddl)
 }
 
 func (w *Writer) flushDDL(ctx context.Context) error {

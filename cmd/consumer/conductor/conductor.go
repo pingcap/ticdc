@@ -18,6 +18,7 @@ package conductor
 import (
 	"cmp"
 	"context"
+	"maps"
 	"math"
 	"slices"
 	"sort"
@@ -443,10 +444,7 @@ func (c *Conductor) confirm(ctx context.Context) error {
 // logged and dropped: the next acknowledgement commits a higher offset.
 func (c *Conductor) confirmPositions(ctx context.Context, checkpoint uint64) {
 	c.positionsMu.Lock()
-	positions := make(map[int32][]sourcePosition, len(c.positions))
-	for partition, pending := range c.positions {
-		positions[partition] = pending
-	}
+	positions := maps.Clone(c.positions)
 	c.positionsMu.Unlock()
 	for partition, pending := range positions {
 		count := confirmablePrefix(pending, checkpoint)

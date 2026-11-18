@@ -1352,7 +1352,7 @@ func TestGenerateColumn(t *testing.T) {
 	require.True(t, hasNext)
 	require.Equal(t, messageType, common.MessageTypeRow)
 
-	decoded = dec.NextDMLEvent()
+	require.NotNil(t, dec.NextDMLEvent())
 }
 
 // Including insert / update / delete
