@@ -33,7 +33,7 @@ require (
 	github.com/aws/smithy-go v1.24.2
 	github.com/benbjohnson/clock v1.3.5
 	github.com/bradleyjkemp/grpc-tools v0.2.5
-	github.com/cenkalti/backoff/v4 v4.2.1
+	github.com/cenkalti/backoff/v4 v4.3.0
 	github.com/cockroachdb/pebble v1.1.4-0.20250120151818-5dd133a1e6fb
 	github.com/coreos/go-semver v0.3.1
 	github.com/fatih/color v1.19.0
@@ -252,12 +252,8 @@ require (
 	github.com/gorilla/mux v1.8.1 // indirect
 	github.com/gorilla/websocket v1.5.3 // indirect
 	github.com/grpc-ecosystem/grpc-gateway v1.16.0 // indirect
-<<<<<<< HEAD
-	github.com/grpc-ecosystem/grpc-gateway/v2 v2.27.2 // indirect
-	github.com/gsterjov/go-libsecret v0.0.0-20161001094733-a6f4afe4910c // indirect
-=======
 	github.com/grpc-ecosystem/grpc-gateway/v2 v2.29.0 // indirect
->>>>>>> c3c6f55e7 (*: upgrade vulnerable dependencies (#6925))
+	github.com/gsterjov/go-libsecret v0.0.0-20161001094733-a6f4afe4910c // indirect
 	github.com/hamba/avro/v2 v2.31.0 // indirect
 	github.com/hashicorp/errwrap v1.1.0 // indirect
 	github.com/hashicorp/go-multierror v1.1.1 // indirect
