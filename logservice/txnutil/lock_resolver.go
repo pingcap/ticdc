@@ -54,30 +54,37 @@ var (
 	metricResolveLockOperationDuration = subscriptionClientResolveLockOperationDuration.WithLabelValues("resolve")
 )
 
+// Only data locks can hold back resolved-ts. In particular a shared wrapper
+// can contain more live readers than fit in one ScanLock response.
 func resolveScanLockInfos(lockInfos []*kvrpcpb.LockInfo, resolve func([]*txnkv.Lock) (int64, error)) ([]*txnkv.Lock, int64, error) {
 	locks := make([]*txnkv.Lock, 0, len(lockInfos))
-	for _, lockInfo := range lockInfos {
-		sharedLockInfos := lockInfo.GetSharedLockInfos()
-		if len(sharedLockInfos) > 0 {
-			for _, sharedLockInfo := range sharedLockInfos {
-				locks = append(locks, txnkv.NewLock(sharedLockInfo))
-			}
+	for _, info := range lockInfos {
+		switch info.GetLockType() {
+		case kvrpcpb.Op_SharedLock, kvrpcpb.Op_Lock, kvrpcpb.Op_PessimisticLock:
 			continue
 		}
-		locks = append(locks, txnkv.NewLock(lockInfo))
+		locks = append(locks, txnkv.NewLock(info))
 	}
 	if len(locks) == 0 {
 		return locks, 0, nil
 	}
-	msBeforeTxnExpired, err := resolve(locks)
-	return locks, msBeforeTxnExpired, err
+	ttl, err := resolve(locks)
+	return locks, ttl, err
 }
 
-func nextScanLockKey(locEndKey []byte, locks []*txnkv.Lock, msBeforeTxnExpired int64) []byte {
-	if msBeforeTxnExpired > 0 || len(locks) < scanLockLimit {
-		return locEndKey
+func nextScanLockKey(regionEnd []byte, infos []*kvrpcpb.LockInfo) []byte {
+	// TiKV counts individual shared members towards the page limit. All
+	// remaining members at the last physical key are also metadata. A data
+	// lock, on the other hand, was already passed to the resolver above.
+	count := 0
+	for _, info := range infos {
+		count += max(1, len(info.GetSharedLockInfos()))
 	}
-	return locks[len(locks)-1].Key
+	if count < scanLockLimit {
+		return regionEnd
+	}
+	lastKey := infos[len(infos)-1].GetKey()
+	return append(bytes.Clone(lastKey), 0)
 }
 
 func (r *resolver) Resolve(ctx context.Context, keyspaceID uint32, regionID uint64, maxVersion uint64) (err error) {
@@ -199,7 +206,7 @@ func (r *resolver) Resolve(ctx context.Context, keyspaceID uint32, regionID uint
 			}
 			metricResolveLockResolvedCounter.Add(float64(resolvedLockCount))
 		}
-		key = nextScanLockKey(loc.EndKey, locks, msBeforeTxnExpired)
+		key = nextScanLockKey(loc.EndKey, locksInfo)
 
 		if len(key) == 0 || (len(loc.EndKey) != 0 && bytes.Compare(key, loc.EndKey) >= 0) {
 			break

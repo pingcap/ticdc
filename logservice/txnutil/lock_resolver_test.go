@@ -15,7 +15,6 @@ package txnutil
 
 import (
 	"context"
-	"fmt"
 	"testing"
 
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
@@ -51,131 +50,52 @@ func TestDirectSharedLockWrapperResolveFails(t *testing.T) {
 	require.Contains(t, err.Error(), "trying to resolve a shared lock directly")
 }
 
-func TestResolveScanLockInfosExpandsSharedLockWrapper(t *testing.T) {
-	sharedLock1 := &kvrpcpb.LockInfo{
-		Key:         []byte("shared-key"),
-		PrimaryLock: []byte("primary-1"),
-		LockVersion: 101,
-		LockType:    kvrpcpb.Op_Lock,
-	}
-	sharedLock2 := &kvrpcpb.LockInfo{
-		Key:         []byte("shared-key"),
-		PrimaryLock: []byte("primary-2"),
-		LockVersion: 102,
-		LockType:    kvrpcpb.Op_PessimisticLock,
-	}
-	ordinaryLock := &kvrpcpb.LockInfo{
-		Key:         []byte("ordinary-key"),
-		PrimaryLock: []byte("ordinary-primary"),
-		LockVersion: 103,
-		LockType:    kvrpcpb.Op_Lock,
-	}
+func TestProgressRepairScansPastSharedMetadata(t *testing.T) {
+	key := []byte("shared")
 	wrapper := &kvrpcpb.LockInfo{
-		Key:             []byte("shared-key"),
-		LockVersion:     100,
-		LockType:        kvrpcpb.Op_SharedLock,
-		SharedLockInfos: []*kvrpcpb.LockInfo{sharedLock1, sharedLock2},
+		Key: key, LockType: kvrpcpb.Op_SharedLock,
+		SharedLockInfos: make([]*kvrpcpb.LockInfo, scanLockLimit),
 	}
-	var resolvedLocks []*txnkv.Lock
-
-	locks, ttl, err := resolveScanLockInfos([]*kvrpcpb.LockInfo{wrapper, ordinaryLock}, func(locks []*txnkv.Lock) (int64, error) {
-		for _, lock := range locks {
-			if lock.LockType == kvrpcpb.Op_SharedLock {
-				return 0, fmt.Errorf("unexpected shared lock wrapper")
-			}
+	for i := range wrapper.SharedLockInfos {
+		wrapper.SharedLockInfos[i] = &kvrpcpb.LockInfo{
+			Key: key, LockVersion: uint64(i + 1), LockType: kvrpcpb.Op_Lock,
 		}
-		resolvedLocks = append(resolvedLocks, locks...)
-		return 42, nil
-	})
-
-	require.NoError(t, err)
-	require.Equal(t, int64(42), ttl)
-	require.Len(t, locks, 3)
-	require.Equal(t, locks, resolvedLocks)
-	require.Equal(t, []uint64{101, 102, 103}, []uint64{locks[0].TxnID, locks[1].TxnID, locks[2].TxnID})
-	require.Equal(t, []kvrpcpb.Op{kvrpcpb.Op_Lock, kvrpcpb.Op_PessimisticLock, kvrpcpb.Op_Lock},
-		[]kvrpcpb.Op{locks[0].LockType, locks[1].LockType, locks[2].LockType})
-	require.Equal(t, [][]byte{[]byte("shared-key"), []byte("shared-key"), []byte("ordinary-key")},
-		[][]byte{locks[0].Key, locks[1].Key, locks[2].Key})
-}
-
-func TestResolveScanLockInfosKeepsOrdinaryLocks(t *testing.T) {
-	ordinaryLock := &kvrpcpb.LockInfo{
-		Key:         []byte("ordinary-key"),
-		PrimaryLock: []byte("ordinary-primary"),
-		LockVersion: 103,
-		LockType:    kvrpcpb.Op_Lock,
 	}
-	var resolvedLocks []*txnkv.Lock
-
-	locks, ttl, err := resolveScanLockInfos([]*kvrpcpb.LockInfo{ordinaryLock}, func(locks []*txnkv.Lock) (int64, error) {
-		resolvedLocks = append(resolvedLocks, locks...)
+	dataKey := append(append([]byte{}, key...), 0)
+	expired := &kvrpcpb.LockInfo{Key: dataKey, LockType: kvrpcpb.Op_Put, LockVersion: 10}
+	regionEnd := []byte("z")
+	page := []*kvrpcpb.LockInfo{wrapper}
+	locks, _, err := resolveScanLockInfos(page, func(_ []*txnkv.Lock) (int64, error) {
+		t.Fatal("a shared member cannot hold back resolved-ts")
 		return 0, nil
 	})
-
 	require.NoError(t, err)
-	require.Equal(t, int64(0), ttl)
-	require.Len(t, locks, 1)
-	require.Equal(t, locks, resolvedLocks)
-	require.Equal(t, uint64(103), locks[0].TxnID)
-	require.Equal(t, []byte("ordinary-key"), locks[0].Key)
-	require.Equal(t, kvrpcpb.Op_Lock, locks[0].LockType)
-}
+	require.Empty(t, locks)
+	require.Equal(t, dataKey, nextScanLockKey(regionEnd, page))
 
-func TestNextScanLockKeyStopsAtRegionEndWhenFullPageHasLiveLocks(t *testing.T) {
-	locks := make([]*txnkv.Lock, scanLockLimit)
-	for i := range locks {
-		locks[i] = &txnkv.Lock{Key: []byte("shared-key")}
-	}
-
-	key := nextScanLockKey([]byte("region-end"), locks, 1)
-
-	require.Equal(t, []byte("region-end"), key)
-}
-
-func TestNextScanLockKeyContinuesFromLastLockWhenFullPageHasNoLiveLocks(t *testing.T) {
-	locks := make([]*txnkv.Lock, scanLockLimit)
-	for i := range locks {
-		locks[i] = &txnkv.Lock{Key: []byte("shared-key")}
-	}
-	locks[len(locks)-1].Key = []byte("last-lock")
-
-	key := nextScanLockKey([]byte("region-end"), locks, 0)
-
-	require.Equal(t, []byte("last-lock"), key)
-}
-
-func TestNextScanLockKeyStopsAtRegionEndWhenPageIsNotFull(t *testing.T) {
-	locks := []*txnkv.Lock{{Key: []byte("last-lock")}}
-
-	key := nextScanLockKey([]byte("region-end"), locks, 0)
-
-	require.Equal(t, []byte("region-end"), key)
-}
-
-func TestSharedLockFullPageUsesResolveTTLForNextScanKey(t *testing.T) {
-	sharedLockInfos := make([]*kvrpcpb.LockInfo, scanLockLimit)
-	for i := range sharedLockInfos {
-		sharedLockInfos[i] = &kvrpcpb.LockInfo{
-			Key:         []byte("shared-key"),
-			PrimaryLock: fmt.Appendf(nil, "primary-%d", i),
-			LockVersion: uint64(i + 1),
-			LockType:    kvrpcpb.Op_Lock,
-		}
-	}
-	wrapper := &kvrpcpb.LockInfo{
-		Key:             []byte("shared-key"),
-		LockType:        kvrpcpb.Op_SharedLock,
-		SharedLockInfos: sharedLockInfos,
-	}
-
-	locks, ttl, err := resolveScanLockInfos([]*kvrpcpb.LockInfo{wrapper}, func(locks []*txnkv.Lock) (int64, error) {
-		require.Len(t, locks, scanLockLimit)
-		return 1, nil
+	page = []*kvrpcpb.LockInfo{expired, {Key: []byte("u"), LockType: kvrpcpb.Op_PessimisticLock}}
+	locks, _, err = resolveScanLockInfos(page, func(locks []*txnkv.Lock) (int64, error) {
+		require.Len(t, locks, 1)
+		require.Equal(t, expired.Key, locks[0].Key)
+		return 0, nil
 	})
-
 	require.NoError(t, err)
-	require.Equal(t, int64(1), ttl)
-	require.Equal(t, []byte("region-end"), nextScanLockKey([]byte("region-end"), locks, ttl))
-	require.Equal(t, []byte("shared-key"), nextScanLockKey([]byte("region-end"), locks, 0))
+	require.Len(t, locks, 1)
+	require.Equal(t, regionEnd, nextScanLockKey(regionEnd, page))
+}
+
+func TestProgressRepairContinuesPastAttemptedDataLocks(t *testing.T) {
+	page := make([]*kvrpcpb.LockInfo, scanLockLimit)
+	for i := range page {
+		page[i] = &kvrpcpb.LockInfo{Key: []byte("k"), LockType: kvrpcpb.Op_Put}
+	}
+	page[len(page)-1].Key = []byte("x")
+	locks, ttl, err := resolveScanLockInfos(page, func(locks []*txnkv.Lock) (int64, error) {
+		return 1000, nil
+	})
+	require.NoError(t, err)
+	require.Len(t, locks, scanLockLimit)
+	require.Positive(t, ttl)
+	require.Equal(t, []byte{'x', 0}, nextScanLockKey([]byte("z"), page))
+	require.Equal(t, []byte("z"), nextScanLockKey([]byte("z"), nil))
 }
