@@ -282,6 +282,29 @@ func TestApplyDDLJobs(t *testing.T) {
 				},
 			},
 		},
+		// test recover an empty schema after reloading persisted DDL events
+		{
+			"recover_empty_schema",
+			nil,
+			[]*model.Job{
+				buildCreateSchemaJobForTest(100, "test", 1000),
+				buildDropSchemaJobForTest(100, 1010),
+				buildRecoverSchemaJobForTest(100, "test", nil, 1020),
+			},
+			nil,
+			nil,
+			map[int64]*BasicDatabaseInfo{
+				100: {
+					Name:   "test",
+					Tables: map[int64]bool{},
+				},
+			},
+			nil,
+			[]uint64{1000, 1010, 1020},
+			nil,
+			nil,
+			nil,
+		},
 		// test a recovered schema can be dropped again
 		{
 			"recover_schema_then_drop_schema",
@@ -4198,6 +4221,22 @@ func TestExtractTableInfoFuncForSingleTableDDL_CreateTableLikeReferTableIgnored(
 		require.Nil(t, tableInfo)
 		require.False(t, deleted)
 	})
+}
+
+func TestUpdateFullTableInfoForEmptyRecoveredSchema(t *testing.T) {
+	handler, ok := allDDLHandlers[model.ActionRecoverSchema]
+	require.True(t, ok)
+	tableInfoMap := make(map[int64]*model.TableInfo)
+
+	require.NotPanics(t, func() {
+		handler.updateFullTableInfoFunc(updateFullTableInfoFuncArgs{
+			event: &PersistedDDLEvent{
+				Type: byte(model.ActionRecoverSchema),
+			},
+			tableInfoMap: tableInfoMap,
+		})
+	})
+	require.Empty(t, tableInfoMap)
 }
 
 func TestExchangeTableInfo(t *testing.T) {
