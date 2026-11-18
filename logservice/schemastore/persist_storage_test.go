@@ -30,6 +30,8 @@ import (
 	"github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/tidb/pkg/parser/charset"
 	parser_model "github.com/pingcap/tidb/pkg/parser/model"
+	"github.com/pingcap/tidb/pkg/parser/mysql"
+	"github.com/pingcap/tidb/pkg/parser/types"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
@@ -2654,7 +2656,7 @@ func TestActionCreateMaterializedViewDDL(t *testing.T) {
 		baseTableID              int64  = 150
 		mviewID                  int64  = 200
 		mviewName                string = "mv1"
-		expectedCreateTableQuery string = "CREATE TABLE `test`.`mv1` (`a` int(11) NOT NULL, `b` int(11), PRIMARY KEY (`a`), UNIQUE KEY `uk_a_b` (`a`, `b`))"
+		expectedCreateTableQuery string = "CREATE TABLE `test`.`mv1` (`a` int(11) UNSIGNED NOT NULL, `b` varchar(20) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL, PRIMARY KEY (`a`), UNIQUE KEY `uk_a_b` (`a`, `b`))"
 		expectedDropTableQuery   string = "DROP TABLE `test`.`mv1`"
 	)
 
@@ -2809,6 +2811,12 @@ func TestActionCreateMaterializedViewDDL(t *testing.T) {
 		schemaID, mviewID, mviewName, []int64{baseTableID}, "select * from t_base", 1010)
 	createMVArgs, err := model.GetCreateMaterializedViewArgs(createMVJob)
 	require.NoError(t, err)
+	createMVArgs.TableInfo.Columns[0].AddFlag(mysql.UnsignedFlag)
+	createMVArgs.TableInfo.Columns[1].FieldType = *types.NewFieldType(mysql.TypeVarchar)
+	createMVArgs.TableInfo.Columns[1].SetFlen(20)
+	createMVArgs.TableInfo.Columns[1].SetCharset(charset.CharsetUTF8MB4)
+	createMVArgs.TableInfo.Columns[1].SetCollate(charset.CollationUTF8MB4)
+	createMVArgs.TableInfo.Columns[1].AddFlag(mysql.NotNullFlag)
 	createMVArgs.TableInfo.Indices = append(createMVArgs.TableInfo.Indices, &model.IndexInfo{
 		Name:   parser_model.NewCIStr("uk_a_b"),
 		Unique: true,
