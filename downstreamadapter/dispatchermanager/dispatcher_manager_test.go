@@ -33,6 +33,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/filter"
 	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/node"
+	"github.com/pingcap/ticdc/pkg/ordering"
 	"github.com/pingcap/ticdc/pkg/pdutil"
 	"github.com/pingcap/ticdc/pkg/routing"
 	"github.com/pingcap/ticdc/pkg/util"
@@ -203,6 +204,7 @@ func (s *bootstrapSchemaStoreForTest) GetAllPhysicalTables(
 	keyspaceMeta common.KeyspaceMeta,
 	snapTs uint64,
 	filter filter.Filter,
+	txnOrderMatcher *ordering.TxnOrderMatcher,
 ) ([]event.Table, error) {
 	return nil, nil
 }
@@ -250,6 +252,7 @@ func (s *bootstrapSchemaStoreForTest) FetchTableDDLEvents(
 	dispatcherID common.DispatcherID,
 	tableID int64,
 	tableFilter filter.Filter,
+	txnOrderMatcher *ordering.TxnOrderMatcher,
 	start uint64,
 	end uint64,
 ) ([]event.DDLEvent, error) {
@@ -260,6 +263,7 @@ func (s *bootstrapSchemaStoreForTest) FetchTableTriggerDDLEvents(
 	keyspaceMeta common.KeyspaceMeta,
 	dispatcherID common.DispatcherID,
 	tableFilter filter.Filter,
+	txnOrderMatcher *ordering.TxnOrderMatcher,
 	start uint64,
 	limit int,
 ) ([]event.DDLEvent, uint64, error) {
@@ -404,7 +408,7 @@ func TestCollectBlockStatusRequestKeepsLateArrivalInSameBatch(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
 	go func() {
-		manager.collectBlockStatusRequest(ctx)
+		manager.collectBlockStatusRequestWithWindow(ctx, 500*time.Millisecond)
 		close(done)
 	}()
 	defer func() {
@@ -418,7 +422,7 @@ func TestCollectBlockStatusRequestKeepsLateArrivalInSameBatch(t *testing.T) {
 	}, time.Second, time.Millisecond)
 	manager.sharedInfo.OfferBlockStatus(newWaitingBlockStatus(common.DefaultMode, 2))
 
-	dequeueCtx, cancelDequeue := context.WithTimeout(context.Background(), time.Second)
+	dequeueCtx, cancelDequeue := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancelDequeue()
 	req := manager.blockStatusRequestQueue.Dequeue(dequeueCtx)
 	require.NotNil(t, req)
@@ -785,8 +789,9 @@ func TestInitializeTableTriggerEventDispatcherReturnsFenceErrorWhenWritePathClos
 	require.False(t, eventCollector.HasDispatcher(dispatcherID))
 }
 
-func TestCreateDispatcherByInfoKeepsCreateOperatorWhenFenced(t *testing.T) {
+func TestFencedCreateRetainsOperator(t *testing.T) {
 	manager := createTestManager(t)
+	manager.meta.maintainerID = "maintainer"
 	manager.writePathClosed.Store(true)
 	dispatcherID := common.NewDispatcherID()
 	createReq := NewSchedulerDispatcherRequest(node.ID("maintainer"), &heartbeatpb.ScheduleDispatcherRequest{
@@ -802,19 +807,9 @@ func TestCreateDispatcherByInfoKeepsCreateOperatorWhenFenced(t *testing.T) {
 		ScheduleAction: heartbeatpb.ScheduleAction_Create,
 		OperatorType:   heartbeatpb.OperatorType_O_Add,
 	})
-	manager.currentOperatorMap.Store(dispatcherID, createReq)
+	(&SchedulerDispatcherRequestHandler{}).Handle(manager, createReq)
 
-	createDispatcherByInfo(manager, map[common.DispatcherID]dispatcherCreateInfo{
-		dispatcherID: {
-			ID: dispatcherID,
-			TableSpan: &heartbeatpb.TableSpan{
-				TableID: 1,
-			},
-			StartTs:  1,
-			SchemaID: 1,
-		},
-	}, nil)
-
+	// Failed creation must retain the request for the next maintainer's bootstrap.
 	_, dispatcherExists := manager.dispatcherMap.Get(dispatcherID)
 	require.False(t, dispatcherExists)
 	operator, operatorExists := manager.currentOperatorMap.Load(dispatcherID)

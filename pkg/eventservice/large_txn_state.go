@@ -49,6 +49,16 @@ type largeTxnScanState struct {
 	// rows from the current scan attempt.
 	drainedInsertCount int
 	cleaned            bool
+	originalRollback   *originalScanCheckpoint
+	cleanupPending     bool
+}
+
+type originalScanCheckpoint struct {
+	state             *largeTxnScanState
+	offset            int64
+	phase             largeTxnScanPhase
+	hasFollowingTxn   bool
+	followingCommitTs uint64
 }
 
 func (a *dispatcherStat) getOrCreateLargeTxnState(
@@ -135,6 +145,89 @@ func (a *dispatcherStat) cleanupLargeTxnState() error {
 		a.largeTxnState = nil
 	}
 	a.largeTxnStateMu.Unlock()
+	return nil
+}
+
+// recoverOriginalScan completes a failed attempt's rollback before another
+// original-row scan can append to or drain the spill.
+func (a *dispatcherStat) recoverOriginalScan() error {
+	state := a.getLargeTxnState()
+	if state == nil {
+		return nil
+	}
+	state.mu.Lock()
+	cleanupPending := state.cleanupPending
+	state.mu.Unlock()
+	if cleanupPending {
+		return a.cleanupLargeTxnState()
+	}
+	return state.finishOriginalRollback()
+}
+
+func (a *dispatcherStat) snapshotOriginalScan() (*originalScanCheckpoint, error) {
+	state := a.getLargeTxnState()
+	if state == nil {
+		return nil, nil
+	}
+	state.mu.Lock()
+	defer state.mu.Unlock()
+	if state.phase != largeTxnScanPhaseOriginal {
+		return nil, nil
+	}
+	offset, err := state.spill.file.Size()
+	if err != nil {
+		return nil, err
+	}
+	return &originalScanCheckpoint{
+		state:             state,
+		offset:            offset,
+		phase:             state.phase,
+		hasFollowingTxn:   state.hasFollowingTxn,
+		followingCommitTs: state.followingCommitTs,
+	}, nil
+}
+
+func (a *dispatcherStat) rollbackOriginalScan(checkpoint *originalScanCheckpoint) error {
+	state := a.getLargeTxnState()
+	if state == nil {
+		return nil
+	}
+	if checkpoint == nil {
+		state.mu.Lock()
+		state.cleanupPending = true
+		state.mu.Unlock()
+		return a.cleanupLargeTxnState()
+	}
+	if state != checkpoint.state {
+		return errors.ErrSpillFileOp.GenWithStackByArgs("large txn state changed during scan")
+	}
+	state.mu.Lock()
+	state.originalRollback = checkpoint
+	state.mu.Unlock()
+	return state.finishOriginalRollback()
+}
+
+func (s *largeTxnScanState) finishOriginalRollback() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	checkpoint := s.originalRollback
+	if checkpoint == nil {
+		return nil
+	}
+	if s.reader != nil {
+		if err := s.reader.Close(); err != nil {
+			s.reader = nil
+			return err
+		}
+		s.reader = nil
+	}
+	if err := s.spill.file.Truncate(checkpoint.offset); err != nil {
+		return err
+	}
+	s.phase = checkpoint.phase
+	s.hasFollowingTxn = checkpoint.hasFollowingTxn
+	s.followingCommitTs = checkpoint.followingCommitTs
+	s.originalRollback = nil
 	return nil
 }
 

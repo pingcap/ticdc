@@ -1,0 +1,3 @@
+# Keep the unmoved span's startTs unchanged throughout the test.
+[debug.scheduler]
+check-balance-interval = "1h"

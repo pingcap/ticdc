@@ -20,7 +20,6 @@ import (
 	"time"
 
 	"github.com/pingcap/log"
-	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/utils/deque"
 	"github.com/prometheus/client_golang/prometheus"
 	"go.uber.org/zap"
@@ -115,9 +114,9 @@ func (s *stream[A, P, T, D, H]) getBatchMetricObservers(label string) batchMetri
 		s.batchMetricCacheOrder = append(s.batchMetricCacheOrder, label)
 	}
 	observers = batchMetricObservers{
-		duration: metrics.DynamicStreamBatchDuration.WithLabelValues(s.module, label),
-		count:    metrics.DynamicStreamBatchCount.WithLabelValues(s.module, label),
-		bytes:    metrics.DynamicStreamBatchBytes.WithLabelValues(s.module, label),
+		duration: dynamicStreamBatchDuration.WithLabelValues(s.module, label),
+		count:    dynamicStreamBatchCount.WithLabelValues(s.module, label),
+		bytes:    dynamicStreamBatchBytes.WithLabelValues(s.module, label),
 	}
 	s.batchMetricCache[label] = observers
 	return observers
@@ -160,6 +159,24 @@ func (s *stream[A, P, T, D, H]) addEvent(event eventWrap[A, P, T, D, H]) {
 		case <-s.ctx.Done():
 		case eventChan <- event:
 		}
+	}
+}
+
+// tryAddEvent is used for retryable reclamation requests. A saturated owner
+// queue must not prevent the feedback consumer from observing cancellation.
+func (s *stream[A, P, T, D, H]) tryAddEvent(event eventWrap[A, P, T, D, H]) bool {
+	if s.closed.Load() {
+		return false
+	}
+	eventChan := s.eventChan
+	if s.option.UseBuffer {
+		eventChan = s.inChan
+	}
+	select {
+	case eventChan <- event:
+		return true
+	default:
+		return false
 	}
 }
 
@@ -402,6 +419,10 @@ type pathInfo[A Area, P Path, T Event, D Dest, H Handler[A, P, T, D]] struct {
 	areaMemStat *areaMemStat[A, P, T, D, H]
 
 	pendingSize atomic.Int64 // The total size(bytes) of pending events in the pendingQueue of the path.
+
+	// Reclamation has visited the pending queue since the last data append.
+	// Skip repeated requests for a queue containing only retained markers.
+	reclaimed atomic.Bool
 
 	lastHandleEventTs atomic.Uint64
 }

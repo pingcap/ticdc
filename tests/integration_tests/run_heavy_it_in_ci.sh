@@ -142,7 +142,7 @@ storage_groups=(
 	# G01
 	'csv_storage_update_pk_clustered csv_storage_update_pk_nonclustered'
 	# G02
-	'canal_json_storage_basic canal_json_storage_partition_table'
+	'canal_json_storage_basic canal_json_storage_partition_table storage_split_span_schema'
 	# G03
 	'csv_storage_basic storage_csv_update'
 	# G04

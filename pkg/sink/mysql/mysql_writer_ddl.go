@@ -214,6 +214,17 @@ func (w *Writer) execDDL(event *commonEvent.DDLEvent) error {
 // If the downstream is TiDB, it will query the DDL and wait until it finishes.
 // For 'add index' ddl, it will return immediately without waiting and will query it during the next DDL execution.
 func (w *Writer) execDDLWithMaxRetries(event *commonEvent.DDLEvent) error {
+	if event.GetDDLType() == timodel.ActionCreateTables {
+		// Retry each CREATE separately so an ignorable error cannot skip the
+		// remaining statements. DDL ts bookkeeping still uses the original event.
+		for _, ddl := range event.GetEvents() {
+			if err := w.execDDLWithMaxRetries(ddl); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+
 	ddlCreateTime := getDDLCreateTime(w.ctx, w.db)
 	return retry.Do(w.ctx, func() error {
 		err := w.statistics.RecordDDLExecution(event.GetDDLType().String(), func() error {

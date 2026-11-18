@@ -15,6 +15,7 @@ package maintainer
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	"github.com/pingcap/log"
@@ -26,6 +27,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/ticdc/pkg/writelease"
+	"github.com/pingcap/ticdc/server/watcher"
 	"go.uber.org/zap"
 )
 
@@ -55,6 +57,8 @@ type Manager struct {
 	// maintainers holds changefeed-scoped state and lifecycle operations.
 	maintainers *managerMaintainerSet
 	writeGate   *writelease.Gate
+
+	verifyCoordinator func(context.Context, node.ID, int64) error
 }
 
 // NewMaintainerManager create a changefeed maintainer manager instance
@@ -81,6 +85,20 @@ func NewMaintainerManager(
 		node:        newManagerNodeState(nodeLiveness),
 		maintainers: newManagerMaintainerSet(conf, nodeInfo, heartbeatCh),
 		writeGate:   writeGate,
+		verifyCoordinator: func(ctx context.Context, id node.ID, version int64) error {
+			nodeManager, ok := appcontext.TryGetService[*watcher.NodeManager](watcher.NodeManagerName)
+			if !ok || nodeManager == nil {
+				return fmt.Errorf("node manager is unavailable")
+			}
+			revision, err := nodeManager.GetCoordinatorRevision(ctx, id)
+			if err != nil {
+				return err
+			}
+			if revision != version {
+				return fmt.Errorf("coordinator revision mismatch: expected %d, got %d", revision, version)
+			}
+			return nil
+		},
 	}
 
 	mc.RegisterHandler(messaging.MaintainerManagerTopic, m.recvMessages)
@@ -245,6 +263,15 @@ func (m *Manager) Close(_ context.Context) error {
 
 func (m *Manager) onCoordinatorBootstrapRequest(msg *messaging.TargetMessage) {
 	req := msg.Message[0].(*heartbeatpb.CoordinatorBootstrapRequest)
+	verifyCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	if err := m.verifyCoordinator(verifyCtx, msg.From, req.Version); err != nil {
+		log.Warn("ignore coordinator bootstrap that does not match the election owner",
+			zap.Stringer("from", msg.From),
+			zap.Int64("version", req.Version),
+			zap.Error(err))
+		return
+	}
 	if m.coordinatorVersion > req.Version {
 		log.Warn("ignore invalid coordinator version",
 			zap.Int64("coordinatorVersion", m.coordinatorVersion),

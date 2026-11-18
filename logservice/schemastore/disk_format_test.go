@@ -393,7 +393,7 @@ func TestPersistSchemaSnapshotEncryptionRoundTrip(t *testing.T) {
 	require.NotNil(t, storedTableInfo)
 	require.Equal(t, tableInfo.ID, storedTableInfo.TableName.TableID)
 
-	tables, err := storage.getAllPhysicalTables(version.Ver, nil)
+	tables, err := storage.getAllPhysicalTables(version.Ver, nil, nil)
 	require.NoError(t, err)
 	require.Len(t, tables, 1)
 	require.Equal(t, int64(200), tables[0].TableID)
@@ -435,7 +435,7 @@ func TestGetAllPhysicalTablesSkipsViews(t *testing.T) {
 		require.NoError(t, snapshot.Close())
 	}()
 
-	tables, err := loadAllPhysicalTablesAtTs(snapshot, snapshotTs, snapshotTs, nil, nil, 0)
+	tables, err := loadAllPhysicalTablesAtTs(snapshot, snapshotTs, snapshotTs, nil, nil, nil, 0)
 	require.NoError(t, err)
 	require.Equal(t, []commonEvent.Table{
 		{

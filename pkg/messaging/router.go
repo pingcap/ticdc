@@ -54,7 +54,15 @@ func (r *router) runDispatch(ctx context.Context, out <-chan *TargetMessage) {
 		case <-ctx.Done():
 			log.Info("router: close, since context done")
 			return
-		case msg := <-out:
+		case msg, ok := <-out:
+			if !ok {
+				log.Info("router: close, since message channel is closed")
+				return
+			}
+			if msg == nil || len(msg.Message) == 0 {
+				log.Warn("router: drop message without payload")
+				continue
+			}
 			r.mu.RLock()
 			handler, ok := r.handlers[msg.Topic]
 			r.mu.RUnlock()
