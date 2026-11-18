@@ -84,6 +84,24 @@ func (z *PersistedDDLEvent) DecodeMsg(dc *msgp.Reader) (err error) {
 				err = msgp.WrapError(err, "ExtraTableName")
 				return
 			}
+		case "old_mlog_id":
+			z.OldMLogID, err = dc.ReadInt64()
+			if err != nil {
+				err = msgp.WrapError(err, "OldMLogID")
+				return
+			}
+		case "new_mlog_id":
+			z.NewMLogID, err = dc.ReadInt64()
+			if err != nil {
+				err = msgp.WrapError(err, "NewMLogID")
+				return
+			}
+		case "mlog_table_name":
+			z.MLogTableName, err = dc.ReadString()
+			if err != nil {
+				err = msgp.WrapError(err, "MLogTableName")
+				return
+			}
 		case "schema_ids":
 			var zb0002 uint32
 			zb0002, err = dc.ReadArrayHeader()
@@ -316,9 +334,9 @@ func (z *PersistedDDLEvent) DecodeMsg(dc *msgp.Reader) (err error) {
 
 // EncodeMsg implements msgp.Encodable
 func (z *PersistedDDLEvent) EncodeMsg(en *msgp.Writer) (err error) {
-	// map header, size 27
+	// map header, size 30
 	// write "id"
-	err = en.Append(0xde, 0x0, 0x1b, 0xa2, 0x69, 0x64)
+	err = en.Append(0xde, 0x0, 0x1e, 0xa2, 0x69, 0x64)
 	if err != nil {
 		return
 	}
@@ -415,6 +433,36 @@ func (z *PersistedDDLEvent) EncodeMsg(en *msgp.Writer) (err error) {
 	err = en.WriteString(z.ExtraTableName)
 	if err != nil {
 		err = msgp.WrapError(err, "ExtraTableName")
+		return
+	}
+	// write "old_mlog_id"
+	err = en.Append(0xab, 0x6f, 0x6c, 0x64, 0x5f, 0x6d, 0x6c, 0x6f, 0x67, 0x5f, 0x69, 0x64)
+	if err != nil {
+		return
+	}
+	err = en.WriteInt64(z.OldMLogID)
+	if err != nil {
+		err = msgp.WrapError(err, "OldMLogID")
+		return
+	}
+	// write "new_mlog_id"
+	err = en.Append(0xab, 0x6e, 0x65, 0x77, 0x5f, 0x6d, 0x6c, 0x6f, 0x67, 0x5f, 0x69, 0x64)
+	if err != nil {
+		return
+	}
+	err = en.WriteInt64(z.NewMLogID)
+	if err != nil {
+		err = msgp.WrapError(err, "NewMLogID")
+		return
+	}
+	// write "mlog_table_name"
+	err = en.Append(0xaf, 0x6d, 0x6c, 0x6f, 0x67, 0x5f, 0x74, 0x61, 0x62, 0x6c, 0x65, 0x5f, 0x6e, 0x61, 0x6d, 0x65)
+	if err != nil {
+		return
+	}
+	err = en.WriteString(z.MLogTableName)
+	if err != nil {
+		err = msgp.WrapError(err, "MLogTableName")
 		return
 	}
 	// write "schema_ids"
@@ -656,9 +704,9 @@ func (z *PersistedDDLEvent) EncodeMsg(en *msgp.Writer) (err error) {
 // MarshalMsg implements msgp.Marshaler
 func (z *PersistedDDLEvent) MarshalMsg(b []byte) (o []byte, err error) {
 	o = msgp.Require(b, z.Msgsize())
-	// map header, size 27
+	// map header, size 30
 	// string "id"
-	o = append(o, 0xde, 0x0, 0x1b, 0xa2, 0x69, 0x64)
+	o = append(o, 0xde, 0x0, 0x1e, 0xa2, 0x69, 0x64)
 	o = msgp.AppendInt64(o, z.ID)
 	// string "type"
 	o = append(o, 0xa4, 0x74, 0x79, 0x70, 0x65)
@@ -687,6 +735,15 @@ func (z *PersistedDDLEvent) MarshalMsg(b []byte) (o []byte, err error) {
 	// string "extra_table_name"
 	o = append(o, 0xb0, 0x65, 0x78, 0x74, 0x72, 0x61, 0x5f, 0x74, 0x61, 0x62, 0x6c, 0x65, 0x5f, 0x6e, 0x61, 0x6d, 0x65)
 	o = msgp.AppendString(o, z.ExtraTableName)
+	// string "old_mlog_id"
+	o = append(o, 0xab, 0x6f, 0x6c, 0x64, 0x5f, 0x6d, 0x6c, 0x6f, 0x67, 0x5f, 0x69, 0x64)
+	o = msgp.AppendInt64(o, z.OldMLogID)
+	// string "new_mlog_id"
+	o = append(o, 0xab, 0x6e, 0x65, 0x77, 0x5f, 0x6d, 0x6c, 0x6f, 0x67, 0x5f, 0x69, 0x64)
+	o = msgp.AppendInt64(o, z.NewMLogID)
+	// string "mlog_table_name"
+	o = append(o, 0xaf, 0x6d, 0x6c, 0x6f, 0x67, 0x5f, 0x74, 0x61, 0x62, 0x6c, 0x65, 0x5f, 0x6e, 0x61, 0x6d, 0x65)
+	o = msgp.AppendString(o, z.MLogTableName)
 	// string "schema_ids"
 	o = append(o, 0xaa, 0x73, 0x63, 0x68, 0x65, 0x6d, 0x61, 0x5f, 0x69, 0x64, 0x73)
 	o = msgp.AppendArrayHeader(o, uint32(len(z.SchemaIDs)))
@@ -844,6 +901,24 @@ func (z *PersistedDDLEvent) UnmarshalMsg(bts []byte) (o []byte, err error) {
 			z.ExtraTableName, bts, err = msgp.ReadStringBytes(bts)
 			if err != nil {
 				err = msgp.WrapError(err, "ExtraTableName")
+				return
+			}
+		case "old_mlog_id":
+			z.OldMLogID, bts, err = msgp.ReadInt64Bytes(bts)
+			if err != nil {
+				err = msgp.WrapError(err, "OldMLogID")
+				return
+			}
+		case "new_mlog_id":
+			z.NewMLogID, bts, err = msgp.ReadInt64Bytes(bts)
+			if err != nil {
+				err = msgp.WrapError(err, "NewMLogID")
+				return
+			}
+		case "mlog_table_name":
+			z.MLogTableName, bts, err = msgp.ReadStringBytes(bts)
+			if err != nil {
+				err = msgp.WrapError(err, "MLogTableName")
 				return
 			}
 		case "schema_ids":
@@ -1079,7 +1154,7 @@ func (z *PersistedDDLEvent) UnmarshalMsg(bts []byte) (o []byte, err error) {
 
 // Msgsize returns an upper bound estimate of the number of bytes occupied by the serialized message
 func (z *PersistedDDLEvent) Msgsize() (s int) {
-	s = 3 + 3 + msgp.Int64Size + 5 + msgp.ByteSize + 10 + msgp.Int64Size + 9 + msgp.Int64Size + 12 + msgp.StringPrefixSize + len(z.SchemaName) + 11 + msgp.StringPrefixSize + len(z.TableName) + 16 + msgp.Int64Size + 15 + msgp.Int64Size + 18 + msgp.StringPrefixSize + len(z.ExtraSchemaName) + 17 + msgp.StringPrefixSize + len(z.ExtraTableName) + 11 + msgp.ArrayHeaderSize + (len(z.SchemaIDs) * (msgp.Int64Size)) + 13 + msgp.ArrayHeaderSize
+	s = 3 + 3 + msgp.Int64Size + 5 + msgp.ByteSize + 10 + msgp.Int64Size + 9 + msgp.Int64Size + 12 + msgp.StringPrefixSize + len(z.SchemaName) + 11 + msgp.StringPrefixSize + len(z.TableName) + 16 + msgp.Int64Size + 15 + msgp.Int64Size + 18 + msgp.StringPrefixSize + len(z.ExtraSchemaName) + 17 + msgp.StringPrefixSize + len(z.ExtraTableName) + 12 + msgp.Int64Size + 12 + msgp.Int64Size + 16 + msgp.StringPrefixSize + len(z.MLogTableName) + 11 + msgp.ArrayHeaderSize + (len(z.SchemaIDs) * (msgp.Int64Size)) + 13 + msgp.ArrayHeaderSize
 	for za0002 := range z.SchemaNames {
 		s += msgp.StringPrefixSize + len(z.SchemaNames[za0002])
 	}
