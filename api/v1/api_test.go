@@ -22,13 +22,9 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/golang/mock/gomock"
-	"github.com/pingcap/kvproto/pkg/keyspacepb"
 	"github.com/pingcap/log"
-	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	"github.com/pingcap/ticdc/pkg/config"
-	"github.com/pingcap/ticdc/pkg/config/kerneltype"
 	"github.com/pingcap/ticdc/pkg/etcd"
-	"github.com/pingcap/ticdc/pkg/keyspace"
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/ticdc/pkg/server"
 	"github.com/stretchr/testify/require"
@@ -47,26 +43,12 @@ func TestLogLevelRouteRequiresAuthentication(t *testing.T) {
 	mockEtcdClient := etcd.NewMockCDCEtcdClient(ctrl)
 	mockEtcdClient.EXPECT().GetEtcdClient().Return(nil)
 	apiServer := &mockAPIServer{etcdClient: mockEtcdClient}
-	path := "/api/v1/log"
-	if kerneltype.IsNextGen() {
-		previous, _ := appcontext.TryGetService[keyspace.Manager](appcontext.KeyspaceManager)
-		t.Cleanup(func() { appcontext.SetService(appcontext.KeyspaceManager, previous) })
-		keyspaceManager := keyspace.NewMockManager(ctrl)
-		keyspaceManager.EXPECT().LoadKeyspace(gomock.Any(), "auth-keyspace").Return(
-			&keyspacepb.KeyspaceMeta{
-				Keyspace: &keyspacepb.KeyspaceMeta_Id{Id: 42},
-				Name:     "auth-keyspace",
-			}, nil,
-		)
-		appcontext.SetService[keyspace.Manager](appcontext.KeyspaceManager, keyspaceManager)
-		path += "?keyspace=auth-keyspace"
-	}
 
 	router := gin.New()
 	RegisterOpenAPIV1Routes(router, NewOpenAPIV1(apiServer))
 	request := httptest.NewRequest(
 		http.MethodPost,
-		path,
+		"/api/v1/log",
 		bytes.NewBufferString(`{"log_level":"error"}`),
 	)
 	request.Header.Set("Content-Type", "application/json")
