@@ -12,8 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// DDL identity and blocking rules shared by the scheduler and the writer.
-package main
+// Package ddl holds DDL identity and blocking rules shared by the conductor
+// and the writer.
+package ddl
 
 import (
 	"slices"
@@ -22,18 +23,18 @@ import (
 	"github.com/pingcap/tidb/pkg/meta/model"
 )
 
-// ddlKey identifies one DDL independently of the connection that delivered it.
+// Key identifies one DDL independently of the connection that delivered it.
 // Split DDLs can share a timestamp and table, so Query is part of the identity.
-type ddlKey struct {
+type Key struct {
 	CommitTs uint64
 	Schema   string
 	Table    string
 	Query    string
 }
 
-// ddlKeyOf returns the replay identity of a DDL event.
-func ddlKeyOf(ddl *event.DDLEvent) ddlKey {
-	return ddlKey{
+// KeyOf returns the replay identity of a DDL event.
+func KeyOf(ddl *event.DDLEvent) Key {
+	return Key{
 		CommitTs: ddl.GetCommitTs(),
 		Schema:   ddl.SchemaName,
 		Table:    ddl.TableName,
@@ -41,8 +42,8 @@ func ddlKeyOf(ddl *event.DDLEvent) ddlKey {
 	}
 }
 
-// blocksTable reports whether ddl must be written before dml.
-func blocksTable(ddl *event.DDLEvent, dml *event.DMLEvent) bool {
+// BlocksTable reports whether ddl must be written before dml.
+func BlocksTable(ddl *event.DDLEvent, dml *event.DMLEvent) bool {
 	if dml.TableInfo == nil {
 		return true
 	}

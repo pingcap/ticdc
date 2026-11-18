@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package main
+package source
 
 import (
 	"cmp"
@@ -21,30 +21,20 @@ import (
 	"crypto/x509"
 	"math"
 	"os"
-	"slices"
 	"strings"
 	"time"
 
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/downstreamadapter/sink/eventrouter"
-	"github.com/pingcap/ticdc/downstreamadapter/sink/eventrouter/partition"
-	"github.com/pingcap/ticdc/downstreamadapter/sink/helper"
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/util"
-	"github.com/pingcap/tidb/pkg/meta/model"
-	"github.com/pingcap/tidb/pkg/parser/ast"
 	"github.com/twmb/franz-go/pkg/kadm"
 	"github.com/twmb/franz-go/pkg/kgo"
 	"go.uber.org/zap"
 )
-
-type kafkaPartition struct {
-	fetchPaused bool
-	targetTs    uint64 // Event progress still needed for the current boundary; zero means complete.
-}
 
 type kafkaReader struct {
 	protocol        config.Protocol
@@ -53,13 +43,10 @@ type kafkaReader struct {
 	maxBatchSize    int
 	client          *kgo.Client
 	topic           string
-	continuing      bool
-	partitions      map[int32]*kafkaPartition
-	tables          []event.SchemaTableName
-	selected        []int32 // Cached routing for tables; nil selects every partition.
+	partitions      int32
 }
 
-func newKafkaReader(ctx context.Context, opts sourceOptions) *kafkaReader {
+func newKafkaReader(ctx context.Context, opts Options) *kafkaReader {
 	upstreamURI := opts.UpstreamURI
 	replicaConfig := opts.ReplicaConfig
 	codecConfig := opts.CodecConfig
@@ -131,10 +118,7 @@ func newKafkaReader(ctx context.Context, opts sourceOptions) *kafkaReader {
 		log.Panic("Kafka topic metadata is unavailable", zap.String("topic", topic), zap.Error(topicMetadata.Err), zap.Int("partitionCount", len(topicMetadata.Partitions)))
 	}
 
-	partitions := make(map[int32]*kafkaPartition, len(topicMetadata.Partitions))
-	for partitionID := range topicMetadata.Partitions {
-		partitions[partitionID] = &kafkaPartition{}
-	}
+	partitions := int32(len(topicMetadata.Partitions))
 	return &kafkaReader{
 		protocol:        codecConfig.Protocol,
 		router:          router,
@@ -142,25 +126,15 @@ func newKafkaReader(ctx context.Context, opts sourceOptions) *kafkaReader {
 		maxBatchSize:    maxBatchSize,
 		client:          client,
 		topic:           topic,
-		continuing:      true,
 		partitions:      partitions,
 	}
 }
 
-func (c *kafkaReader) Streams() []stream {
-	streams := make([]stream, 0, len(c.partitions))
-	for partitionID := range c.partitions {
-		streams = append(streams, stream{
-			ID:           partitionID,
-			Control:      partitionID == 0,
-			Topic:        c.topic,
-			DDLBroadcast: helper.GetDDLDispatchRule(c.protocol) == helper.PartitionAll,
-		})
-	}
-	return streams
+func (c *kafkaReader) Partitions() int32 {
+	return c.partitions
 }
 
-func (c *kafkaReader) Read(ctx context.Context) ([]*sourcePayload, error) {
+func (c *kafkaReader) Read(ctx context.Context) ([]*Payload, error) {
 	select {
 	case <-ctx.Done():
 		return nil, context.Cause(ctx)
@@ -172,7 +146,7 @@ func (c *kafkaReader) Read(ctx context.Context) ([]*sourcePayload, error) {
 		return nil, err
 	}
 
-	var batch []*sourcePayload
+	var batch []*Payload
 	for iterator := fetches.RecordIter(); !iterator.Done(); {
 		record := iterator.Next()
 		// CommitRecords reads only these fields. Copying them keeps the fetch
@@ -183,12 +157,12 @@ func (c *kafkaReader) Read(ctx context.Context) ([]*sourcePayload, error) {
 			Offset:      record.Offset,
 			LeaderEpoch: record.LeaderEpoch,
 		}
-		batch = append(batch, &sourcePayload{
-			Stream: record.Partition,
-			Key:    record.Key,
-			Value:  record.Value,
-			Bytes:  int64(len(record.Key) + len(record.Value)),
-			Offset: record.Offset,
+		batch = append(batch, &Payload{
+			Partition: record.Partition,
+			Key:       record.Key,
+			Value:     record.Value,
+			Bytes:     int64(len(record.Key) + len(record.Value)),
+			Offset:    record.Offset,
 			Ack: func(ctx context.Context) error {
 				if err := c.client.CommitRecords(ctx, &position); err != nil {
 					return errors.WrapError(errors.ErrInternalCheckFailed, err, "commit Kafka offsets")
@@ -200,92 +174,25 @@ func (c *kafkaReader) Read(ctx context.Context) ([]*sourcePayload, error) {
 	return batch, nil
 }
 
-func (c *kafkaReader) Semantics() semantics {
-	return semantics{CommitOrdered: true}
-}
-
-func (c *kafkaReader) Advance(progress sourceProgress) bool {
-	if (progress.Scope == nil) != (c.tables == nil) || !slices.Equal(progress.Scope, c.tables) {
-		c.selected = c.tablePartitions(progress.Scope)
-		c.tables = slices.Clone(progress.Scope)
-	}
-	if progress.Retarget {
-		for _, part := range c.partitions {
-			part.targetTs = progress.Target
-		}
-	}
-	for _, watermark := range progress.Watermarks {
-		part, ok := c.partitions[watermark.Stream]
-		if !ok {
-			continue
-		}
-		if watermark.Timestamp >= part.targetTs ||
-			(c.selected != nil && !slices.Contains(c.selected, watermark.Stream)) {
-			part.targetTs = 0
-		}
-	}
-	for _, stream := range progress.Proven {
-		if part, ok := c.partitions[stream]; ok {
-			part.targetTs = 0
-		}
-	}
-	reached := true
-	for _, part := range c.partitions {
-		reached = reached && part.targetTs == 0
-	}
-	c.limitReads()
-	return reached
-}
-
-func (c *kafkaReader) ContinueReading(enabled bool) {
-	c.continuing = enabled
-	c.limitReads()
-}
-
-func (c *kafkaReader) limitReads() {
-	boundaryPending := false
-	for _, part := range c.partitions {
-		boundaryPending = boundaryPending || part.targetTs != 0
-	}
-	for partitionID, part := range c.partitions {
-		pause := !c.continuing || (boundaryPending && part.targetTs == 0)
-		if pause == part.fetchPaused {
-			continue
-		}
-		partitions := map[string][]int32{
-			c.topic: {
-				partitionID,
-			},
-		}
-		switch {
-		case pause:
-			c.client.PauseFetchPartitions(partitions)
-		default:
-			c.client.ResumeFetchPartitions(partitions)
-		}
-		part.fetchPaused = pause
-	}
-}
-
 func (c *kafkaReader) Close() {
 	c.client.Close()
 }
 
 // CheckMessage validates an input after decoding has revealed its DML count.
 // A single oversized row is allowed by the Kafka encoder.
-func (c *kafkaReader) CheckInput(input *sourcePayload, rows int) {
+func (c *kafkaReader) CheckInput(input *Payload, rows int) {
 	if rows > c.maxBatchSize {
-		log.Panic("Kafka message batch size limit exceeded", zap.String("topic", c.topic), zap.Int32("partition", input.Stream), zap.Int64("offset", input.Offset), zap.Int("maxBatchSize", c.maxBatchSize), zap.Int("actualBatchSize", rows))
+		log.Panic("Kafka message batch size limit exceeded", zap.String("topic", c.topic), zap.Int32("partition", input.Partition), zap.Int64("offset", input.Offset), zap.Int("maxBatchSize", c.maxBatchSize), zap.Int("actualBatchSize", rows))
 	}
 	if rows > 1 && input.Bytes > int64(c.maxMessageBytes) {
-		log.Panic("Kafka message byte size limit exceeded", zap.String("topic", c.topic), zap.Int32("partition", input.Stream), zap.Int64("offset", input.Offset), zap.Int("maxMessageBytes", c.maxMessageBytes), zap.Int64("receivedBytes", input.Bytes))
+		log.Panic("Kafka message byte size limit exceeded", zap.String("topic", c.topic), zap.Int32("partition", input.Partition), zap.Int64("offset", input.Offset), zap.Int("maxMessageBytes", c.maxMessageBytes), zap.Int64("receivedBytes", input.Bytes))
 	}
 }
 
 func (c *kafkaReader) CheckDML(dml *event.DMLEvent, part int32, offset int64) {
 	skipKeyOnlyDelete := c.protocol == config.ProtocolAvro && (len(dml.RowTypes) == 2 && dml.RowTypes[0] == common.RowTypeDelete && dml.RowTypes[1] == common.RowTypeInsert)
 	generator := c.router.GetPartitionGenerator(dml.TableInfo.GetSchemaName(), dml.TableInfo.GetTableName())
-	partitionCount := int32(len(c.partitions))
+	partitionCount := c.partitions
 	dml.Rewind()
 	defer dml.Rewind()
 	for row, ok := dml.GetNextRow(); ok; row, ok = dml.GetNextRow() {
@@ -302,37 +209,4 @@ func (c *kafkaReader) CheckDML(dml *event.DMLEvent, part int32, offset int64) {
 			log.Panic("Kafka DML was dispatched to the wrong partition", zap.String("topic", c.topic), zap.Int32("partition", part), zap.Int32("expectedPartition", expected), zap.Int32("partitionCount", partitionCount), zap.Int64("offset", offset), zap.String("schema", dml.TableInfo.GetSchemaName()), zap.String("table", dml.TableInfo.GetTableName()), zap.Uint64("commitTs", dml.CommitTs))
 		}
 	}
-}
-
-// A nil selection covers every partition; table routing can narrow the scope.
-func (c *kafkaReader) tablePartitions(names []event.SchemaTableName) []int32 {
-	if names != nil && len(names) == 0 {
-		return []int32{0}
-	}
-	if c.router == nil || len(names) == 0 {
-		return nil
-	}
-	var partitions []int32
-	for _, name := range names {
-		if name.SchemaName == "" || name.TableName == "" {
-			return nil
-		}
-		generator := c.router.GetPartitionGenerator(name.SchemaName, name.TableName)
-		switch generator.(type) {
-		case *partition.TablePartitionGenerator:
-		default:
-			return nil
-		}
-		table := common.NewTableInfo4Decoder(name.SchemaName, &model.TableInfo{
-			Name: ast.NewCIStr(name.TableName),
-		})
-		partitionID, _, err := generator.GeneratePartitionIndexAndKey(nil, int32(len(c.partitions)), table, 0)
-		if err != nil {
-			log.Panic("Kafka table partition generation failed", zap.String("schema", name.SchemaName), zap.String("table", name.TableName), zap.Error(err))
-		}
-		if !slices.Contains(partitions, partitionID) {
-			partitions = append(partitions, partitionID)
-		}
-	}
-	return partitions
 }

@@ -20,6 +20,10 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/pingcap/log"
+	"github.com/pingcap/ticdc/cmd/consumer/conductor"
+	"github.com/pingcap/ticdc/cmd/consumer/decode"
+	"github.com/pingcap/ticdc/cmd/consumer/source"
+	"github.com/pingcap/ticdc/cmd/consumer/writer"
 	"github.com/pingcap/ticdc/pkg/logger"
 	"github.com/pingcap/ticdc/pkg/version"
 	"go.uber.org/zap"
@@ -27,10 +31,10 @@ import (
 )
 
 type consumer struct {
-	reader    sourceReader
-	decoder   *decoderGroup
-	conductor *conductor
-	writer    *writer
+	reader    source.Reader
+	decoder   *decode.Group
+	conductor *conductor.Conductor
+	writer    *writer.Writer
 }
 
 func newConsumer(ctx context.Context, options *options) *consumer {
@@ -43,7 +47,7 @@ func newConsumer(ctx context.Context, options *options) *consumer {
 	version.LogVersionInfo("consumer")
 
 	upstreamURI := parseRequiredURI(options.upstreamURI)
-	sourceType := parseSourceType(upstreamURI)
+	sourceType := source.TypeOf(upstreamURI)
 
 	consumerID := options.consumerID
 	if strings.TrimSpace(consumerID) == "" {
@@ -53,7 +57,7 @@ func newConsumer(ctx context.Context, options *options) *consumer {
 	codecConfig := newCodecConfig(upstreamURI, replicaConfig)
 	logConsumerConfig(sourceType, consumerID, upstreamURI, options.downstreamURI, replicaConfig, codecConfig)
 
-	reader := newSourceReader(ctx, sourceOptions{
+	reader := source.Open(ctx, source.Options{
 		UpstreamURI:   upstreamURI,
 		ConsumerID:    consumerID,
 		ReplicaConfig: replicaConfig,
@@ -61,9 +65,9 @@ func newConsumer(ctx context.Context, options *options) *consumer {
 	})
 	c := &consumer{
 		reader:    reader,
-		decoder:   newDecodeGroup(ctx, decodeOptions{CodecConfig: codecConfig, ReplicaConfig: replicaConfig, Streams: reader.Streams(), UpstreamURI: upstreamURI}),
-		conductor: newConductor(reader),
-		writer: newWriter(ctx, writerOptions{
+		decoder:   decode.NewGroup(ctx, decode.Options{CodecConfig: codecConfig, ReplicaConfig: replicaConfig, Partitions: reader.Partitions(), Topic: strings.Trim(upstreamURI.Path, "/"), UpstreamURI: upstreamURI}),
+		conductor: conductor.New(reader),
+		writer: writer.New(ctx, writer.Options{
 			DownstreamURI: options.downstreamURI,
 			ReplicaConfig: replicaConfig,
 			CodecConfig:   codecConfig,

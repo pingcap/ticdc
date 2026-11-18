@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package main
+package source
 
 import (
 	"context"
@@ -92,7 +92,7 @@ type storageReader struct {
 }
 
 // newStorageReader opens the storage described by the upstream URI.
-func newStorageReader(ctx context.Context, opts sourceOptions) *storageReader {
+func newStorageReader(ctx context.Context, opts Options) *storageReader {
 	replicaConfig := opts.ReplicaConfig
 	storage, err := util.GetExternalStorageWithDefaultTimeout(ctx, opts.UpstreamURI.String())
 	if err != nil {
@@ -251,11 +251,7 @@ func (c *storageReader) readSchema(ctx context.Context, path string) (cloudstora
 	return key, true, nil
 }
 
-func (*storageReader) Streams() []stream {
-	return nil
-}
-
-func (c *storageReader) Read(ctx context.Context) ([]*sourcePayload, error) {
+func (c *storageReader) Read(ctx context.Context) ([]*Payload, error) {
 	if err := context.Cause(ctx); err != nil {
 		return nil, err
 	}
@@ -278,7 +274,7 @@ func (c *storageReader) Read(ctx context.Context) ([]*sourcePayload, error) {
 		if c.scanned && c.sourceCheckpoint > c.watermark {
 			c.watermark = c.sourceCheckpoint
 			// The metadata checkpoint covers every file in the completed scan.
-			return []*sourcePayload{{Watermark: c.sourceCheckpoint}}, nil
+			return []*Payload{{Watermark: c.sourceCheckpoint}}, nil
 		}
 		if err := c.scanInputs(ctx); err != nil {
 			return nil, err
@@ -311,7 +307,7 @@ func (c *storageReader) Read(ctx context.Context) ([]*sourcePayload, error) {
 		c.mu.Lock()
 		c.pendingSchema = pendingSchema
 		c.mu.Unlock()
-		return []*sourcePayload{{File: &file{Schema: schema}}}, nil
+		return []*Payload{{File: &File{Schema: schema}}}, nil
 	}
 	idKey := storageTableKey{
 		schema:    key.Schema,
@@ -328,7 +324,7 @@ func (c *storageReader) Read(ctx context.Context) ([]*sourcePayload, error) {
 	if err != nil {
 		return nil, err
 	}
-	return []*sourcePayload{data}, nil
+	return []*Payload{data}, nil
 }
 
 func (c *storageReader) scanInputs(ctx context.Context) error {
@@ -379,7 +375,7 @@ func (c *storageReader) scanInputs(ctx context.Context) error {
 	return nil
 }
 
-func (c *storageReader) readDMLFile(ctx context.Context, input storageInput, schema *cloudstorage.SchemaFile, tableID int64) (*sourcePayload, error) {
+func (c *storageReader) readDMLFile(ctx context.Context, input storageInput, schema *cloudstorage.SchemaFile, tableID int64) (*Payload, error) {
 	path := input.key.GenerateDMLFilePath(&input.index, c.fileExtension, c.fileIndexWidth)
 	f, err := c.storage.Open(ctx, path, nil)
 	if err != nil {
@@ -395,22 +391,16 @@ func (c *storageReader) readDMLFile(ctx context.Context, input storageInput, sch
 		return nil, errors.WrapError(errors.ErrExternalStorageAPI, err, "read Storage DML file")
 	}
 	c.fileIndices[input.key][input.index.FileIndexKey] = input.index.Idx
-	return &sourcePayload{
+	return &Payload{
 		Value: data,
 		Bytes: size,
-		File:  &file{Schema: schema, TableID: tableID},
+		File:  &File{Schema: schema, TableID: tableID},
 	}, nil
 }
 
-// ContinueReading has no effect: Read returns bounded work on every call.
-func (*storageReader) ContinueReading(bool) {}
-
-func (c *storageReader) Semantics() semantics {
-	return semantics{}
-}
-
-func (*storageReader) Advance(sourceProgress) bool {
-	return true
+// storageReader scans files in order, so its inputs carry no partition.
+func (*storageReader) Partitions() int32 {
+	return 0
 }
 
 func (c *storageReader) MarkProcessed(tables []event.SchemaTableName, timestamp uint64) {

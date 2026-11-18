@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package main
+package source
 
 import (
 	"cmp"
@@ -37,7 +37,7 @@ type pulsarReader struct {
 	partitions map[string]int32
 }
 
-func newPulsarReader(opts sourceOptions) *pulsarReader {
+func newPulsarReader(opts Options) *pulsarReader {
 	upstreamURI := opts.UpstreamURI
 	consumerID := opts.ConsumerID
 	replicaConfig := opts.ReplicaConfig
@@ -155,18 +155,11 @@ func newPulsarReader(opts sourceOptions) *pulsarReader {
 	}
 }
 
-func (c *pulsarReader) Streams() []stream {
-	streams := make([]stream, 0, len(c.partitions))
-	for _, partition := range c.partitions {
-		streams = append(streams, stream{
-			ID:    partition,
-			Topic: c.topic,
-		})
-	}
-	return streams
+func (c *pulsarReader) Partitions() int32 {
+	return int32(len(c.partitions))
 }
 
-func (c *pulsarReader) Read(ctx context.Context) ([]*sourcePayload, error) {
+func (c *pulsarReader) Read(ctx context.Context) ([]*Payload, error) {
 	var message pulsar.ConsumerMessage
 	select {
 	case <-ctx.Done():
@@ -178,28 +171,15 @@ func (c *pulsarReader) Read(ctx context.Context) ([]*sourcePayload, error) {
 		return nil, errors.ErrPulsarInvalidConfig.GenWithStackByArgs("Pulsar partitions changed; restart the consumer")
 	}
 	id := message.ID()
-	return []*sourcePayload{{
-		Stream: partition,
-		Key:    []byte(message.Key()),
-		Value:  message.Payload(),
-		Bytes:  int64(len(message.Key()) + len(message.Payload())),
+	return []*Payload{{
+		Partition: partition,
+		Key:       []byte(message.Key()),
+		Value:     message.Payload(),
+		Bytes:     int64(len(message.Key()) + len(message.Payload())),
 		Ack: func(ctx context.Context) error {
 			return c.confirmPosition(ctx, id)
 		},
 	}}, nil
-}
-
-// ContinueReading has no effect: Read returns bounded work on every call.
-func (*pulsarReader) ContinueReading(bool) {}
-
-func (c *pulsarReader) Semantics() semantics {
-	// Pulsar preserves per-partition order but DDLs can be decoded out of order.
-	return semantics{DDLsCanReorder: true}
-}
-
-func (c *pulsarReader) Advance(sourceProgress) bool {
-	// Pulsar uses global watermarks and has no selective reading boundary.
-	return true
 }
 
 func (c *pulsarReader) Close() {
