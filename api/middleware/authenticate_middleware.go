@@ -45,6 +45,47 @@ func AuthenticateMiddleware(server server.Server) gin.HandlerFunc {
 	}
 }
 
+<<<<<<< HEAD
+=======
+// AuthenticateNodeMiddleware authenticates a node-level request. In next-gen
+// mode, the keyspace query parameter identifies the TiDB authentication realm.
+func AuthenticateNodeMiddleware(server server.Server) gin.HandlerFunc {
+	return func(ctx *gin.Context) {
+		security := config.GetGlobalServerConfig().Security
+		if security != nil && security.ClientUserRequired {
+			if _, ok := ctx.Get(ctxKeyspaceKey); !ok && !loadKeyspaceFromQuery(ctx) {
+				return
+			}
+		}
+		if !AuthenticateRequest(ctx, server) {
+			return
+		}
+		ctx.Next()
+	}
+}
+
+// AuthenticateRequest authenticates a request when client user authentication
+// is enabled. It can be called from a handler after the target changefeed has
+// supplied its persisted keyspace ID.
+func AuthenticateRequest(ctx *gin.Context, server server.Server) bool {
+	if ctx.GetBool(ctxAuthenticatedKey) {
+		return true
+	}
+	security := config.GetGlobalServerConfig().Security
+	if security == nil || !security.ClientUserRequired {
+		ctx.Set(ctxAuthenticatedKey, true)
+		return true
+	}
+	if err := verify(ctx, server.GetEtcdClient().GetEtcdClient()); err != nil {
+		ctx.IndentedJSON(http.StatusUnauthorized, api.NewHTTPError(err))
+		ctx.Abort()
+		return false
+	}
+	ctx.Set(ctxAuthenticatedKey, true)
+	return true
+}
+
+>>>>>>> 3ae3f2e20 (api: require authentication for log level changes (#6899))
 func verify(ctx *gin.Context, etcdCli etcd.Client) error {
 	// get the username and password from the authorization header
 	username, password, ok := ctx.Request.BasicAuth()

@@ -227,13 +227,10 @@ func ForwardToServer(c *gin.Context, fromID node.ID, toAddr string) {
 // KeyspaceCheckerMiddleware check if the request keyspace is valid
 func KeyspaceCheckerMiddleware() gin.HandlerFunc {
 	return func(c *gin.Context) {
-		// we not need to check keyspace for classic mode
-		// if the classic mode supports multiple keyspaces in future
-		// we need to remove this if block
-		if kerneltype.IsClassic() {
-			c.Next()
+		if !loadKeyspaceFromQuery(c) {
 			return
 		}
+<<<<<<< HEAD
 
 		ks := c.Query(api.APIOpVarKeyspace)
 		if ks == "" {
@@ -256,8 +253,47 @@ func KeyspaceCheckerMiddleware() gin.HandlerFunc {
 
 		c.Set(ctxKeyspaceKey, meta)
 
+=======
+>>>>>>> 3ae3f2e20 (api: require authentication for log level changes (#6899))
 		c.Next()
 	}
+}
+
+func loadKeyspaceFromQuery(c *gin.Context) bool {
+	// we not need to check keyspace for classic mode
+	// if the classic mode supports multiple keyspaces in future
+	// we need to remove this if block
+	if kerneltype.IsClassic() {
+		return true
+	}
+
+	ks := c.Query(api.APIOpVarKeyspace)
+	if ks == "" {
+		err := errors.ErrAPIInvalidParam.GenWithStack(
+			"missing required query parameter keyspace, please specify --keyspace or -k",
+		)
+		c.IndentedJSON(http.StatusBadRequest, api.NewHTTPError(err))
+		c.Abort()
+		return false
+	}
+
+	keyspaceManager := appcontext.GetService[keyspace.Manager](appcontext.KeyspaceManager)
+	meta, err := keyspaceManager.LoadKeyspace(c.Request.Context(), ks)
+	if errors.IsKeyspaceNotExistError(err) {
+		err = errors.ErrAPIInvalidParam.GenWithStack(
+			"keyspace %q does not exist, please check --keyspace or -k", ks,
+		)
+		c.IndentedJSON(http.StatusBadRequest, api.NewHTTPError(err))
+		c.Abort()
+		return false
+	} else if err != nil {
+		c.IndentedJSON(http.StatusInternalServerError, api.NewHTTPError(err))
+		c.Abort()
+		return false
+	}
+
+	c.Set(ctxKeyspaceKey, meta)
+	return true
 }
 
 func GetKeyspaceFromContext(c *gin.Context) *keyspacepb.KeyspaceMeta {

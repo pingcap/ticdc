@@ -356,9 +356,15 @@ def get_status():
 
 
 def set_log_level():
-    url = BASE_URL0 + "/log"
+    keyspace = os.getenv("KEYSPACE_NAME", "default")
+    url = BASE_URL0 + "/log?keyspace=" + keyspace
     data = json.dumps({"log_level": "debug"})
     headers = {"Content-Type": "application/json"}
+
+    resp = rq.post(url, data=data, headers=headers,
+                   cert=CERT, verify=VERIFY)
+    assert resp.status_code == rq.codes.unauthorized
+
     resp = rq.post(url, data=data, auth=Auth,
                    headers=headers, cert=CERT, verify=VERIFY)
     assert resp.status_code == rq.codes.ok
