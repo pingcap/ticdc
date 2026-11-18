@@ -15,6 +15,7 @@ package eventcollector
 
 import (
 	"context"
+	"slices"
 	"time"
 
 	"github.com/pingcap/log"
@@ -132,7 +133,7 @@ func (l *LogCoordinatorClient) run(ctx context.Context) error {
 }
 
 func (l *LogCoordinatorClient) requestReusableEventService(dispatcher dispatcher.DispatcherService) {
-	if l.enableRemoteEventService && dispatcher.GetTableSpan().TableID != 0 {
+	if dispatcher.GetTableSpan().TableID != 0 {
 		l.logCoordinatorRequestChan.In() <- &logservicepb.ReusableEventServiceRequest{
 			ID:      dispatcher.GetId().ToPB(),
 			Span:    dispatcher.GetTableSpan(),
@@ -230,17 +231,12 @@ func (l *LogCoordinatorClient) handleReusableResponse(
 		l.setCoordinatorInfo(logCoordinatorInfo{id: from, revision: revision})
 		return
 	}
-	seen := make(map[node.ID]struct{}, len(response.Nodes))
 	nodes := make([]string, 0, len(response.Nodes))
 	for _, candidate := range response.Nodes {
 		id := node.ID(candidate)
-		if id.IsEmpty() || id == l.eventCollector.serverId {
+		if id.IsEmpty() || id == l.eventCollector.serverId || slices.Contains(nodes, candidate) {
 			continue
 		}
-		if _, duplicate := seen[id]; duplicate {
-			continue
-		}
-		seen[id] = struct{}{}
 		if l.mc.IsReadyToSend(id) {
 			nodes = append(nodes, candidate)
 		}

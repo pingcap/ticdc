@@ -52,5 +52,5 @@ func (c *muxCredentials) ServerHandshake(rawConn net.Conn) (net.Conn, credential
 }
 
 func (c *muxCredentials) Clone() credentials.TransportCredentials {
-	return NewGRPCServerCredentials()
+	return c
 }

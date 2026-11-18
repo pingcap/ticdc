@@ -429,9 +429,6 @@ func msgToDispatcherInfo(msg *messaging.TargetMessage) []DispatcherInfo {
 	return res
 }
 
-// validateDispatcherRequest rejects requests whose dispatcher does not belong to
-// the sender. The messaging layer authenticates the peer that opens a stream, so
-// a capture may only operate on its own dispatchers.
 func validateDispatcherRequest(from node.ID, info DispatcherInfo) error {
 	if info.GetServerID() != from.String() {
 		return errors.ErrInvalidDispatcherRequest.GenWithStackByArgs(
