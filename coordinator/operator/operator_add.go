@@ -76,7 +76,8 @@ func (m *AddMaintainerOperator) Check(from node.ID, status *heartbeatpb.Maintain
 		status.State == heartbeatpb.ComponentState_Working &&
 		status.BootstrapDone {
 		log.Info("maintainer report working status",
-			zap.String("changefeed", m.cf.ID.String()))
+			zap.String("keyspace", m.cf.ID.Keyspace()),
+			zap.String("changefeedID", m.cf.ID.Name()))
 		m.finished.Store(true)
 	}
 }

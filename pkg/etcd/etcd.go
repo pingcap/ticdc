@@ -492,7 +492,9 @@ func (c *CDCEtcdClientImpl) saveChangefeedAndUpstreamInfo(
 		}
 		if len(jobResp.Kvs) == 0 {
 			// Note that status may not exist, so we don't check it here.
-			log.Debug("job status not exists", zap.Stringer("changefeed", changeFeedID))
+			log.Debug("job status not exists",
+				zap.String("keyspace", changeFeedID.Keyspace),
+				zap.String("changefeedID", changeFeedID.Name))
 		} else {
 			jobModRevision = jobResp.Kvs[0].ModRevision
 		}
@@ -511,7 +513,7 @@ func (c *CDCEtcdClientImpl) saveChangefeedAndUpstreamInfo(
 	if !resp.Succeeded {
 		log.Warn(fmt.Sprintf("unexpected etcd transaction failure, operation: %s", operation),
 			zap.String("keyspace", changeFeedID.Keyspace),
-			zap.String("changefeed", changeFeedID.Name))
+			zap.String("changefeedID", changeFeedID.Name))
 		errMsg := fmt.Sprintf("%s changefeed %s", operation, changeFeedID)
 		return errors.ErrMetaOpFailed.GenWithStackByArgs(errMsg)
 	}

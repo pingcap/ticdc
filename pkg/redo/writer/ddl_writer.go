@@ -109,7 +109,7 @@ func (l *ddlWriter) WriteDDLEvent(ctx context.Context, event *commonEvent.DDLEve
 	if event == nil {
 		log.Warn("writing nil event to redo log, ignore this",
 			zap.String("keyspace", l.cfg.ChangeFeedID().Keyspace()),
-			zap.String("changefeed", l.cfg.ChangeFeedID().Name()))
+			zap.String("changefeedID", l.cfg.ChangeFeedID().Name()))
 		return nil
 	}
 

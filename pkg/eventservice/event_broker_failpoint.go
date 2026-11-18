@@ -85,7 +85,13 @@ func testShouldDelayCursorRound(task scanTask, specification string) bool {
 		until = firstUntil
 	}
 	if changed {
-		log.Info("test cursor scheduling delay", zap.Stringer("changefeedID", task.changefeedStat.changefeedID), zap.Stringer("dispatcherID", task.id), zap.Int64("tableID", task.info.GetTableSpan().TableID), zap.Int("cursorRound", count), zap.Int64("untilMillis", until))
+		log.Info("test cursor scheduling delay",
+			zap.String("keyspace", task.changefeedStat.changefeedID.Keyspace()),
+			zap.String("changefeedID", task.changefeedStat.changefeedID.Name()),
+			zap.Stringer("dispatcherID", task.id),
+			zap.Int64("tableID", task.info.GetTableSpan().TableID),
+			zap.Int("cursorRound", count),
+			zap.Int64("untilMillis", until))
 	}
 	return time.Now().UnixMilli() < until
 }

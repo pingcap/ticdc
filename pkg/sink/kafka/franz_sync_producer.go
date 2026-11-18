@@ -67,7 +67,8 @@ func (p *syncProducer) sendRecords(ctx context.Context, message *codecCommon.Mes
 	}
 
 	log.Error("kafka message send failed",
-		zap.String("keyspace", p.id.Keyspace()), zap.String("changefeed", p.id.Name()),
+		zap.String("keyspace", p.id.Keyspace()),
+		zap.String("changefeedID", p.id.Name()),
 		zap.String("eventContext", BuildEventLogContext(message.LogInfo)),
 		zap.Error(err))
 	return errors.WrapError(errors.ErrKafkaSendMessage, err)
@@ -76,10 +77,12 @@ func (p *syncProducer) sendRecords(ctx context.Context, message *codecCommon.Mes
 func (p *syncProducer) Close() {
 	if !p.closed.CompareAndSwap(false, true) {
 		log.Warn("kafka ddl producer already closed",
-			zap.String("keyspace", p.id.Keyspace()), zap.String("changefeed", p.id.Name()))
+			zap.String("keyspace", p.id.Keyspace()),
+			zap.String("changefeedID", p.id.Name()))
 		return
 	}
 
 	log.Info("kafka ddl producer closed",
-		zap.String("keyspace", p.id.Keyspace()), zap.String("changefeed", p.id.Name()))
+		zap.String("keyspace", p.id.Keyspace()),
+		zap.String("changefeedID", p.id.Name()))
 }

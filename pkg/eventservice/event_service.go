@@ -324,7 +324,9 @@ func (s *eventService) registerDispatcher(ctx context.Context, info DispatcherIn
 	// FIXME: Send message to the dispatcherManager to handle the error.
 	err := c.addDispatcher(info)
 	if err != nil {
-		log.Error("add dispatcher to eventBroker failed", zap.Stringer("dispatcherID", info.GetID()), zap.Error(err))
+		log.Error("add dispatcher failed",
+			zap.Stringer("dispatcherID", info.GetID()),
+			zap.Error(err))
 	}
 }
 

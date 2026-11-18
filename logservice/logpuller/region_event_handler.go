@@ -121,8 +121,8 @@ func (h *regionEventHandler) Handle(span *subscribedSpan, events ...regionEvent)
 
 	if len(span.kvEventsCache) != 0 {
 		log.Panic("kvEventsCache is not empty",
-			zap.Int("kvEventsCacheLen", len(span.kvEventsCache)),
-			zap.Uint64("subscriptionID", uint64(span.subID)))
+			zap.Uint64("subscriptionID", uint64(span.subID)),
+			zap.Int("kvEventsCacheLen", len(span.kvEventsCache)))
 	}
 
 	newResolvedTs := uint64(0)
@@ -243,8 +243,8 @@ func (h *regionEventHandler) OnDrop(event regionEvent) interface{} {
 	// TODO: Distinguish between drop events caused by "path not found" errors and memory control.
 	if len(event.states) == 0 || event.states[0] == nil {
 		log.Error("drop invalid region event",
-			zap.Bool("hasEntries", event.entries != nil),
 			zap.Uint64("resolvedTs", event.resolvedTs),
+			zap.Bool("hasEntries", event.entries != nil),
 			zap.Int("states", len(event.states)),
 			zap.Uint64("memoryBytes", event.memoryBytes))
 		return nil
@@ -318,7 +318,9 @@ func handleEventEntries(span *subscribedSpan, state *regionFeedState, entries *c
 			log.Debug("region is initialized",
 				zap.Int64("tableID", span.span.TableID),
 				zap.Uint64("regionID", regionID),
-				zap.Uint64("requestID", state.requestID))
+				zap.Uint64("requestID", state.requestID),
+				zap.String("startKey", util.RedactKey(span.span.StartKey)),
+				zap.String("endKey", util.RedactKey(span.span.EndKey)))
 			for _, cachedEvent := range state.matcher.matchCachedRow(true) {
 				span.kvEventsCache = append(span.kvEventsCache, assembleRowEvent(regionID, cachedEvent))
 			}
@@ -329,10 +331,10 @@ func handleEventEntries(span *subscribedSpan, state *regionFeedState, entries *c
 				log.Panic("commit ts must be greater than resolved ts",
 					zap.Int64("tableID", span.span.TableID),
 					zap.Uint64("regionID", regionID),
-					zap.Uint64("requestID", state.requestID),
-					zap.String("eventType", "COMMITTED"),
-					zap.Uint64("commitTs", entry.CommitTs),
 					zap.Uint64("resolvedTs", resolvedTs),
+					zap.Uint64("requestID", state.requestID),
+					zap.String("EventType", "COMMITTED"),
+					zap.Uint64("CommitTs", entry.CommitTs),
 					zap.String("key", util.RedactKey(entry.GetKey())))
 			}
 			span.kvEventsCache = append(span.kvEventsCache, assembleRowEvent(regionID, entry))
@@ -348,9 +350,9 @@ func handleEventEntries(span *subscribedSpan, state *regionFeedState, entries *c
 				log.Fatal("prewrite not match",
 					zap.Int64("tableID", span.span.TableID),
 					zap.Uint64("regionID", state.getRegionID()),
-					zap.Uint64("requestID", state.requestID),
 					zap.Uint64("startTs", entry.GetStartTs()),
 					zap.Uint64("commitTs", entry.GetCommitTs()),
+					zap.Uint64("requestID", state.requestID),
 					zap.String("key", util.RedactKey(entry.GetKey())))
 			}
 
@@ -366,10 +368,10 @@ func handleEventEntries(span *subscribedSpan, state *regionFeedState, entries *c
 				log.Panic("commit ts must be greater than resolved ts",
 					zap.Int64("tableID", span.span.TableID),
 					zap.Uint64("regionID", regionID),
-					zap.Uint64("requestID", state.requestID),
-					zap.String("eventType", "COMMIT"),
-					zap.Uint64("commitTs", entry.CommitTs),
 					zap.Uint64("resolvedTs", resolvedTs),
+					zap.Uint64("requestID", state.requestID),
+					zap.String("EventType", "COMMIT"),
+					zap.Uint64("CommitTs", entry.CommitTs),
 					zap.String("key", util.RedactKey(entry.GetKey())))
 			}
 			span.kvEventsCache = append(span.kvEventsCache, assembleRowEvent(regionID, entry))

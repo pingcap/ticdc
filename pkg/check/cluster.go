@@ -62,6 +62,7 @@ func IsSameUpstreamDownstream(
 			return false, err
 		}
 		log.Warn("skip the upstream/downstream cluster verification because allow-same-cluster is enabled",
+			zap.String("keyspace", changefeedCfg.ChangefeedID.Keyspace()),
 			zap.String("changefeedID", changefeedCfg.ChangefeedID.Name()),
 			zap.String("sinkURI", util.MaskSensitiveDataInURI(changefeedCfg.SinkURI)))
 		return false, nil

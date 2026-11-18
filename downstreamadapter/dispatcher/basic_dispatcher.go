@@ -29,6 +29,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/routing"
+	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/tidb/pkg/parser/mysql"
 	tidbTypes "github.com/pingcap/tidb/pkg/types"
 	"go.uber.org/atomic"
@@ -340,7 +341,7 @@ func (d *BasicDispatcher) InitializeTableSchemaStore(schemaInfo []*heartbeatpb.S
 	// Because we only need to calculate the tableNames or TableIds in the sink
 	// when the event dispatcher manager have table trigger event dispatcher
 	if !d.IsTableTriggerDispatcher() {
-		log.Error("InitializeTableSchemaStore should only be received by table trigger dispatcher", zap.Any("dispatcherID", d.id))
+		log.Error("InitializeTableSchemaStore should only be received by table trigger dispatcher", zap.Stringer("dispatcherID", d.id))
 		return false, errors.ErrChangefeedInitTableTriggerDispatcherFailed.
 			GenWithStackByArgs("InitializeTableSchemaStore should only be received by table trigger dispatcher")
 	}
@@ -365,7 +366,7 @@ func (d *BasicDispatcher) AddBlockEventToSink(event commonEvent.BlockEvent) erro
 		// If NotSync is true, it means the DDL should not be sent to downstream.
 		// So we just call PassBlockEventToSink to update the table progress and call the postFlush func.
 		if ddl.NotSync {
-			log.Info("ignore DDL by NotSync", zap.Stringer("dispatcherID", d.id), zap.String("ddl", ddl.GetDDLQuery()))
+			log.Info("ignore DDL by NotSync", zap.Stringer("dispatcherID", d.id), zap.String("ddlQuery", util.RedactValue(ddl.GetDDLQuery())))
 			d.PassBlockEventToSink(event)
 			return nil
 		}
@@ -535,7 +536,8 @@ func (d *BasicDispatcher) GetCheckpointTs() uint64 {
 // updateDispatcherStatusToWorking updates the dispatcher status to working and adds it to status dynamic stream
 func (d *BasicDispatcher) updateDispatcherStatusToWorking() {
 	log.Info("update dispatcher status to working",
-		zap.Stringer("changefeedID", d.sharedInfo.changefeedID),
+		zap.String("keyspace", d.sharedInfo.changefeedID.Keyspace()),
+		zap.String("changefeedID", d.sharedInfo.changefeedID.Name()),
 		zap.Stringer("dispatcherID", d.id),
 		zap.Uint64("checkpointTs", d.GetCheckpointTs()),
 		zap.Uint64("resolvedTs", d.GetResolvedTs()),
@@ -563,7 +565,8 @@ func (d *BasicDispatcher) HandleError(err error) {
 	case d.sharedInfo.errCh <- err:
 	default:
 		log.Error("error channel is full, discard error",
-			zap.Stringer("changefeedID", d.sharedInfo.changefeedID),
+			zap.String("keyspace", d.sharedInfo.changefeedID.Keyspace()),
+			zap.String("changefeedID", d.sharedInfo.changefeedID.Name()),
 			zap.Stringer("dispatcherID", d.id),
 			zap.Error(err))
 	}
@@ -609,11 +612,11 @@ func (d *BasicDispatcher) handleEvents(dispatcherEvents []DispatcherEvent, wakeC
 		// Pre-check, make sure the event is not stale
 		if event.GetCommitTs() < d.GetResolvedTs() {
 			log.Warn("Received a stale event, should ignore it",
+				zap.Stringer("dispatcherID", d.id),
 				zap.Uint64("dispatcherResolvedTs", d.GetResolvedTs()),
 				zap.Uint64("eventCommitTs", event.GetCommitTs()),
 				zap.Uint64("seq", event.GetSeq()),
-				zap.Int("eventType", event.GetType()),
-				zap.Stringer("dispatcherID", d.id))
+				zap.Int("eventType", event.GetType()))
 			continue
 		}
 
@@ -686,9 +689,11 @@ func (d *BasicDispatcher) handleEvents(dispatcherEvents []DispatcherEvent, wakeC
 			}
 
 			log.Info("dispatcher receive ddl event",
+				zap.String("keyspace", d.GetChangefeedID().Keyspace()),
+				zap.String("changefeedID", d.GetChangefeedID().Name()),
 				zap.Stringer("dispatcherID", d.id),
-				zap.String("query", ddl.Query),
-				zap.Int64("table", ddl.GetTableID()),
+				zap.Int64("tableID", ddl.GetTableID()),
+				zap.Uint64("startTs", ddl.GetStartTs()),
 				zap.Uint64("commitTs", event.GetCommitTs()),
 				zap.Uint64("seq", event.GetSeq()))
 			now := time.Now()
@@ -726,9 +731,9 @@ func (d *BasicDispatcher) handleEvents(dispatcherEvents []DispatcherEvent, wakeC
 				zap.Any("event", event))
 		default:
 			log.Panic("Unexpected event type",
-				zap.Int("eventType", event.GetType()),
 				zap.Stringer("dispatcherID", d.id),
-				zap.Uint64("commitTs", event.GetCommitTs()))
+				zap.Uint64("commitTs", event.GetCommitTs()),
+				zap.Int("eventType", event.GetType()))
 		}
 	}
 	// resolvedTs and dml events can be in the same batch,
@@ -795,9 +800,9 @@ func (d *BasicDispatcher) HandleDispatcherStatus(dispatcherStatus *heartbeatpb.D
 		if pendingEvent == nil && action.CommitTs > d.GetResolvedTs() {
 			// we have not received the block event, and the action is for the future event, so just ignore
 			log.Debug("pending event is nil, and the action's commit is larger than dispatchers resolvedTs",
+				zap.Stringer("dispatcherID", d.id),
 				zap.Uint64("resolvedTs", d.GetResolvedTs()),
-				zap.Uint64("actionCommitTs", action.CommitTs),
-				zap.Stringer("dispatcherID", d.id))
+				zap.Uint64("actionCommitTs", action.CommitTs))
 			// we have not received the block event, and the action is for the future event, so just ignore
 			return false
 		}
@@ -843,6 +848,7 @@ func (d *BasicDispatcher) HandleDispatcherStatus(dispatcherStatus *heartbeatpb.D
 					zap.Stringer("dispatcherID", d.id),
 					zap.Int("action", int(action.Action)),
 					zap.Uint64("commitTs", action.CommitTs),
+					zap.Int("action", int(action.Action)),
 					zap.Bool("isSyncPoint", action.IsSyncPoint))
 				d.blockEventStatus.updateBlockStage(heartbeatpb.BlockStage_WAITING)
 				return false
@@ -851,9 +857,9 @@ func (d *BasicDispatcher) HandleDispatcherStatus(dispatcherStatus *heartbeatpb.D
 			ts, ok := d.blockEventStatus.getEventCommitTs()
 			if ok && action.CommitTs > ts {
 				log.Debug("pending event's commitTs is smaller than the action's commitTs, just ignore it",
+					zap.Stringer("dispatcherID", d.id),
 					zap.Uint64("pendingEventCommitTs", ts),
-					zap.Uint64("actionCommitTs", action.CommitTs),
-					zap.Stringer("dispatcherID", d.id))
+					zap.Uint64("actionCommitTs", action.CommitTs))
 				return false
 			}
 		}
@@ -1352,7 +1358,8 @@ func (d *BasicDispatcher) TryClose() (w heartbeatpb.Watermark, ok bool) {
 			d.tableSchemaStore.Clear()
 		}
 		log.Info("dispatcher component has stopped and is ready for cleanup",
-			zap.Stringer("changefeedID", d.sharedInfo.changefeedID),
+			zap.String("keyspace", d.sharedInfo.changefeedID.Keyspace()),
+			zap.String("changefeedID", d.sharedInfo.changefeedID.Name()),
 			zap.Stringer("dispatcherID", d.id),
 			zap.Int64("mode", d.mode),
 			zap.Uint64("checkpointTs", d.GetCheckpointTs()),
@@ -1378,15 +1385,19 @@ func (d *BasicDispatcher) TryClose() (w heartbeatpb.Watermark, ok bool) {
 
 // It removes the dispatcher from status dynamic stream to stop receiving status info from maintainer.
 func (d *BasicDispatcher) removeDispatcher() {
+	resendTaskCount := len(d.resendTaskMap.Keys())
 	log.Info("remove dispatcher",
-		zap.Stringer("changefeedID", d.sharedInfo.changefeedID),
+		zap.String("keyspace", d.sharedInfo.changefeedID.Keyspace()),
+		zap.String("changefeedID", d.sharedInfo.changefeedID.Name()),
 		zap.Stringer("dispatcherID", d.id),
-		zap.Int64("mode", d.mode))
+		zap.Int64("mode", d.mode),
+		zap.Int("resendTaskCount", resendTaskCount))
 	dispatcherStatusDS := GetDispatcherStatusDynamicStream()
 	err := dispatcherStatusDS.RemovePath(d.id)
 	if err != nil {
-		log.Error("remove dispatcher from dynamic stream failed",
-			zap.Stringer("changefeedID", d.sharedInfo.changefeedID),
+		log.Error("remove dispatcher failed",
+			zap.String("keyspace", d.sharedInfo.changefeedID.Keyspace()),
+			zap.String("changefeedID", d.sharedInfo.changefeedID.Name()),
 			zap.Stringer("dispatcherID", d.id),
 			zap.Uint64("checkpointTs", d.GetCheckpointTs()),
 			zap.Uint64("resolvedTs", d.GetResolvedTs()),
@@ -1397,8 +1408,5 @@ func (d *BasicDispatcher) removeDispatcher() {
 	identifiers := d.resendTaskMap.Keys()
 	for _, identifier := range identifiers {
 		d.cancelResendTask(identifier)
-		log.Info("cancel resend task before remove dispatcher",
-			zap.Any("identifier", identifier),
-			zap.Stringer("dispatcherID", d.id))
 	}
 }

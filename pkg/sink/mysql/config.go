@@ -399,7 +399,9 @@ func NewMysqlConfigAndDBs(
 	if err != nil {
 		if closeErr := dmlDB.Close(); closeErr != nil {
 			log.Warn("close mysql dml db after control db creation failed",
-				zap.String("changefeed", changefeedID.String()), zap.Error(closeErr))
+				zap.String("keyspace", changefeedID.Keyspace()),
+				zap.String("changefeedID", changefeedID.Name()),
+				zap.Error(closeErr))
 		}
 		return nil, nil, nil, nil, err
 	}
@@ -431,11 +433,15 @@ func closeDMLAndControlDBAfterFailure(
 ) {
 	if closeErr := dmlDB.Close(); closeErr != nil {
 		log.Warn("close mysql dml db after "+failureContext,
-			zap.String("changefeed", changefeedID.String()), zap.Error(closeErr))
+			zap.String("keyspace", changefeedID.Keyspace()),
+			zap.String("changefeedID", changefeedID.Name()),
+			zap.Error(closeErr))
 	}
 	if closeErr := controlDB.Close(); closeErr != nil {
 		log.Warn("close mysql control db after "+failureContext,
-			zap.String("changefeed", changefeedID.String()), zap.Error(closeErr))
+			zap.String("keyspace", changefeedID.Keyspace()),
+			zap.String("changefeedID", changefeedID.Name()),
+			zap.Error(closeErr))
 	}
 }
 
@@ -467,7 +473,9 @@ func newMysqlConfigAndDB(
 		}
 		if closeErr := db.Close(); closeErr != nil {
 			log.Warn("close mysql db after config creation failed",
-				zap.String("changefeed", changefeedID.String()), zap.Error(closeErr))
+				zap.String("keyspace", changefeedID.Keyspace()),
+				zap.String("changefeedID", changefeedID.Name()),
+				zap.Error(closeErr))
 		}
 	}()
 
@@ -520,7 +528,8 @@ func newMysqlConfigAndDB(
 	cfg.MaxAllowedPacket, err = queryMaxAllowedPacket(ctx, db)
 	if err != nil {
 		log.Warn("failed to query max_allowed_packet, use default value",
-			zap.String("changefeed", changefeedID.String()),
+			zap.String("keyspace", changefeedID.Keyspace()),
+			zap.String("changefeedID", changefeedID.Name()),
 			zap.Error(err))
 		cfg.MaxAllowedPacket = int64(vardef.DefMaxAllowedPacket)
 	}

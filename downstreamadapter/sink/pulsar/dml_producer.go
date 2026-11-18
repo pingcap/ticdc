@@ -77,7 +77,7 @@ func newDMLProducers(
 ) (*dmlProducers, error) {
 	log.Info("Creating pulsar DML producer ...",
 		zap.String("keyspace", changefeedID.Keyspace()),
-		zap.String("changefeed", changefeedID.ID().String()))
+		zap.String("changefeedID", changefeedID.Name()))
 	start := time.Now()
 
 	defaultTopicName := comp.config.GetDefaultTopicName()
@@ -112,7 +112,9 @@ func newDMLProducers(
 		failpointCh:  failpointCh,
 		errChan:      make(chan error, 1),
 	}
-	log.Info("Pulsar DML producer created", zap.Stringer("changefeed", p.changefeedID),
+	log.Info("Pulsar DML producer created",
+		zap.String("keyspace", p.changefeedID.Keyspace()),
+		zap.String("changefeedID", p.changefeedID.Name()),
 		zap.Duration("duration", time.Since(start)))
 	return p, nil
 }
@@ -146,8 +148,9 @@ func (p *dmlProducers) asyncSendMessage(
 	failpoint.Inject("PulsarSinkAsyncSendError", func() {
 		// simulate sending message to input channel successfully but flushing
 		// message to Pulsar meets error
-		log.Info("PulsarSinkAsyncSendError error injected", zap.String("keyspace", p.changefeedID.Keyspace()),
-			zap.String("changefeed", p.changefeedID.ID().String()))
+		log.Info("PulsarSinkAsyncSendError error injected",
+			zap.String("keyspace", p.changefeedID.Keyspace()),
+			zap.String("changefeedID", p.changefeedID.Name()))
 		p.failpointCh <- errors.New("pulsar sink injected error")
 		failpoint.Return(nil)
 	})
@@ -172,7 +175,7 @@ func (p *dmlProducers) asyncSendMessage(
 				e := errors.WrapError(errors.ErrPulsarAsyncSendMessage, err)
 				log.Error("Pulsar DML producer async send error",
 					zap.String("keyspace", p.changefeedID.Keyspace()),
-					zap.String("changefeed", p.changefeedID.ID().String()),
+					zap.String("changefeedID", p.changefeedID.Name()),
 					zap.Int("messageSize", len(m.Payload)),
 					zap.String("topic", topic),
 					zap.Error(err))
@@ -185,7 +188,9 @@ func (p *dmlProducers) asyncSendMessage(
 				case p.errChan <- e:
 				default:
 					log.Warn("Error channel is full in pulsar DML producer",
-						zap.Stringer("changefeed", p.changefeedID), zap.Error(e))
+						zap.String("keyspace", p.changefeedID.Keyspace()),
+						zap.String("changefeedID", p.changefeedID.Name()),
+						zap.Error(e))
 				}
 				return
 			}
@@ -212,7 +217,7 @@ func (p *dmlProducers) close() { // We have to hold the lock to synchronize clos
 		// which could lead to panic.
 		log.Warn("Pulsar DML producer already closed",
 			zap.String("keyspace", p.changefeedID.Keyspace()),
-			zap.String("changefeed", p.changefeedID.ID().String()))
+			zap.String("changefeedID", p.changefeedID.Name()))
 		return
 	}
 	close(p.failpointCh)
@@ -223,9 +228,10 @@ func (p *dmlProducers) close() { // We have to hold the lock to synchronize clos
 		p.producers.Remove(topic) // callback func will be called
 		topicName, _ := topic.(string)
 		log.Info("Async client closed in pulsar DML producer",
-			zap.Duration("duration", time.Since(start)),
 			zap.String("keyspace", p.changefeedID.Keyspace()),
-			zap.String("changefeed", p.changefeedID.ID().String()), zap.String("topic", topicName))
+			zap.String("changefeedID", p.changefeedID.Name()),
+			zap.Duration("duration", time.Since(start)),
+			zap.String("topic", topicName))
 	}
 }
 

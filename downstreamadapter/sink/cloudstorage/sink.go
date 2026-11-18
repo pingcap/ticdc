@@ -209,8 +209,8 @@ func (s *sink) AddDMLEvent(event *commonEvent.DMLEvent) {
 	if !s.IsNormal() {
 		log.Warn("ignore dml event because sink is not normal",
 			zap.String("keyspace", s.changefeedID.Keyspace()),
-			zap.String("changefeed", s.changefeedID.Name()),
-			zap.String("dispatcherID", event.GetDispatcherID().String()))
+			zap.String("changefeedID", s.changefeedID.Name()),
+			zap.String("dispatcher", event.GetDispatcherID().String()))
 		return
 	}
 	s.dmlWriters.addDMLEvent(event)
@@ -237,8 +237,8 @@ func (s *sink) WriteBlockEvent(event commonEvent.BlockEvent) error {
 		err = s.writeDDLEvent(e)
 	default:
 		log.Error("cloudstorage sink doesn't support this type of block event",
-			zap.String("namespace", s.changefeedID.Keyspace()),
-			zap.String("changefeed", s.changefeedID.Name()),
+			zap.String("keyspace", s.changefeedID.Keyspace()),
+			zap.String("changefeedID", s.changefeedID.Name()),
 			zap.String("eventType", commonEvent.TypeToString(event.GetType())))
 		return errors.ErrInvalidEventType.GenWithStackByArgs(commonEvent.TypeToString(event.GetType()))
 	}
@@ -295,7 +295,7 @@ func (s *sink) writeDDLEvent(event *commonEvent.DDLEvent) error {
 	}
 	log.Info("storage sink executed ddl event",
 		zap.String("keyspace", s.changefeedID.Keyspace()),
-		zap.String("changefeed", s.changefeedID.Name()),
+		zap.String("changefeedID", s.changefeedID.Name()),
 		zap.String("schema", event.GetTargetSchemaName()),
 		zap.String("table", event.GetTargetTableName()),
 		zap.String("dispatcherID", event.GetDispatcherID().String()),
@@ -373,7 +373,7 @@ func (s *sink) sendCheckpointTs(ctx context.Context) error {
 		if err != nil {
 			log.Panic("cloud storage sink marshal checkpoint failed, this should never happen",
 				zap.String("keyspace", keyspace),
-				zap.String("changefeed", changefeed),
+				zap.String("changefeedID", changefeed),
 				zap.Uint64("checkpoint", checkpoint),
 				zap.Duration("duration", time.Since(start)),
 				zap.Error(err))
@@ -385,7 +385,7 @@ func (s *sink) sendCheckpointTs(ctx context.Context) error {
 		if err != nil {
 			log.Error("cloud storage sink write file failed",
 				zap.String("keyspace", keyspace),
-				zap.String("changefeed", changefeed),
+				zap.String("changefeedID", changefeed),
 				zap.Duration("duration", time.Since(start)),
 				zap.Error(err))
 			return err

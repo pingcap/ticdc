@@ -32,6 +32,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/keyspace"
 	"github.com/pingcap/ticdc/pkg/pdutil"
 	"github.com/pingcap/ticdc/pkg/txnutil/gc"
+	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/tikv/client-go/v2/oracle"
 	pd "github.com/tikv/pd/client"
 	"go.uber.org/zap"
@@ -171,39 +172,23 @@ func (s *keyspaceSchemaStore) tryUpdateResolvedTs() {
 	resolvedEvents := s.unsortedCache.fetchSortedDDLEventBeforeTS(pendingTs)
 	for idx, event := range resolvedEvents {
 		if event.Job.BinlogInfo.SchemaVersion == 0 /* means the ddl is ignored in upstream */ {
-			log.Info("skip ddl job with empty SchemaVersion",
-				zap.Any("type", event.Job.Type),
-				zap.String("job", event.Job.Query),
-				zap.Int64("jobSchemaVersion", event.Job.BinlogInfo.SchemaVersion),
-				zap.Uint64("jobFinishTs", event.Job.BinlogInfo.FinishedTS),
-				zap.Uint64("jobCommitTs", event.CommitTs),
-				zap.Any("storeSchemaVersion", s.schemaVersion),
-				zap.Uint64("storeFinishedDDLTS", s.finishedDDLTs))
+			log.Info("ddl job ignored since schema version is empty",
+				zap.Int64("tableID", event.Job.TableID),
+				zap.Uint64("commitTs", event.CommitTs),
+				zap.String("ddlQuery", util.RedactValue(event.Job.Query)))
 			continue
 		}
 		if event.Job.BinlogInfo.FinishedTS <= s.finishedDDLTs {
-			log.Info("skip already applied ddl job",
-				zap.Any("type", event.Job.Type),
-				zap.String("job", event.Job.Query),
-				zap.Int64("jobSchemaVersion", event.Job.BinlogInfo.SchemaVersion),
-				zap.Uint64("jobFinishTs", event.Job.BinlogInfo.FinishedTS),
-				zap.Uint64("jobCommitTs", event.CommitTs),
-				zap.Any("storeSchemaVersion", s.schemaVersion),
-				zap.Uint64("storeFinishedDDLTS", s.finishedDDLTs))
+			log.Info("ddl job ignored since it is already applied",
+				zap.Int64("tableID", event.Job.TableID),
+				zap.Uint64("commitTs", event.CommitTs),
+				zap.Int64("schemaVersion", event.Job.BinlogInfo.SchemaVersion),
+				zap.Int64("storeSchemaVersion", s.schemaVersion),
+				zap.Uint64("storeFinishedDDLTS", s.finishedDDLTs),
+				zap.String("ddlQuery", util.RedactValue(event.Job.Query)))
 			continue
 		}
-		log.Info("handle a ddl job",
-			zap.Int64("schemaID", event.Job.SchemaID),
-			zap.String("schemaName", event.Job.SchemaName),
-			zap.Int64("tableID", event.Job.TableID),
-			zap.String("tableName", event.Job.TableName),
-			zap.Any("type", event.Job.Type),
-			zap.String("DDL", event.Job.Query),
-			zap.Int64("schemaVersion", event.Job.BinlogInfo.SchemaVersion),
-			zap.Uint64("jobFinishTs", event.Job.BinlogInfo.FinishedTS),
-			zap.Any("storeSchemaVersion", s.schemaVersion),
-			zap.Uint64("storeFinishedDDLTS", s.finishedDDLTs))
-
+		handleStart := time.Now()
 		err := s.dataStorage.handleDDLJob(event.Job)
 		if err != nil {
 			// Keep failed and later events for retry. They are removed from cache when fetched.
@@ -220,17 +205,14 @@ func (s *keyspaceSchemaStore) tryUpdateResolvedTs() {
 			if lastHandledEventIdx >= 0 && resolvedEvents[lastHandledEventIdx].CommitTs > pendingTs {
 				pendingTs = resolvedEvents[lastHandledEventIdx].CommitTs
 			}
-			log.Error("handle ddl job failed, retry later",
-				zap.Int64("schemaID", event.Job.SchemaID),
-				zap.String("schemaName", event.Job.SchemaName),
+			log.Error("ddl job failed, retry later",
 				zap.Int64("tableID", event.Job.TableID),
-				zap.String("tableName", event.Job.TableName),
-				zap.Any("type", event.Job.Type),
-				zap.String("DDL", event.Job.Query),
-				zap.Int64("jobSchemaVersion", event.Job.BinlogInfo.SchemaVersion),
-				zap.Uint64("jobFinishTs", event.Job.BinlogInfo.FinishedTS),
-				zap.Uint64("jobCommitTs", event.CommitTs),
-				zap.Any("storeSchemaVersion", s.schemaVersion),
+				zap.Uint64("startTs", event.Job.StartTS),
+				zap.Uint64("commitTs", event.CommitTs),
+				zap.Int64("schemaVersion", event.Job.BinlogInfo.SchemaVersion),
+				zap.String("ddlQuery", util.RedactValue(event.Job.Query)),
+				zap.Duration("duration", time.Since(handleStart)),
+				zap.Int64("storeSchemaVersion", s.schemaVersion),
 				zap.Uint64("storeFinishedDDLTS", s.finishedDDLTs),
 				zap.Error(err))
 			break
@@ -239,6 +221,13 @@ func (s *keyspaceSchemaStore) tryUpdateResolvedTs() {
 		// Update dedup watermark only after DDL is persisted successfully.
 		s.schemaVersion = event.Job.BinlogInfo.SchemaVersion
 		s.finishedDDLTs = event.Job.BinlogInfo.FinishedTS
+		log.Info("ddl job applied",
+			zap.Int64("tableID", event.Job.TableID),
+			zap.Uint64("startTs", event.Job.StartTS),
+			zap.Uint64("commitTs", event.CommitTs),
+			zap.Int64("schemaVersion", event.Job.BinlogInfo.SchemaVersion),
+			zap.String("ddlQuery", util.RedactValue(event.Job.Query)),
+			zap.Duration("duration", time.Since(handleStart)))
 	}
 
 	// When register a new table, it will load all ddl jobs from disk for the table,
@@ -255,17 +244,17 @@ func (s *keyspaceSchemaStore) tryUpdateResolvedTs() {
 // TODO tenfyzhong 2025-09-13 13:40:26 use a chan to decoupling
 func (s *keyspaceSchemaStore) writeDDLEvent(ddlEvent DDLJobWithCommitTs) {
 	log.Debug("write ddl event",
-		zap.Int64("schemaID", ddlEvent.Job.SchemaID),
 		zap.Int64("tableID", ddlEvent.Job.TableID),
+		zap.Int64("schemaID", ddlEvent.Job.SchemaID),
 		zap.Uint64("finishedTs", ddlEvent.Job.BinlogInfo.FinishedTS),
-		zap.String("query", ddlEvent.Job.Query))
+		zap.String("ddlQuery", util.RedactValue(ddlEvent.Job.Query)))
 
 	serverConfig := config.GetGlobalServerConfig()
 	for _, ts := range serverConfig.Debug.SchemaStore.IgnoreDDLCommitTs {
 		if ts == ddlEvent.CommitTs {
-			log.Info("ignore ddl job by commit ts",
+			log.Info("ddl job ignored by commit ts",
 				zap.Uint64("commitTs", ts),
-				zap.String("query", ddlEvent.Job.Query))
+				zap.String("ddlQuery", util.RedactValue(ddlEvent.Job.Query)))
 			return
 		}
 	}

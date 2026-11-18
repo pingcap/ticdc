@@ -303,8 +303,8 @@ func (l *LogReader) initMeta(ctx context.Context) error {
 	misc.ParseMeta(metas, &checkpointTs, &resolvedTs)
 	if resolvedTs < checkpointTs {
 		log.Panic("in all meta files, resolvedTs is less than checkpointTs",
-			zap.Uint64("resolvedTs", resolvedTs),
-			zap.Uint64("checkpointTs", checkpointTs))
+			zap.Uint64("checkpointTs", checkpointTs),
+			zap.Uint64("resolvedTs", resolvedTs))
 	}
 	l.meta = &misc.LogMeta{CheckpointTs: checkpointTs, ResolvedTs: resolvedTs, Version: metas[0].Version}
 	return nil

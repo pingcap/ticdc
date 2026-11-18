@@ -48,7 +48,7 @@ func (p *asyncProducer) Close() {
 
 	log.Info("kafka async producer closed",
 		zap.String("keyspace", p.changefeedID.Keyspace()),
-		zap.String("changefeed", p.changefeedID.Name()))
+		zap.String("changefeedID", p.changefeedID.Name()))
 }
 
 func (p *asyncProducer) AsyncSend(ctx context.Context, topic string, partition int32, message *codecCommon.Message) error {
@@ -103,7 +103,7 @@ func (p *asyncProducer) AsyncRunCallback(ctx context.Context) error {
 				}
 				log.Error("kafka message send failed",
 					zap.String("keyspace", p.changefeedID.Keyspace()),
-					zap.String("changefeed", p.changefeedID.Name()),
+					zap.String("changefeedID", p.changefeedID.Name()),
 					zap.String("eventContext", BuildEventLogContext(result.logInfo)),
 					zap.Error(result.err))
 				return errors.WrapError(errors.ErrKafkaSendMessage, result.err)

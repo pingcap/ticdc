@@ -184,7 +184,8 @@ func (a *Admin) Apply(commitTs uint64, admissions []Admission) bool {
 	}
 	if len(a.pendingQueue) == 0 || a.pendingQueue[0] != commitTs {
 		log.Panic("route pending queue head mismatch",
-			zap.String("changefeed", a.changefeedID.Name()),
+			zap.String("keyspace", a.changefeedID.Keyspace()),
+			zap.String("changefeedID", a.changefeedID.Name()),
 			zap.Uint64("expected", commitTs),
 			zap.Any("actual", a.pendingQueue))
 	}

@@ -102,7 +102,7 @@ func (r *TargetTableRegistry) ApplyTransition(removes []TableKey, adds []RouteBi
 func (r *TargetTableRegistry) conflict(existingSource, target, incomingSource TableKey) error {
 	log.Warn("table route conflict detected",
 		zap.String("keyspace", r.changefeedID.Keyspace()),
-		zap.String("changefeed", r.changefeedID.Name()),
+		zap.String("changefeedID", r.changefeedID.Name()),
 		zap.String("targetSchema", target.Schema),
 		zap.String("targetTable", target.Table),
 		zap.String("existingSourceSchema", existingSource.Schema),

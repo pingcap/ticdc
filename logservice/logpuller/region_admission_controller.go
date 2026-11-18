@@ -56,8 +56,8 @@ func (r *regionReq) finish() bool {
 		return true
 	}
 	log.Info("region request duration abnormal, skip metric",
-		zap.Float64("cost", cost),
-		zap.Uint64("regionID", r.regionInfo.verID.GetID()))
+		zap.Uint64("regionID", r.regionInfo.verID.GetID()),
+		zap.Float64("cost", cost))
 	return true
 }
 

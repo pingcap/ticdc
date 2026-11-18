@@ -392,7 +392,8 @@ func createDispatcherByInfo(
 		if err != nil {
 			if IsWritePathClosedError(err) {
 				log.Info("dispatcher manager write path closed, keep add operators for redo dispatchers",
-					zap.String("changefeedID", dispatcherManager.changefeedID.String()),
+					zap.String("keyspace", dispatcherManager.changefeedID.Keyspace()),
+					zap.String("changefeedID", dispatcherManager.changefeedID.Name()),
 					zap.Int("count", len(redoInfos)),
 					zap.Error(err),
 				)
@@ -407,7 +408,8 @@ func createDispatcherByInfo(
 		if err != nil {
 			if IsWritePathClosedError(err) {
 				log.Info("dispatcher manager write path closed, keep add operators",
-					zap.String("changefeedID", dispatcherManager.changefeedID.String()),
+					zap.String("keyspace", dispatcherManager.changefeedID.Keyspace()),
+					zap.String("changefeedID", dispatcherManager.changefeedID.Name()),
 					zap.Int("count", len(infos)),
 					zap.Error(err),
 				)
@@ -820,9 +822,10 @@ func logStaleMaintainerControlMessage(
 	admission maintainerRequestAdmission,
 	extraFields ...zap.Field,
 ) {
-	fields := make([]zap.Field, 0, 5+len(extraFields))
+	fields := make([]zap.Field, 0, 6+len(extraFields))
 	fields = append(fields,
-		zap.String("changefeedID", changefeedID.String()),
+		zap.String("keyspace", changefeedID.GetKeyspace()),
+		zap.String("changefeedID", changefeedID.GetName()),
 		zap.String("from", from.String()),
 		zap.Uint64(epochField, maintainerEpoch),
 		zap.Uint64("currentMaintainerEpoch", admission.currentEpoch),

@@ -162,7 +162,8 @@ func (s *drainScheduler) Execute() time.Time {
 
 	if scheduled > 0 {
 		log.Info("drain scheduler created move operators",
-			zap.Stringer("changefeedID", s.changefeedID),
+			zap.String("keyspace", s.changefeedID.Keyspace()),
+			zap.String("changefeedID", s.changefeedID.Name()),
 			zap.Int("scheduledCount", scheduled),
 			zap.String("targetNodeID", target.String()),
 			zap.Uint64("targetEpoch", targetEpoch),
@@ -192,7 +193,8 @@ func (s *drainScheduler) ensureDrainSessionLimit(target node.ID, epoch uint64) {
 	s.fixedDrainMoveLimit = calculateDrainMoveLimit(initialTargetDispatcherCount)
 
 	log.Info("drain scheduler initialized fixed move limit",
-		zap.Stringer("changefeedID", s.changefeedID),
+		zap.String("keyspace", s.changefeedID.Keyspace()),
+		zap.String("changefeedID", s.changefeedID.Name()),
 		zap.String("targetNodeID", target.String()),
 		zap.Uint64("targetEpoch", epoch),
 		zap.Int("initialTargetDispatcherCount", initialTargetDispatcherCount),

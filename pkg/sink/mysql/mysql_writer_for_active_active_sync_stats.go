@@ -93,7 +93,7 @@ func (c *ActiveActiveSyncStatsCollector) ObserveConflictSkipRows(connID uint64, 
 		} else {
 			log.Warn("unexpected tidb_cdc_active_active_sync_stats decrease",
 				zap.String("keyspace", c.keyspace),
-				zap.String("changefeed", c.changefeed),
+				zap.String("changefeedID", c.changefeed),
 				zap.Uint64("connID", connID),
 				zap.Uint64("lastConflictSkipRows", last),
 				zap.Uint64("currentConflictSkipRows", current))

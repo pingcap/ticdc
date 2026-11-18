@@ -46,7 +46,10 @@ func GetNewGroupChecker(
 		case replica.GroupTable:
 			return NewSplitSpanChecker(cfID, groupID, schedulerCfg, refresher)
 		}
-		log.Panic("unknown group type", zap.String("changefeed", cfID.Name()), zap.Int8("groupType", int8(groupType)))
+		log.Panic("unknown group type",
+			zap.String("keyspace", cfID.Keyspace()),
+			zap.String("changefeedID", cfID.Name()),
+			zap.Int8("groupType", int8(groupType)))
 		return nil
 	}
 }

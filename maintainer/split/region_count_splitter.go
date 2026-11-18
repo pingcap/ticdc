@@ -22,6 +22,7 @@ import (
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/pkg/common"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
+	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/tikv/client-go/v2/tikv"
 	"go.uber.org/zap"
 )
@@ -74,8 +75,8 @@ func (m *regionCountSplitter) split(
 	if err != nil {
 		log.Warn("load regions failed, skip split span",
 			zap.String("keyspace", m.changefeedID.Keyspace()),
-			zap.String("changefeed", m.changefeedID.Name()),
-			zap.Int64("tableID", span.TableID),
+			zap.String("changefeedID", m.changefeedID.Name()),
+			zap.String("tableSpan", common.FormatTableSpan(span)),
 			zap.Error(err))
 		return []*heartbeatpb.TableSpan{span}
 	}
@@ -83,8 +84,8 @@ func (m *regionCountSplitter) split(
 	if spansNum == 0 && (m.regionThreshold == 0 || len(regions) <= m.regionThreshold) {
 		log.Info("skip split span because region count is less than region threshold or region threshold is 0",
 			zap.String("keyspace", m.changefeedID.Keyspace()),
-			zap.String("changefeed", m.changefeedID.Name()),
-			zap.Int64("tableID", span.TableID),
+			zap.String("changefeedID", m.changefeedID.Name()),
+			zap.String("tableSpan", common.FormatTableSpan(span)),
 			zap.Int("regionCount", len(regions)),
 			zap.Int("regionThreshold", m.regionThreshold))
 		return []*heartbeatpb.TableSpan{span}
@@ -92,8 +93,8 @@ func (m *regionCountSplitter) split(
 	if spansNum > 0 && len(regions) < spansNum {
 		log.Info("skip split span because region count is less than target spans num",
 			zap.String("keyspace", m.changefeedID.Keyspace()),
-			zap.String("changefeed", m.changefeedID.Name()),
-			zap.Int64("tableID", span.TableID),
+			zap.String("changefeedID", m.changefeedID.Name()),
+			zap.String("tableSpan", common.FormatTableSpan(span)),
 			zap.Int("regionCount", len(regions)),
 			zap.Int("targetSpansNum", spansNum))
 		return []*heartbeatpb.TableSpan{span}
@@ -116,8 +117,11 @@ func (m *regionCountSplitter) split(
 			bytes.Compare(spans[len(spans)-1].EndKey, startKey) > 0 {
 			log.Warn("schedulerv3: list region out of order detected",
 				zap.String("keyspace", m.changefeedID.Keyspace()),
-				zap.String("changefeed", m.changefeedID.Name()),
-				zap.Int64("tableID", span.TableID))
+				zap.String("changefeedID", m.changefeedID.Name()),
+				zap.String("tableSpan", common.FormatTableSpan(span)),
+				zap.String("lastSpan", common.FormatTableSpan(spans[len(spans)-1])),
+				zap.String("startKey", util.RedactKey(startKey)),
+				zap.String("endKey", util.RedactKey(endKey)))
 			return []*heartbeatpb.TableSpan{span}
 		}
 		spans = append(spans, newSpan)
@@ -139,8 +143,9 @@ func (m *regionCountSplitter) split(
 	spans[len(spans)-1].EndKey = span.EndKey
 	log.Info("split span by region count",
 		zap.String("keyspace", m.changefeedID.Keyspace()),
-		zap.String("changefeed", m.changefeedID.Name()),
-		zap.Int64("tableID", span.TableID),
+		zap.String("changefeedID", m.changefeedID.Name()),
+		zap.String("tableSpan", common.FormatTableSpan(span)),
+		zap.Uint32("keyspaceID", span.KeyspaceID),
 		zap.Int("spans", len(spans)),
 		zap.Int("regionCount", len(regions)),
 		zap.Int("regionCountPerSpan", m.regionCountPerSpan),

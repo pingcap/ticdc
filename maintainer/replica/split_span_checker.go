@@ -182,7 +182,9 @@ func NewSplitSpanChecker(
 	refresher *RegionCountRefresher,
 ) *SplitSpanChecker {
 	if schedulerCfg == nil {
-		log.Panic("scheduler config is nil, please check the config", zap.String("changefeed", changefeedID.Name()))
+		log.Panic("scheduler config is nil, please check the config",
+			zap.String("keyspace", changefeedID.Keyspace()),
+			zap.String("changefeedID", changefeedID.Name()))
 	}
 	return &SplitSpanChecker{
 		changefeedID:           changefeedID,
@@ -227,7 +229,10 @@ func (s *SplitSpanChecker) RemoveReplica(replica *SpanReplication) {
 func (s *SplitSpanChecker) UpdateStatus(replica *SpanReplication) {
 	status, ok := s.allTasks[replica.ID]
 	if !ok {
-		log.Warn("split span checker: replica not found", zap.String("changefeed", s.changefeedID.Name()), zap.String("dispatcherID", replica.ID.String()))
+		log.Warn("split span checker: replica not found",
+			zap.String("keyspace", s.changefeedID.Keyspace()),
+			zap.String("changefeedID", s.changefeedID.Name()),
+			zap.String("replica", replica.ID.String()))
 		return
 	}
 	if status.GetStatus().ComponentStatus != heartbeatpb.ComponentState_Working {
@@ -296,7 +301,8 @@ func (s *SplitSpanChecker) Check(batch int) replica.GroupCheckResult {
 
 	if !s.checkAllTaskAvailableLocked() {
 		log.Debug("some task is not available, skip check",
-			zap.String("changefeed", s.changefeedID.String()),
+			zap.String("keyspace", s.changefeedID.Keyspace()),
+			zap.String("changefeedID", s.changefeedID.Name()),
 			zap.Int64("group", s.groupID),
 		)
 		return results
@@ -353,7 +359,8 @@ func (s *SplitSpanChecker) Check(batch int) replica.GroupCheckResult {
 	// only when the lag is less than 30s, we can consider to merge spans.
 	if lag > maxLagThreshold {
 		log.Debug("the lag for the group is too large, skip merge",
-			zap.String("changefeed", s.changefeedID.Name()),
+			zap.String("keyspace", s.changefeedID.Keyspace()),
+			zap.String("changefeedID", s.changefeedID.Name()),
 			zap.Int64("groupID", s.groupID),
 			zap.Float64("lag", lag),
 		)
@@ -424,7 +431,8 @@ func (s *SplitSpanChecker) chooseMoveSpans(minTrafficNodeID node.ID, maxTrafficN
 	if result := s.findOptimalSpanMoves(minTrafficNodeID, maxTrafficNodeID, sortedSpanByStartKey, adjacencyMap, lastThreeTrafficPerNode); len(result) > 0 {
 		results = append(results, result...)
 		log.Info("chooseMoveSpans found multiple move plans",
-			zap.Any("changefeedID", s.changefeedID),
+			zap.String("keyspace", s.changefeedID.Keyspace()),
+			zap.String("changefeedID", s.changefeedID.Name()),
 			zap.Any("groupID", s.groupID),
 			zap.Int("moveCount", len(result)),
 			zap.Stringer("minTrafficNodeID", minTrafficNodeID),
@@ -756,7 +764,8 @@ func (s *SplitSpanChecker) chooseMergedSpans(batchSize int) ([]SplitSpanCheckRes
 			return true
 		}
 		log.Info("chooseMergedSpans merge spans",
-			zap.String("changefeed", s.changefeedID.String()),
+			zap.String("keyspace", s.changefeedID.Keyspace()),
+			zap.String("changefeedID", s.changefeedID.Name()),
 			zap.Int64("group", s.groupID),
 			zap.Int("mergeSpanCount", len(mergeSpans)),
 			zap.Any("node", mergeSpans[0].GetNodeID()),
@@ -783,9 +792,12 @@ func (s *SplitSpanChecker) chooseMergedSpans(batchSize int) ([]SplitSpanCheckRes
 		if !bytes.Equal(prev.Span.EndKey, cur.Span.StartKey) {
 			// just panic for debug
 			log.Panic("unexpected error: span is not continuous",
-				zap.String("changefeed", s.changefeedID.Name()),
-				zap.Any("previousDispatcherID", prev.ID),
-				zap.Any("dispatcherID", cur.ID),
+				zap.String("keyspace", s.changefeedID.Keyspace()),
+				zap.String("changefeedID", s.changefeedID.Name()),
+				zap.Any("prev.Span", common.FormatTableSpan(prev.Span)),
+				zap.Any("prev.dispatcherID", prev.ID),
+				zap.Any("cur.Span", common.FormatTableSpan(cur.Span)),
+				zap.Any("cur.dispatcherID", cur.ID),
 			)
 		}
 		// not in the same node, can't merge
@@ -906,8 +918,9 @@ func (s *SplitSpanChecker) chooseSplitSpans(
 		nodeID := status.GetNodeID()
 		if nodeID == "" {
 			log.Info("split span checker: node id is empty, please check the node id",
-				zap.String("changefeed", s.changefeedID.Name()),
-				zap.Stringer("dispatcherID", status.ID))
+				zap.String("keyspace", s.changefeedID.Keyspace()),
+				zap.String("changefeedID", s.changefeedID.Name()),
+				zap.String("dispatcherID", status.ID.String()))
 			continue
 		}
 
@@ -930,7 +943,8 @@ func (s *SplitSpanChecker) chooseSplitSpans(
 		if s.writeThreshold > 0 {
 			if status.trafficScore > trafficScoreThreshold {
 				log.Info("chooseSplitSpans split span by traffic",
-					zap.String("changefeed", s.changefeedID.String()),
+					zap.String("keyspace", s.changefeedID.Keyspace()),
+					zap.String("changefeedID", s.changefeedID.Name()),
 					zap.Int64("group", s.groupID),
 					zap.String("dispatcherID", status.ID.String()),
 					zap.Any("splitTargetNodes", status.GetNodeID()),
@@ -955,8 +969,9 @@ func (s *SplitSpanChecker) chooseSplitSpans(
 		if s.regionThreshold > 0 {
 			if status.regionCount > s.regionThreshold {
 				log.Info("chooseSplitSpans split span by region",
-					zap.String("changefeed", s.changefeedID.String()),
-					zap.String("dispatcherID", status.ID.String()),
+					zap.String("keyspace", s.changefeedID.Keyspace()),
+					zap.String("changefeedID", s.changefeedID.Name()),
+					zap.String("splitSpan", status.ID.String()),
 					zap.Int64("group", s.groupID),
 					zap.Any("splitTargetNodes", status.GetNodeID()),
 				)
@@ -1107,9 +1122,10 @@ func (s *SplitSpanChecker) checkBalanceTraffic(
 		if diffTraffic < 0 {
 			log.Panic("unexpected error: diffTraffic is less than 0",
 				zap.Float64("diffTraffic", diffTraffic),
-				zap.String("changefeed", s.changefeedID.Name()),
-				zap.Int("moveSpanCount", len(moveSpans)),
-				zap.Int("nodeCount", len(taskMap)),
+				zap.String("keyspace", s.changefeedID.Keyspace()),
+				zap.String("changefeedID", s.changefeedID.Name()),
+				zap.Any("moveSpans", moveSpans),
+				zap.Any("taskMap", taskMap),
 			)
 		}
 		// we can only find next possible in sortedSpans[:idx]
@@ -1123,7 +1139,8 @@ func (s *SplitSpanChecker) checkBalanceTraffic(
 
 	if len(moveSpans) > 0 {
 		log.Info("checkBalanceTraffic move spans",
-			zap.String("changefeed", s.changefeedID.String()),
+			zap.String("keyspace", s.changefeedID.Keyspace()),
+			zap.String("changefeedID", s.changefeedID.Name()),
 			zap.Int64("group", s.groupID),
 			zap.Int("moveSpanCount", len(moveSpans)),
 			zap.Any("minTrafficNodeID", minTrafficNodeID),
@@ -1146,8 +1163,9 @@ func (s *SplitSpanChecker) checkBalanceTraffic(
 	}
 
 	log.Info("checkBalanceTraffic split span",
-		zap.Stringer("changefeed", s.changefeedID),
-		zap.String("dispatcherID", span.ID.String()),
+		zap.String("keyspace", s.changefeedID.Keyspace()),
+		zap.String("changefeedID", s.changefeedID.Name()),
+		zap.String("splitSpan", span.ID.String()),
 		zap.Int64("group", s.groupID),
 		zap.Any("splitTargetNodes", []node.ID{minTrafficNodeID, maxTrafficNodeID}),
 	)

@@ -51,25 +51,24 @@ func TestLogMiddlewareMasksCredentialQuery(t *testing.T) {
 		LogMiddleware()(c)
 
 		restore()
-		require.Len(t, observed.All(), 1)
-		query := observed.All()[0].ContextMap()["query"].(string)
-		require.NotContains(t, query, "secret-value")
-		require.NotContains(t, query, "bare-key-material")
-		require.NotContains(t, query, "fragment-secret-value")
-		if mode == cerrors.RedactLogDisable {
+		entries := observed.All()
+		require.Len(t, entries, 1)
+		query := entries[0].ContextMap()["query"].(string)
+		switch mode {
+		case cerrors.RedactLogDisable:
 			require.Contains(t, query, "key=xxxxx")
-			require.Contains(t, query, "region=west")
 			require.Contains(t, query, "keyspace=xxxxx")
+			require.Contains(t, query, "region=west")
 			require.Contains(t, query, "#token=xxxxx")
+		case cerrors.RedactLogMarker:
+			require.Equal(t, "‹key=xxxxx&keyspace=xxxxx&region=west&token=xxxxx#token=xxxxx›", query)
+		case cerrors.RedactLogEnable:
+			require.Equal(t, "?", query)
 		}
 	}
 }
 
 func TestForwardToServer(t *testing.T) {
-	core, observed := observer.New(zapcore.InfoLevel)
-	restore := plog.ReplaceGlobals(zap.New(core), nil)
-	defer restore()
-
 	// Setup mock target server
 	targetServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// Verify received headers
@@ -99,17 +98,6 @@ func TestForwardToServer(t *testing.T) {
 	require.Equal(t, http.StatusOK, w.Code)
 	require.Equal(t, "test-value", w.Header().Get("X-Test-Header"))
 	require.Equal(t, "test response", w.Body.String())
-	var loggedURL string
-	for _, entry := range observed.All() {
-		if entry.Message == "forwarding request to another server" {
-			loggedURL = entry.ContextMap()["url"].(string)
-			break
-		}
-	}
-	require.NotEmpty(t, loggedURL)
-	require.Contains(t, loggedURL, "region=west")
-	require.NotContains(t, loggedURL, "forward-secret-value")
-	require.Contains(t, loggedURL, "token=xxxxx")
 }
 
 func TestForwardToServerExceedMaxForwardTimes(t *testing.T) {

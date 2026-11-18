@@ -66,13 +66,13 @@ func (p *saramaAsyncProducer) Close() {
 		if err := p.client.Close(); err != nil {
 			log.Warn("kafka async producer client close failed",
 				zap.String("keyspace", p.changefeedID.Keyspace()),
-				zap.String("changefeed", p.changefeedID.Name()),
+				zap.String("changefeedID", p.changefeedID.Name()),
 				zap.Duration("duration", time.Since(start)),
 				zap.Error(err))
 		} else {
 			log.Info("kafka async producer client closed",
 				zap.String("keyspace", p.changefeedID.Keyspace()),
-				zap.String("changefeed", p.changefeedID.Name()),
+				zap.String("changefeedID", p.changefeedID.Name()),
 				zap.Duration("duration", time.Since(start)))
 		}
 
@@ -80,13 +80,13 @@ func (p *saramaAsyncProducer) Close() {
 		if err := p.producer.Close(); err != nil {
 			log.Warn("kafka async producer close failed",
 				zap.String("keyspace", p.changefeedID.Keyspace()),
-				zap.String("changefeed", p.changefeedID.Name()),
+				zap.String("changefeedID", p.changefeedID.Name()),
 				zap.Duration("duration", time.Since(start)),
 				zap.Error(err))
 		} else {
 			log.Info("kafka async producer closed",
 				zap.String("keyspace", p.changefeedID.Keyspace()),
-				zap.String("changefeed", p.changefeedID.Name()),
+				zap.String("changefeedID", p.changefeedID.Name()),
 				zap.Duration("duration", time.Since(start)))
 		}
 	}()
@@ -132,7 +132,7 @@ func (p *saramaAsyncProducer) handleProducerError(err error, logInfo *codecCommo
 	}
 	log.Error("kafka message send failed",
 		zap.String("keyspace", p.changefeedID.Keyspace()),
-		zap.String("changefeed", p.changefeedID.Name()),
+		zap.String("changefeedID", p.changefeedID.Name()),
 		zap.String("eventContext", BuildEventLogContext(logInfo)),
 		zap.Error(err))
 	return errors.WrapError(errors.ErrKafkaSendMessage, err)

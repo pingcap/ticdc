@@ -97,7 +97,7 @@ func (a *tableIDAllocator) AddBlockTableID(schema string, table string, physical
 	if _, exists := a.blockedTableIDs[key][physicalTableID]; !exists {
 		a.blockedTableIDs[key][physicalTableID] = struct{}{}
 		log.Info("add table id to blocked list",
-			zap.String("schema", schema), zap.String("table", table), zap.Int64("tableID", physicalTableID))
+			zap.Int64("tableID", physicalTableID), zap.String("schema", schema), zap.String("table", table))
 	}
 }
 

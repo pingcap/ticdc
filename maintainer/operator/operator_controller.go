@@ -243,17 +243,19 @@ func (oc *Controller) AddOperator(op operator.Operator[common.DispatcherID, *hea
 	if !oc.isOperatorAllowedLocked(op.ID()) {
 		oc.mu.RUnlock()
 		log.Info("add operator failed, controller is quiescing",
-			zap.String("role", oc.role),
-			zap.Stringer("changefeedID", oc.changefeedID),
+			zap.String("keyspace", oc.changefeedID.Keyspace()),
+			zap.String("changefeedID", oc.changefeedID.Name()),
 			zap.String("dispatcherID", op.ID().String()),
+			zap.String("role", oc.role),
 			zap.String("operator", op.String()))
 		return false
 	}
 	if old, ok := oc.operators[op.ID()]; ok {
 		oc.mu.RUnlock()
 		log.Info("add operator failed, operator already exists",
+			zap.String("keyspace", oc.changefeedID.Keyspace()),
+			zap.String("changefeedID", oc.changefeedID.Name()),
 			zap.String("role", oc.role),
-			zap.Stringer("changefeedID", oc.changefeedID),
 			zap.String("operator", op.String()),
 			zap.String("oldOperator", old.OP.String()))
 		return false
@@ -262,8 +264,9 @@ func (oc *Controller) AddOperator(op operator.Operator[common.DispatcherID, *hea
 	span := oc.spanController.GetTaskByID(op.ID())
 	if span == nil {
 		log.Warn("add operator failed, span not found",
+			zap.String("keyspace", oc.changefeedID.Keyspace()),
+			zap.String("changefeedID", oc.changefeedID.Name()),
 			zap.String("role", oc.role),
-			zap.Stringer("changefeedID", oc.changefeedID),
 			zap.String("operator", op.String()))
 		return false
 	}
@@ -412,8 +415,9 @@ func (oc *Controller) pollQueueingOperator() (
 
 		if shouldWarn {
 			log.Warn("operator is still in running queue",
-				zap.Stringer("changefeedID", oc.changefeedID),
-				zap.String("dispatcherID", opID.String()),
+				zap.String("keyspace", oc.changefeedID.Keyspace()),
+				zap.String("changefeedID", oc.changefeedID.Name()),
+				zap.String("operator", opID.String()),
 				zap.String("operator", op.String()),
 				zap.Any("timeSinceCreated", time.Since(item.CreatedAt)))
 		}
@@ -455,9 +459,10 @@ func (oc *Controller) finalizeOperator(
 	operatorCount.WithLabelValues(common.DefaultKeyspaceName, oc.changefeedID.Name(), op.Type(), common.StringMode(oc.mode)).Dec()
 	operatorDuration.WithLabelValues(common.DefaultKeyspaceName, oc.changefeedID.Name(), op.Type(), common.StringMode(oc.mode)).Observe(time.Since(item.CreatedAt).Seconds())
 	log.Info("operator finished",
+		zap.String("keyspace", oc.changefeedID.Keyspace()),
+		zap.String("changefeedID", oc.changefeedID.Name()),
 		zap.String("role", oc.role),
-		zap.Stringer("changefeedID", oc.changefeedID),
-		zap.String("dispatcherID", opID.String()),
+		zap.String("operatorID", opID.String()),
 		zap.String("operator", op.String()))
 }
 
@@ -486,9 +491,10 @@ func (oc *Controller) removeReplicaSet(op *removeDispatcherOperator) {
 
 	if !oc.isOperatorAllowed(op.ID()) {
 		log.Info("skip remove operator while controller is quiescing",
-			zap.String("role", oc.role),
-			zap.Stringer("changefeedID", oc.changefeedID),
+			zap.String("keyspace", oc.changefeedID.Keyspace()),
+			zap.String("changefeedID", oc.changefeedID.Name()),
 			zap.String("dispatcherID", op.ID().String()),
+			zap.String("role", oc.role),
 			zap.String("operator", op.String()))
 		return
 	}
@@ -497,9 +503,10 @@ func (oc *Controller) removeReplicaSet(op *removeDispatcherOperator) {
 	oc.mu.RUnlock()
 	if ok {
 		log.Info("replica set is removed, replace the old one",
+			zap.String("keyspace", oc.changefeedID.Keyspace()),
+			zap.String("changefeedID", oc.changefeedID.Name()),
 			zap.String("role", oc.role),
-			zap.Stringer("changefeedID", oc.changefeedID),
-			zap.String("dispatcherID", old.OP.ID().String()),
+			zap.String("replicaSet", old.OP.ID().String()),
 			zap.String("operator", old.OP.String()))
 		old.OP.OnTaskRemoved()
 		oc.finalizeOperator(old, op.ID())
@@ -518,8 +525,9 @@ func (oc *Controller) pushOperatorWithAdmission(
 	if old, ok := oc.operators[opID]; ok && !replaceExisting {
 		oc.mu.Unlock()
 		log.Info("add operator failed, operator already exists",
+			zap.String("keyspace", oc.changefeedID.Keyspace()),
+			zap.String("changefeedID", oc.changefeedID.Name()),
 			zap.String("role", oc.role),
-			zap.Stringer("changefeedID", oc.changefeedID),
 			zap.String("operator", op.String()),
 			zap.String("oldOperator", old.OP.String()))
 		return false
@@ -527,8 +535,9 @@ func (oc *Controller) pushOperatorWithAdmission(
 	oc.operators[opID] = withTime
 	oc.mu.Unlock()
 	log.Info("add operator to running queue",
+		zap.String("keyspace", oc.changefeedID.Keyspace()),
+		zap.String("changefeedID", oc.changefeedID.Name()),
 		zap.String("role", oc.role),
-		zap.Stringer("changefeedID", oc.changefeedID),
 		zap.String("operator", op.String()))
 
 	op.Start()
@@ -605,7 +614,9 @@ func (oc *Controller) addMergeOccupyOperators(
 			continue
 		}
 		log.Error("failed to add occupy dispatcher operator",
-			zap.Stringer("changefeedID", oc.changefeedID),
+			zap.String("keyspace", oc.changefeedID.Keyspace()),
+			zap.String("changefeedID", oc.changefeedID.Name()),
+			zap.String("tableSpan", common.FormatTableSpan(replicaSet.Span)),
 			zap.Int64("group", replicaSet.GetGroupID()),
 			zap.Stringer("dispatcherID", replicaSet.ID),
 			zap.String("operator", occupyOperator.String()))
@@ -642,8 +653,9 @@ func (oc *Controller) AddMergeOperator(
 	ret := oc.AddOperator(mergeOperator)
 	if !ret {
 		log.Error("failed to add merge dispatcher operator",
-			zap.Stringer("changefeedID", oc.changefeedID),
-			zap.Int("mergeSpanCount", len(affectedReplicaSets)),
+			zap.String("keyspace", oc.changefeedID.Keyspace()),
+			zap.String("changefeedID", oc.changefeedID.Name()),
+			zap.Any("mergeSpans", affectedReplicaSets),
 			zap.String("operator", mergeOperator.String()))
 		oc.cancelMergeOccupyOperators(operators)
 		oc.spanController.RemoveReplicatingSpan(mergeOperator.newReplicaSet)
@@ -651,7 +663,8 @@ func (oc *Controller) AddMergeOperator(
 	}
 	log.Info("add merge operator",
 		zap.String("role", oc.role),
-		zap.Stringer("changefeedID", oc.changefeedID),
+		zap.String("keyspace", oc.changefeedID.Keyspace()),
+		zap.String("changefeedID", oc.changefeedID.Name()),
 		zap.Int("affectedReplicaSets", len(affectedReplicaSets)),
 	)
 	return mergeOperator
@@ -684,15 +697,17 @@ func (oc *Controller) AddRestoredMergeOperator(
 	ret := oc.AddOperator(mergeOperator)
 	if !ret {
 		log.Error("failed to add merge dispatcher operator when restoring merge",
-			zap.Stringer("changefeedID", oc.changefeedID),
-			zap.Int("mergeSpanCount", len(affectedReplicaSets)),
+			zap.String("keyspace", oc.changefeedID.Keyspace()),
+			zap.String("changefeedID", oc.changefeedID.Name()),
+			zap.Any("mergeSpans", affectedReplicaSets),
 			zap.String("operator", mergeOperator.String()))
 		oc.cancelMergeOccupyOperators(operators)
 		return nil
 	}
 	log.Info("restore merge operator",
 		zap.String("role", oc.role),
-		zap.Stringer("changefeedID", oc.changefeedID),
+		zap.String("keyspace", oc.changefeedID.Keyspace()),
+		zap.String("changefeedID", oc.changefeedID.Name()),
 		zap.Int("affectedReplicaSets", len(affectedReplicaSets)),
 	)
 	return mergeOperator

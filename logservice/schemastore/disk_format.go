@@ -30,6 +30,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/encryption"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/filter"
+	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/tidb/pkg/kv"
 	"github.com/pingcap/tidb/pkg/meta/model"
 	"go.uber.org/zap"
@@ -466,7 +467,7 @@ func loadAndApplyDDLHistory(
 		// 2. for other ddls to be ignored, they are already filtered before write to disk.
 		handler, ok := allDDLHandlers[model.ActionType(ddlEvent.Type)]
 		if !ok {
-			log.Panic("unknown ddl type", zap.Any("ddlType", ddlEvent.Type), zap.String("query", ddlEvent.Query))
+			log.Panic("unknown ddl type", zap.Any("ddlType", ddlEvent.Type), zap.String("query", util.RedactValue(ddlEvent.Query)))
 		}
 		tableTriggerDDLHistory = handler.updateDDLHistoryFunc(updateDDLHistoryFuncArgs{
 			ddlEvent:               &ddlEvent,
@@ -1099,7 +1100,7 @@ func loadAllPhysicalTablesAtTs(
 		ddlEvent := unmarshalPersistedDDLEvent(ddlValue)
 		handler, ok := allDDLHandlers[model.ActionType(ddlEvent.Type)]
 		if !ok {
-			log.Panic("unknown ddl type", zap.Any("ddlType", ddlEvent.Type), zap.String("query", ddlEvent.Query))
+			log.Panic("unknown ddl type", zap.Any("ddlType", ddlEvent.Type), zap.String("query", util.RedactValue(ddlEvent.Query)))
 		}
 		tableTriggerDDLHistory = handler.updateDDLHistoryFunc(updateDDLHistoryFuncArgs{
 			ddlEvent:               &ddlEvent,
@@ -1124,8 +1125,8 @@ func loadAllPhysicalTablesAtTs(
 	for tableID, tableInfo := range tableMap {
 		if _, ok := databaseMap[tableInfo.SchemaID]; !ok {
 			log.Panic("database not found",
-				zap.Int64("schemaID", tableInfo.SchemaID),
 				zap.Int64("tableID", tableID),
+				zap.Int64("schemaID", tableInfo.SchemaID),
 				zap.String("tableName", tableInfo.Name),
 				zap.Any("databaseMapLen", len(databaseMap)))
 		}

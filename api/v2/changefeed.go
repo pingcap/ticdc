@@ -247,7 +247,9 @@ func (h *OpenAPIV2) CreateChangefeed(c *gin.Context) {
 		)
 		if undoErr != nil {
 			log.Warn("undo ensure changefeed start ts safety failed when creating the changefeed",
-				zap.String("changefeedID", changefeedID.Name()), zap.Uint64("startTs", cfg.StartTs),
+				zap.String("keyspace", changefeedID.Keyspace()),
+				zap.String("changefeedID", changefeedID.Name()),
+				zap.Uint64("startTs", cfg.StartTs),
 				zap.String("gcServiceID", createGcServiceID),
 				zap.Error(undoErr))
 		}
@@ -340,6 +342,7 @@ func (h *OpenAPIV2) CreateChangefeed(c *gin.Context) {
 	}
 
 	log.Info("create changefeed successfully",
+		zap.String("keyspace", info.ChangefeedID.Keyspace()),
 		zap.String("changefeedID", info.ChangefeedID.Name()),
 		zap.String("state", string(info.State)),
 		zap.String("changefeedInfo", info.String()),
@@ -818,7 +821,10 @@ func (h *OpenAPIV2) ResumeChangefeed(c *gin.Context) {
 		log.Info("resume changefeed config is empty, using defaults")
 	} else {
 		if err = json.Unmarshal(body, cfg); err != nil {
-			log.Error("failed to bind resume changefeed config", zap.Error(err), zap.String("body", string(body)))
+			log.Error("failed to bind resume changefeed config",
+				zap.String("contentType", c.ContentType()),
+				zap.Int("bodyLength", len(body)),
+				zap.Error(err))
 			_ = c.Error(errors.WrapError(errors.ErrAPIInvalidParam, err))
 			return
 		}
@@ -918,7 +924,9 @@ func (h *OpenAPIV2) ResumeChangefeed(c *gin.Context) {
 		)
 		if undoErr != nil {
 			log.Warn("undo ensure changefeed start ts safety failed when resuming the changefeed",
-				zap.String("changefeedID", cfInfo.ChangefeedID.Name()), zap.Uint64("startTs", newCheckpointTs),
+				zap.String("keyspace", cfInfo.ChangefeedID.Keyspace()),
+				zap.String("changefeedID", cfInfo.ChangefeedID.Name()),
+				zap.Uint64("startTs", newCheckpointTs),
 				zap.String("gcServiceID", resumeGcServiceID),
 				zap.Error(undoErr))
 		}
@@ -971,6 +979,7 @@ func (h *OpenAPIV2) ResumeChangefeed(c *gin.Context) {
 	}
 	c.Errors = nil
 	log.Info("resume changefeed successfully",
+		zap.String("keyspace", cfInfo.ChangefeedID.Keyspace()),
 		zap.String("changefeedID", cfInfo.ChangefeedID.Name()),
 		zap.String("state", string(cfInfo.State)),
 		zap.String("changefeedInfo", cfInfo.String()),
@@ -1651,7 +1660,10 @@ func (h *OpenAPIV2) getDispatcherCount(c *gin.Context) {
 	maintainer, ok := maintainerManager.GetMaintainerForChangefeed(changefeedID)
 
 	if !ok {
-		log.Error("maintainer not found for changefeed in this node", zap.String("GID", changefeedID.Id.String()), zap.String("changefeed", changefeedID.String()))
+		log.Error("maintainer not found for changefeed in this node",
+			zap.String("keyspace", changefeedID.Keyspace()),
+			zap.String("changefeedID", changefeedID.Name()),
+			zap.String("GID", changefeedID.Id.String()))
 		_ = c.Error(errors.ErrMaintainerNotFounded)
 		return
 	}

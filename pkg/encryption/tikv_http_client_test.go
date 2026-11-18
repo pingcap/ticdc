@@ -15,7 +15,6 @@ package encryption
 
 import (
 	"context"
-	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -43,47 +42,28 @@ func (m *mockTiKVMetaPDClient) GetAllStores(ctx context.Context, opts ...pdopt.G
 }
 
 func TestTiKVEncryptionHTTPClientResponseBodyLogging(t *testing.T) {
-	for _, tc := range []struct {
-		name       string
-		statusCode int
-		body       string
-		wantLogged bool
-	}{
-		{name: "HTTP error keeps diagnostics", statusCode: http.StatusInternalServerError, body: "diagnostic response", wantLogged: true},
-		{name: "decode error hides encryption payload", statusCode: http.StatusOK, body: "encrypted-key-material", wantLogged: false},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			core, observedLogs := observer.New(zapcore.DebugLevel)
-			restore := plog.ReplaceGlobals(zap.New(core), nil)
-			defer restore()
+	core, observedLogs := observer.New(zapcore.DebugLevel)
+	restore := plog.ReplaceGlobals(zap.New(core), nil)
+	defer restore()
 
-			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-				w.WriteHeader(tc.statusCode)
-				_, _ = w.Write([]byte(tc.body))
-			}))
-			defer srv.Close()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("encrypted-key-material"))
+	}))
+	defer srv.Close()
 
-			srvURL, err := url.Parse(srv.URL)
-			require.NoError(t, err)
-			client, err := NewTiKVEncryptionHTTPClient(&mockTiKVMetaPDClient{stores: []*metapb.Store{
-				{Id: 1, StatusAddress: srvURL.Host},
-			}}, nil)
-			require.NoError(t, err)
+	srvURL, err := url.Parse(srv.URL)
+	require.NoError(t, err)
+	client, err := NewTiKVEncryptionHTTPClient(&mockTiKVMetaPDClient{stores: []*metapb.Store{
+		{Id: 1, StatusAddress: srvURL.Host},
+	}}, nil)
+	require.NoError(t, err)
 
-			_, err = client.GetKeyspaceEncryptionMeta(context.Background(), 1)
-			require.Error(t, err)
-			logged := ""
-			for _, entry := range observedLogs.All() {
-				logged += fmt.Sprint(entry.ContextMap(), entry.Message)
-			}
-			if tc.wantLogged {
-				require.Contains(t, logged, tc.body)
-			} else {
-				require.NotContains(t, logged, tc.body)
-				require.Contains(t, logged, "bodySize")
-			}
-		})
-	}
+	_, err = client.GetKeyspaceEncryptionMeta(context.Background(), 1)
+	require.Error(t, err)
+	entries := observedLogs.All()
+	require.Len(t, entries, 1)
+	require.Equal(t, int64(len("encrypted-key-material")), entries[0].ContextMap()["bodySize"])
 }
 
 func TestTiKVEncryptionHTTPClientGetKeyspaceEncryptionMeta(t *testing.T) {

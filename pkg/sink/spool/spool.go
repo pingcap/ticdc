@@ -758,8 +758,10 @@ func (s *Spool) Close() {
 		if seg.file != nil {
 			if err := seg.file.Close(); err != nil {
 				log.Warn("close spool segment failed",
-					zap.String("keyspace", s.keyspace), zap.String("changefeed", s.changefeed),
-					zap.String("path", seg.path), zap.Error(err))
+					zap.String("keyspace", s.keyspace),
+					zap.String("changefeedID", s.changefeed),
+					zap.String("path", seg.path),
+					zap.Error(err))
 			}
 		}
 	}
@@ -767,8 +769,10 @@ func (s *Spool) Close() {
 
 	if err := os.RemoveAll(s.workDir); err != nil {
 		log.Warn("remove spool files failed",
-			zap.String("keyspace", s.keyspace), zap.String("changefeed", s.changefeed),
-			zap.String("path", s.workDir), zap.Error(err))
+			zap.String("keyspace", s.keyspace),
+			zap.String("changefeedID", s.changefeed),
+			zap.String("path", s.workDir),
+			zap.Error(err))
 	}
 	s.quota.deleteMetrics()
 }
@@ -872,10 +876,11 @@ func (s *Spool) truncateSegmentLocked(seg *segment) (int64, bool) {
 	}
 	releasedBytes := seg.size
 	if err := s.truncateFile(seg.file, 0); err != nil {
-		log.Warn(
-			"truncate active spool segment file failed",
-			zap.String("keyspace", s.keyspace), zap.String("changefeed", s.changefeed),
-			zap.String("path", seg.path), zap.Error(err),
+		log.Warn("truncate active spool segment file failed",
+			zap.String("keyspace", s.keyspace),
+			zap.String("changefeedID", s.changefeed),
+			zap.String("path", seg.path),
+			zap.Error(err),
 		)
 		return 0, false
 	}
@@ -890,16 +895,18 @@ func (s *Spool) removeSegmentLocked(seg *segment) bool {
 	if seg.file != nil {
 		if err := seg.file.Close(); err != nil {
 			log.Warn("close spool segment file failed",
-				zap.String("keyspace", s.keyspace), zap.String("changefeed", s.changefeed),
+				zap.String("keyspace", s.keyspace),
+				zap.String("changefeedID", s.changefeed),
 				zap.Error(err))
 		}
 		seg.file = nil
 	}
 	if err := s.removeFile(seg.path); err != nil && !os.IsNotExist(err) {
-		log.Warn(
-			"remove spool segment file failed",
-			zap.String("keyspace", s.keyspace), zap.String("changefeed", s.changefeed),
-			zap.String("path", seg.path), zap.Error(err))
+		log.Warn("remove spool segment file failed",
+			zap.String("keyspace", s.keyspace),
+			zap.String("changefeedID", s.changefeed),
+			zap.String("path", seg.path),
+			zap.Error(err))
 		return false
 	}
 	delete(s.segments, seg.id)

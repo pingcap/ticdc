@@ -15,6 +15,7 @@ package operator
 
 import (
 	"fmt"
+	"strings"
 	"sync"
 	"sync/atomic"
 
@@ -64,6 +65,16 @@ type SplitDispatcherOperator struct {
 	lck sync.Mutex
 
 	sendThrottler sendThrottler
+}
+
+// formatTableSpans formats the given spans for logging. Formatting happens at
+// output time so that the current redaction mode always applies.
+func formatTableSpans(spans []*heartbeatpb.TableSpan) string {
+	var sb strings.Builder
+	for _, span := range spans {
+		fmt.Fprintf(&sb, "[%s]", common.FormatTableSpan(span))
+	}
+	return sb.String()
 }
 
 // NewSplitDispatcherOperator creates a new SplitDispatcherOperator
@@ -180,7 +191,7 @@ func (m *SplitDispatcherOperator) PostFinish() {
 			ret := m.postFinish(span, m.splitTargetNodes[idx])
 			if !ret {
 				log.Error("post finish in split dispatcher operator failed, set the span absent",
-					zap.String("sourceDispatcherID", m.replicaSet.ID.String()),
+					zap.String("id", m.replicaSet.ID.String()),
 					zap.String("dispatcherID", span.ID.String()),
 					zap.String("targetNode", m.splitTargetNodes[idx].String()))
 				m.spanController.MarkSpanAbsent(span)
@@ -191,7 +202,7 @@ func (m *SplitDispatcherOperator) PostFinish() {
 			zap.String("dispatcherID", m.replicaSet.ID.String()),
 			zap.Int("targetNodeCount", len(m.splitTargetNodes)),
 			zap.Int("newReplicaCount", len(newReplicaSets)),
-			zap.Int("splitSpanCount", len(m.splitSpans)))
+			zap.String("splitSpans", formatTableSpans(m.splitSpans)))
 	}
 
 	log.Info("split dispatcher operator post finish finished", zap.String("dispatcherID", m.replicaSet.ID.String()))

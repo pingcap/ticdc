@@ -135,6 +135,37 @@ func RedactKey(key []byte) string {
 	}
 }
 
+// FormatKeyRange formats a raw key range for logging. It is the single entry
+// point for printing raw key ranges, so redaction applies consistently.
+func FormatKeyRange(startKey, endKey []byte) string {
+	return fmt.Sprintf("[%s, %s)", RedactKey(startKey), RedactKey(endKey))
+}
+
+// RedactError returns an error suitable for logging. Pass it to zap.Error only;
+// control flow must keep using the original error. The SQL error code prefix, if
+// any, is kept so the failure stays identifiable.
+func RedactError(err error) error {
+	if err == nil {
+		return nil
+	}
+	mode := perrors.RedactLogEnabled.Load()
+	if mode == perrors.RedactLogDisable {
+		return err
+	}
+	msg := err.Error()
+	prefix := ""
+	if strings.HasPrefix(msg, "Error ") {
+		if idx := strings.Index(msg, ": "); idx > 0 {
+			prefix = msg[:idx+2]
+			msg = msg[idx+2:]
+		}
+	}
+	if mode == perrors.RedactLogMarker {
+		return fmt.Errorf("%s‹%s›", prefix, msg)
+	}
+	return fmt.Errorf("%s?", prefix)
+}
+
 // RedactBytes redacts a byte slice (like Kafka message content) using the current redaction mode.
 // Returns "?" for ON mode, string value wrapped with ‹› for MARKER mode, string for OFF.
 // In MARKER mode, embedded markers are escaped using TiDB's redact.String().

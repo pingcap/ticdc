@@ -207,7 +207,8 @@ func (d *EventDispatcher) EmitBootstrap(ctx context.Context, shouldStop func() b
 		tableInfo, err := schemaStore.GetTableInfo(ctx, meta, table, ts)
 		if err != nil {
 			log.Warn("get table info failed, just ignore",
-				zap.Stringer("changefeed", d.sharedInfo.changefeedID),
+				zap.String("keyspace", d.sharedInfo.changefeedID.Keyspace()),
+				zap.String("changefeedID", d.sharedInfo.changefeedID.Name()),
 				zap.Error(err))
 			continue
 		}
@@ -215,7 +216,8 @@ func (d *EventDispatcher) EmitBootstrap(ctx context.Context, shouldStop func() b
 	}
 
 	log.Info("start to send bootstrap messages",
-		zap.Stringer("changefeed", d.sharedInfo.changefeedID),
+		zap.String("keyspace", d.sharedInfo.changefeedID.Keyspace()),
+		zap.String("changefeedID", d.sharedInfo.changefeedID.Name()),
 		zap.Int("tables", len(currentTables)))
 	for idx, table := range currentTables {
 		if table.IsView() {
@@ -231,7 +233,8 @@ func (d *EventDispatcher) EmitBootstrap(ctx context.Context, shouldStop func() b
 				return false
 			}
 			log.Error("send bootstrap message failed",
-				zap.Stringer("changefeed", d.sharedInfo.changefeedID),
+				zap.String("keyspace", d.sharedInfo.changefeedID.Keyspace()),
+				zap.String("changefeedID", d.sharedInfo.changefeedID.Name()),
 				zap.Int("tables", len(currentTables)),
 				zap.Int("emitted", idx+1),
 				zap.Duration("duration", time.Since(start)),
@@ -245,7 +248,8 @@ func (d *EventDispatcher) EmitBootstrap(ctx context.Context, shouldStop func() b
 	}
 	storeBootstrapState(&d.BootstrapState, BootstrapFinished)
 	log.Info("send bootstrap messages finished",
-		zap.Stringer("changefeed", d.sharedInfo.changefeedID),
+		zap.String("keyspace", d.sharedInfo.changefeedID.Keyspace()),
+		zap.String("changefeedID", d.sharedInfo.changefeedID.Name()),
 		zap.Int("tables", len(currentTables)),
 		zap.Duration("cost", time.Since(start)))
 	return true

@@ -112,8 +112,9 @@ func (c *Cleaner) Add(changefeedID common.ChangeFeedID, keyspaceID uint32, tag s
 		entry.resumingAtEpoch = c.updateEpoch
 	default:
 		log.Warn("unknown gc service tag, skip",
-			zap.String("gcServiceTag", tag),
-			zap.String("changefeed", changefeedID.String()))
+			zap.String("keyspace", changefeedID.Keyspace()),
+			zap.String("changefeedID", changefeedID.Name()),
+			zap.String("gcServiceTag", tag))
 	}
 }
 
@@ -229,8 +230,9 @@ func (c *Cleaner) requeue(tasks []task) {
 			entry.resumingAtEpoch = c.updateEpoch
 		default:
 			log.Warn("unknown gc service tag, skip",
-				zap.String("gcServiceTag", task.tag),
-				zap.String("changefeed", task.changefeedID.String()))
+				zap.String("keyspace", task.changefeedID.Keyspace()),
+				zap.String("changefeedID", task.changefeedID.Name()),
+				zap.String("gcServiceTag", task.tag))
 		}
 	}
 }

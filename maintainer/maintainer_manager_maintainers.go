@@ -87,8 +87,9 @@ func (m *Manager) onAddMaintainerRequest(req *heartbeatpb.AddMaintainerRequest) 
 	if currentLiveness == liveness.CaptureStopping {
 		changefeedID := common.NewChangefeedIDFromPB(req.Id)
 		log.Info("reject add maintainer request because node is stopping",
-			zap.Stringer("nodeID", m.nodeInfo.ID),
-			zap.Stringer("changefeedID", changefeedID))
+			zap.String("keyspace", changefeedID.Keyspace()),
+			zap.String("changefeedID", changefeedID.Name()),
+			zap.Stringer("nodeID", m.nodeInfo.ID))
 		return nil
 	}
 
@@ -114,10 +115,14 @@ func (m *Manager) onDispatchMaintainerRequest(
 		switch msg.Type {
 		case messaging.TypeAddMaintainerRequest:
 			changefeedID := common.NewChangefeedIDFromPB(msg.Message[0].(*heartbeatpb.AddMaintainerRequest).Id)
-			fields = append(fields, zap.Stringer("changefeedID", changefeedID))
+			fields = append(fields,
+				zap.String("keyspace", changefeedID.Keyspace()),
+				zap.String("changefeedID", changefeedID.Name()))
 		case messaging.TypeRemoveMaintainerRequest:
 			changefeedID := common.NewChangefeedIDFromPB(msg.Message[0].(*heartbeatpb.RemoveMaintainerRequest).Id)
-			fields = append(fields, zap.Stringer("changefeedID", changefeedID))
+			fields = append(fields,
+				zap.String("keyspace", changefeedID.Keyspace()),
+				zap.String("changefeedID", changefeedID.Name()))
 		}
 		log.Warn("ignore invalid coordinator id", fields...)
 		return nil
@@ -195,7 +200,8 @@ func (p *managerMaintainerSet) handleAddMaintainer(
 	changefeedID := common.NewChangefeedIDFromPB(req.Id)
 	if req.CheckpointTs == 0 {
 		log.Error("ignore add maintainer request with invalid checkpointTs",
-			zap.Stringer("changefeedID", changefeedID),
+			zap.String("keyspace", changefeedID.Keyspace()),
+			zap.String("changefeedID", changefeedID.Name()),
 			zap.Uint64("checkpointTs", req.CheckpointTs))
 		return nil
 	}
@@ -206,7 +212,8 @@ func (p *managerMaintainerSet) handleAddMaintainer(
 	info := &config.ChangeFeedInfo{}
 	if err := json.Unmarshal(req.Config, info); err != nil {
 		log.Error("ignore add maintainer request with invalid config",
-			zap.Stringer("changefeedID", changefeedID),
+			zap.String("keyspace", changefeedID.Keyspace()),
+			zap.String("changefeedID", changefeedID.Name()),
 			zap.Int("configBytes", len(req.Config)),
 			zap.Error(err))
 		return nil
@@ -317,7 +324,8 @@ func logRejectedAddMaintainer(changefeedID common.ChangeFeedID, existing *Mainta
 		return
 	}
 	log.Warn("reject add maintainer request because existing maintainer is still running",
-		zap.Stringer("changefeedID", changefeedID),
+		zap.String("keyspace", changefeedID.Keyspace()),
+		zap.String("changefeedID", changefeedID.Name()),
 		zap.Uint64("requestMaintainerEpoch", requestEpoch),
 		zap.Uint64("existingMaintainerEpoch", existingEpoch),
 		zap.Bool("existingRemoved", existing.removed.Load()),
@@ -333,7 +341,8 @@ func (p *managerMaintainerSet) handleRemoveMaintainer(msg *messaging.TargetMessa
 		if !req.Cascade {
 			log.Warn("ignore remove maintainer request, "+
 				"since the maintainer not found",
-				zap.Stringer("changefeedID", changefeedID),
+				zap.String("keyspace", changefeedID.Keyspace()),
+				zap.String("changefeedID", changefeedID.Name()),
 				zap.Any("request", req))
 			return &heartbeatpb.MaintainerStatus{
 				ChangefeedID:    req.GetId(),
@@ -365,7 +374,8 @@ func (p *managerMaintainerSet) handleRemoveMaintainer(msg *messaging.TargetMessa
 		message:      msg,
 	})
 	log.Info("received remove maintainer request",
-		zap.Stringer("changefeedID", changefeedID))
+		zap.String("keyspace", changefeedID.Keyspace()),
+		zap.String("changefeedID", changefeedID.Name()))
 	return nil
 }
 
@@ -413,7 +423,8 @@ func (p *managerMaintainerSet) cleanupRemovedMaintainer(key, value interface{}) 
 	}
 	cf.Close()
 	log.Info("maintainer removed, remove it from dynamic stream",
-		zap.Stringer("changefeedID", cf.changefeedID),
+		zap.String("keyspace", cf.changefeedID.Keyspace()),
+		zap.String("changefeedID", cf.changefeedID.Name()),
 		zap.Uint64("checkpointTs", cf.getWatermark().CheckpointTs),
 	)
 }
@@ -435,7 +446,8 @@ func (p *managerMaintainerSet) dispatchMaintainerMessage(
 	c, ok := p.registry.Load(changefeed)
 	if !ok {
 		log.Warn("maintainer is not found",
-			zap.Stringer("changefeedID", changefeed),
+			zap.String("keyspace", changefeed.Keyspace()),
+			zap.String("changefeedID", changefeed.Name()),
 			zap.String("message", msg.String()))
 		return nil
 	}

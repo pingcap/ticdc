@@ -505,33 +505,46 @@ func (e *eventStore) RegisterDispatcher(
 
 	lag := time.Since(oracle.GetTimeFromTS(startTs))
 	eventStoreRegisterDispatcherStartTsLagHist.Observe(lag.Seconds())
-	if lag >= 10*time.Second {
-		log.Warn("register dispatcher with large startTs lag",
-			zap.Stringer("dispatcherID", dispatcherID),
-			zap.Uint64("startTs", startTs),
-			zap.Duration("lag", lag))
-	} else {
-		log.Info("register dispatcher",
-			zap.Stringer("dispatcherID", dispatcherID),
-			zap.Uint64("startTs", startTs))
-	}
+
+	// The subscription the dispatcher ends up on, decided below.
+	var (
+		subscriptionID uint64
+		checkpointTs   uint64
+		resolvedTs     uint64
+		tableSpan      *heartbeatpb.TableSpan
+	)
 
 	start := time.Now()
 	defer func() {
-		if success {
-			log.Info("register dispatcher success",
-				zap.Stringer("dispatcherID", dispatcherID),
-				zap.Uint64("startTs", startTs),
-				zap.Bool("enableDataSharing", enableDataSharing),
-				zap.Bool("onlyReuse", onlyReuse),
-				zap.Duration("duration", time.Since(start)))
+		fields := []zap.Field{
+			zap.Stringer("dispatcherID", dispatcherID),
+			zap.Int64("tableID", dispatcherSpan.GetTableID()),
+			zap.Uint64("startTs", startTs),
+			zap.Duration("lag", lag),
+		}
+		if subscriptionID != 0 {
+			fields = append(fields,
+				zap.Uint64("subscriptionID", subscriptionID),
+				zap.String("subscriptionTableSpan", common.FormatTableSpan(tableSpan)),
+				zap.Uint64("subscriptionCheckpointTs", checkpointTs),
+				zap.Uint64("subscriptionResolvedTs", resolvedTs))
+		}
+		fields = append(fields,
+			zap.Bool("onlyReuse", onlyReuse),
+			zap.Bool("enableDataSharing", enableDataSharing),
+			zap.Duration("duration", time.Since(start)))
+
+		msg := "add dispatcher done"
+		if subscriptionID != 0 {
+			msg = "add dispatcher done by reuse"
+		}
+		if !success {
+			msg = "add dispatcher failed"
+		}
+		if success && lag >= 10*time.Second {
+			log.Warn(msg, fields...)
 		} else {
-			log.Info("register dispatcher failed",
-				zap.Stringer("dispatcherID", dispatcherID),
-				zap.Uint64("startTs", startTs),
-				zap.Bool("enableDataSharing", enableDataSharing),
-				zap.Bool("onlyReuse", onlyReuse),
-				zap.Duration("duration", time.Since(start)))
+			log.Info(msg, fields...)
 		}
 	}()
 
@@ -581,11 +594,10 @@ func (e *eventStore) RegisterDispatcher(
 						e.dispatcherMeta.dispatcherStats[dispatcherID] = stat
 						e.addSubscriberToSubStat(subStat, dispatcherID, &Subscriber{notifyFunc: wrappedNotifier})
 						e.dispatcherMeta.Unlock()
-						log.Info("reuse existing subscription with exact span match",
-							zap.Stringer("dispatcherID", dispatcherID),
-							zap.Uint64("startTs", startTs),
-							zap.Uint64("subscriptionID", uint64(subStat.subID)),
-							zap.Uint64("checkpointTs", subStat.checkpointTs.Load()))
+						subscriptionID = uint64(subStat.subID)
+						tableSpan = subStat.tableSpan
+						checkpointTs = subStat.checkpointTs.Load()
+						resolvedTs = subStat.resolvedTs.Load()
 						return true
 					}
 
@@ -605,13 +617,10 @@ func (e *eventStore) RegisterDispatcher(
 			stat.subStat = bestMatch
 			e.dispatcherMeta.dispatcherStats[dispatcherID] = stat
 			e.addSubscriberToSubStat(bestMatch, dispatcherID, &Subscriber{notifyFunc: wrappedNotifier})
-			log.Info("reuse existing subscription with smallest containing span",
-				zap.Stringer("dispatcherID", dispatcherID),
-				zap.Uint64("startTs", startTs),
-				zap.Uint64("subscriptionID", uint64(bestMatch.subID)),
-				zap.Uint64("resolvedTs", bestMatch.resolvedTs.Load()),
-				zap.Uint64("checkpointTs", bestMatch.checkpointTs.Load()),
-				zap.Bool("exactMatch", bestMatch.tableSpan.Equal(dispatcherSpan)))
+			subscriptionID = uint64(bestMatch.subID)
+			tableSpan = bestMatch.tableSpan
+			checkpointTs = bestMatch.checkpointTs.Load()
+			resolvedTs = bestMatch.resolvedTs.Load()
 		}
 		e.dispatcherMeta.Unlock()
 
@@ -750,7 +759,9 @@ func (e *eventStore) UnregisterDispatcher(changefeedID common.ChangeFeedID, disp
 		delete(e.dispatcherMeta.dispatcherStats, dispatcherID)
 	}
 	e.dispatcherMeta.Unlock()
-	log.Info("unregister dispatcher done", zap.Stringer("changefeedID", changefeedID),
+	log.Info("remove dispatcher done",
+		zap.String("keyspace", changefeedID.Keyspace()),
+		zap.String("changefeedID", changefeedID.Name()),
 		zap.Stringer("dispatcherID", dispatcherID))
 }
 
@@ -1189,8 +1200,8 @@ func (e *eventStore) cleanObsoleteSubscriptionsOnce(deltaMs int64) {
 	for _, sub := range obsoleteSubs {
 		log.Info("clean obsolete subscription",
 			zap.Uint64("subscriptionID", uint64(sub.subID)),
-			zap.Int("dbIndex", sub.dbIndex),
 			zap.Int64("tableID", sub.span.TableID),
+			zap.Int("dbIndex", sub.dbIndex),
 			zap.Time("idleAt", sub.idleAt))
 		e.subClient.Unsubscribe(sub.subID)
 		db := e.dbs[sub.dbIndex]
@@ -1238,6 +1249,7 @@ func diskSpaceUsage(m *pebble.Metrics) uint64 {
 
 type slowSubscriptionLogEntry struct {
 	SubID              uint64  `json:"subID"`
+	TableID            int64   `json:"tableID"`
 	ResolvedLagSeconds float64 `json:"resolvedLagSeconds"`
 	ResolvedTs         uint64  `json:"resolvedTs"`
 	CheckpointTs       uint64  `json:"checkpointTs"`
@@ -1263,7 +1275,8 @@ func (e *slowSubscriptionLogEntry) LessThan(other *slowSubscriptionLogEntry) boo
 }
 
 type uninitializedSubscriptionLogEntry struct {
-	SubID uint64 `json:"subID"`
+	SubID   uint64 `json:"subID"`
+	TableID int64  `json:"tableID"`
 }
 
 func (e *eventStore) collectAndReportStoreMetrics() {
@@ -1319,8 +1332,9 @@ func (e *eventStore) collectAndReportStoreMetrics() {
 					lastLogTime := subStat.lastLogLagTime.Load()
 					if time.Since(time.Unix(0, lastLogTime)) > logInterval {
 						log.Warn("resolved ts lag is too large for initialized subscription",
-							zap.Uint64("subID", uint64(subStat.subID)),
+							zap.Uint64("subscriptionID", uint64(subStat.subID)),
 							zap.Int64("tableID", subStat.tableSpan.TableID),
+							zap.Uint64("checkpointTs", subStat.checkpointTs.Load()),
 							zap.Uint64("resolvedTs", subResolvedTs),
 							zap.Float64("resolvedLag(s)", subResolvedTsLagInSec),
 							zap.Stringer("lastAdvanceTime", lastAdvanceTime),
@@ -1347,7 +1361,8 @@ func (e *eventStore) collectAndReportStoreMetrics() {
 				uninitializedStatCount++
 				if len(uninitializedSamples) < logEntryLimit {
 					uninitializedSamples = append(uninitializedSamples, uninitializedSubscriptionLogEntry{
-						SubID: uint64(subStat.subID),
+						SubID:   uint64(subStat.subID),
+						TableID: subStat.tableSpan.TableID,
 					})
 				}
 			}
@@ -1407,9 +1422,11 @@ func (e *eventStore) writeEvents(
 	insertCount := 0
 	updateCount := 0
 	deleteCount := 0
-	var totalValueBytesBefore int64
-	var totalValueBytesAfter int64
-	var dstBuf []byte
+	var (
+		totalValueBytesBefore int64
+		totalValueBytesAfter  int64
+		dstBuf                []byte
+	)
 	if compressionBuf != nil {
 		dstBuf = *compressionBuf
 	}
@@ -1431,10 +1448,10 @@ func (e *eventStore) writeEvents(
 			}
 			if kv.CRTs <= event.currentResolvedTs {
 				log.Warn("event store received kv with commitTs less than resolvedTs",
-					zap.Uint64("commitTs", kv.CRTs),
-					zap.Uint64("resolvedTs", event.currentResolvedTs),
 					zap.Uint64("subscriptionID", uint64(event.subID)),
-					zap.Int64("tableID", event.tableID))
+					zap.Int64("tableID", event.tableID),
+					zap.Uint64("commitTs", kv.CRTs),
+					zap.Uint64("resolvedTs", event.currentResolvedTs))
 				continue
 			}
 
@@ -1638,8 +1655,10 @@ func (iter *eventStoreIter) NextWithScanPosition() (*common.RawKVEntry, ScanPosi
 		_, compressionType := DecodeKeyAttributes(key)
 		var decodedValue []byte
 		if compressionType == CompressionZSTD {
-			var err error
-			var dst []byte
+			var (
+				err error
+				dst []byte
+			)
 			if iter.decodeBuf != nil {
 				dst = iter.decodeBuf[:0]
 			}
@@ -1668,10 +1687,10 @@ func (iter *eventStoreIter) NextWithScanPosition() (*common.RawKVEntry, ScanPosi
 			break
 		}
 		log.Debug("event store iter skip kv not in table span",
-			zap.Stringer("dispatcherID", iter.dispatcherID),
-			zap.String("key", util.RedactKey(rawKV.Key)),
+			zap.String("tableSpan", common.FormatTableSpan(iter.tableSpan)),
 			zap.Uint64("startTs", rawKV.StartTs),
 			zap.Uint64("commitTs", rawKV.CRTs),
+			zap.String("key", util.RedactKey(rawKV.Key)),
 			zap.Bool("isInsert", rawKV.IsInsert()),
 			zap.Bool("isDelete", rawKV.IsDelete()),
 			zap.Bool("isUpdate", rawKV.IsUpdate()))

@@ -314,7 +314,8 @@ func (c *changefeedStatus) updateMemoryUsage(now time.Time, usageRatio float64, 
 	eventServiceScanWindowIntervalGaugeVec.WithLabelValues(c.changefeedID.String()).Set(decision.newInterval.Seconds())
 
 	log.Info("scan interval adjusted",
-		zap.Stringer("changefeedID", c.changefeedID),
+		zap.String("keyspace", c.changefeedID.Keyspace()),
+		zap.String("changefeedID", c.changefeedID.Name()),
 		zap.String("reason", string(decision.reason)),
 		zap.Duration("oldInterval", current),
 		zap.Duration("newInterval", decision.newInterval),
@@ -834,7 +835,10 @@ func (c *changefeedStatus) refreshMinSentResolvedTs() {
 		lastHeartbeatTime := dispatcher.lastReceivedHeartbeatTime.Load()
 		if lastHeartbeatTime > 0 &&
 			now.Sub(time.Unix(lastHeartbeatTime, 0)) > scanWindowStaleDispatcherHeartbeatThreshold {
-			log.Info("dispatcher is stale, skip it's sent resolved ts", zap.Stringer("changefeedID", c.changefeedID), zap.Stringer("dispatcherID", dispatcher.id))
+			log.Info("dispatcher is stale, skip it's sent resolved ts",
+				zap.String("keyspace", c.changefeedID.Keyspace()),
+				zap.String("changefeedID", c.changefeedID.Name()),
+				zap.Stringer("dispatcherID", dispatcher.id))
 			return true
 		}
 

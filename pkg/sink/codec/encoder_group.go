@@ -126,7 +126,7 @@ func (g *encoderGroup) Run(ctx context.Context) error {
 		g.cleanMetrics()
 		log.Info("encoder group exited",
 			zap.String("keyspace", g.changefeedID.Keyspace()),
-			zap.String("changefeed", g.changefeedID.Name()))
+			zap.String("changefeedID", g.changefeedID.Name()))
 	}()
 	eg, ctx := errgroup.WithContext(ctx)
 	for i := 0; i < g.concurrency; i++ {

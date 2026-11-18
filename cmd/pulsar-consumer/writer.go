@@ -443,8 +443,8 @@ func (w *writer) WriteMessage(ctx context.Context, message pulsar.Message) (bool
 		}
 		w.appendDDL(ddl)
 		log.Info("DDL event received",
-			zap.String("schema", ddl.GetSchemaName()), zap.String("table", ddl.GetTableName()),
-			zap.Uint64("commitTs", ddl.GetCommitTs()), zap.String("query", ddl.Query),
+			zap.Uint64("commitTs", ddl.GetCommitTs()), zap.String("schema", ddl.GetSchemaName()),
+			zap.String("table", ddl.GetTableName()), zap.String("query", ddl.Query),
 			zap.Any("blockedTables", ddl.GetBlockedTables()))
 		needFlush = true
 	case common.MessageTypeRow:
@@ -611,8 +611,8 @@ func (w *writer) appendMessage2Group(
 	globalWatermark := w.globalWatermark()
 	if commitTs < globalWatermark {
 		log.Warn("DML event fallback row, since less than the global watermark, ignore it",
-			zap.Int64("tableID", tableID), zap.Int32("partition", progress.partition),
-			zap.Uint64("commitTs", commitTs),
+			zap.Int64("tableID", tableID), zap.Uint64("commitTs", commitTs),
+			zap.Int32("partition", progress.partition),
 			zap.Uint64("globalWatermark", globalWatermark),
 			zap.Uint64("partitionWatermark", progress.watermark),
 			zap.String("schema", schema), zap.String("table", table),
@@ -631,8 +631,8 @@ func (w *writer) appendMessage2Group(
 	}
 	if commitTs < progress.watermark {
 		log.Warn("DML event fallback row, since less than the partition watermark, append it and sort before flush",
-			zap.Int64("tableID", tableID), zap.Int32("partition", group.Partition),
-			zap.Uint64("commitTs", commitTs), zap.Uint64("watermark", progress.watermark),
+			zap.Int64("tableID", tableID), zap.Uint64("commitTs", commitTs),
+			zap.Int32("partition", group.Partition), zap.Uint64("watermark", progress.watermark),
 			zap.Uint64("globalWatermark", globalWatermark),
 			zap.String("schema", schema), zap.String("table", table),
 			zap.Stringer("eventType", message.RowType),
@@ -641,16 +641,16 @@ func (w *writer) appendMessage2Group(
 	}
 	if commitTs >= group.HighWatermark {
 		log.Debug("DML event append to the group",
-			zap.Uint64("commitTs", commitTs), zap.Uint64("highWatermark", group.HighWatermark),
-			zap.String("schema", schema), zap.String("table", table), zap.Int64("tableID", tableID),
+			zap.Int64("tableID", tableID), zap.Uint64("commitTs", commitTs),
+			zap.Uint64("highWatermark", group.HighWatermark), zap.String("schema", schema), zap.String("table", table),
 			zap.Stringer("eventType", message.RowType))
 		return nil
 	}
 	log.Warn("DML event commit ts fallback, append it and sort before flush",
-		zap.Int32("partition", progress.partition),
-		zap.Uint64("commitTs", commitTs), zap.Uint64("highWatermark", group.HighWatermark),
-		zap.Any("partitionWatermark", progress.watermark),
-		zap.String("schema", schema), zap.String("table", table), zap.Int64("tableID", tableID),
+		zap.Int64("tableID", tableID),
+		zap.Uint64("commitTs", commitTs), zap.Int32("partition", progress.partition),
+		zap.Uint64("highWatermark", group.HighWatermark),
+		zap.Any("partitionWatermark", progress.watermark), zap.String("schema", schema), zap.String("table", table),
 		zap.Stringer("eventType", message.RowType),
 		zap.Any("protocol", w.protocol), zap.Bool("enableTableAcrossNodes", w.enableTableAcrossNodes))
 	return nil

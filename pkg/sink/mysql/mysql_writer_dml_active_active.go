@@ -163,7 +163,7 @@ func (w *Writer) batchSingleTxnActiveRows(
 ) ([]string, [][]interface{}, []common.RowType) {
 	if len(rows) != len(commitTs) {
 		log.Panic("mismatched rows and commitTs for active active batch",
-			zap.Int("rows", len(rows)), zap.Int("commitTs", len(commitTs)))
+			zap.Int("commitTs", len(commitTs)), zap.Int("rows", len(rows)))
 	}
 	filteredRows := make([]*commonEvent.RowChange, 0, len(rows))
 	filteredCommitTs := make([]uint64, 0, len(rows))
@@ -245,8 +245,8 @@ func (c originTsChecker) shouldDropRow(row *commonEvent.RowChange, commitTs uint
 		return false
 	}
 	log.Info("drop row with non null origin ts",
-		zap.Uint64("commitTs", commitTs),
 		zap.Int64("tableID", c.tableID),
+		zap.Uint64("commitTs", commitTs),
 		zap.Uint8("rowType", uint8(row.RowType)),
 		zap.String("rowKey", util.RedactKey(row.RowKey)),
 		zap.Int("rowLen", row.Row.Len()))

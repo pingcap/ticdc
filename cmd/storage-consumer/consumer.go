@@ -316,15 +316,15 @@ func (c *consumer) appendMessage2Group(
 			return err
 		}
 		log.Debug("DML event append to the group",
-			zap.Uint64("commitTs", commitTs), zap.Uint64("highWatermark", group.HighWatermark),
-			zap.String("schema", schema), zap.String("table", table), zap.Int64("tableID", tableID),
+			zap.Int64("tableID", tableID), zap.Uint64("commitTs", commitTs),
+			zap.Uint64("highWatermark", group.HighWatermark), zap.String("schema", schema), zap.String("table", table),
 			zap.Stringer("eventType", message.RowType))
 		return nil
 	}
 	if enableTableAcrossNodes {
 		log.Warn("DML events fallback, but enableTableAcrossNodes is true, still append it",
-			zap.Uint64("commitTs", commitTs), zap.Uint64("highWatermark", group.HighWatermark),
-			zap.String("schema", schema), zap.String("table", table), zap.Int64("tableID", tableID),
+			zap.Int64("tableID", tableID), zap.Uint64("commitTs", commitTs),
+			zap.Uint64("highWatermark", group.HighWatermark), zap.String("schema", schema), zap.String("table", table),
 			zap.Stringer("eventType", message.RowType))
 		return group.AppendMessage(message)
 	}
@@ -575,9 +575,9 @@ func (c *consumer) cleanupEventsGroups() error {
 func (c *consumer) parseDMLIndexFile(ctx context.Context, path string, dmlkey cloudstorage.DMLPathKey) {
 	if c.globalCheckpointTs > 0 && dmlkey.TableVersion > c.globalCheckpointTs {
 		log.Debug("skip dml index file by checkpoint",
+			zap.Uint64("checkpointTs", c.globalCheckpointTs),
 			zap.String("path", path),
-			zap.Uint64("tableVersion", dmlkey.TableVersion),
-			zap.Uint64("checkpointTs", c.globalCheckpointTs))
+			zap.Uint64("tableVersion", dmlkey.TableVersion))
 		return
 	}
 	data, err := c.externalStorage.ReadFile(ctx, path)
@@ -609,9 +609,9 @@ func (c *consumer) parseSchemaFilePath(ctx context.Context, path string) {
 	schemaKey.Parse(path)
 	if c.globalCheckpointTs > 0 && schemaKey.TableVersion > c.globalCheckpointTs {
 		log.Debug("skip schema file by checkpoint",
+			zap.Uint64("checkpointTs", c.globalCheckpointTs),
 			zap.String("path", path),
-			zap.Uint64("tableVersion", schemaKey.TableVersion),
-			zap.Uint64("checkpointTs", c.globalCheckpointTs))
+			zap.Uint64("tableVersion", schemaKey.TableVersion))
 		return
 	}
 	key := schemaKey.GetKey()
@@ -883,8 +883,8 @@ func (c *consumer) handle(ctx context.Context) error {
 			return errors.Trace(err)
 		}
 		log.Info("storage consumer scan done",
-			zap.Uint64("round", round),
 			zap.Uint64("checkpointTs", c.globalCheckpointTs),
+			zap.Uint64("round", round),
 			zap.Int("dmlPathKeyCount", len(dmlFileMap)))
 
 		err = c.handleNewFiles(ctx, dmlFileMap, round)

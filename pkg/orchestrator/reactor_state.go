@@ -372,7 +372,7 @@ func (s *ChangefeedReactorState) ResumeChangefeed(overwriteCheckpointTs uint64) 
 			}
 			log.Info("overwriting the tableCheckpoint ts",
 				zap.String("keyspace", s.ID.Keyspace()),
-				zap.String("changefeed", s.ID.Name()),
+				zap.String("changefeedID", s.ID.Name()),
 				zap.Any("oldCheckpointTs", oldCheckpointTs),
 				zap.Any("newCheckpointTs", status.CheckpointTs),
 			)
@@ -393,7 +393,7 @@ func (s *ChangefeedReactorState) TakeProcessorErrors() []*config.RunningError {
 			runningErrors[position.Error.Code] = position.Error
 			log.Error("processor reports an error",
 				zap.String("keyspace", s.ID.Keyspace()),
-				zap.String("changefeed", s.ID.Name()),
+				zap.String("changefeedID", s.ID.Name()),
 				zap.String("captureID", captureID),
 				zap.Any("error", position.Error))
 			s.PatchTaskPosition(captureID, func(position *config.TaskPosition) (*config.TaskPosition, bool, error) {
@@ -426,7 +426,7 @@ func (s *ChangefeedReactorState) TakeProcessorWarnings() []*config.RunningError 
 			runningWarnings[position.Warning.Code] = position.Warning
 			log.Warn("processor reports a warning",
 				zap.String("keyspace", s.ID.Keyspace()),
-				zap.String("changefeed", s.ID.Name()),
+				zap.String("changefeedID", s.ID.Name()),
 				zap.String("captureID", captureID),
 				zap.Any("warning", position.Warning))
 			s.PatchTaskPosition(captureID, func(position *config.TaskPosition) (*config.TaskPosition, bool, error) {
@@ -491,7 +491,7 @@ func (s *ChangefeedReactorState) UpdateChangefeedState(feedState config.FeedStat
 				info.Epoch = epoch
 				log.Info("update changefeed epoch",
 					zap.String("keyspace", s.ID.Keyspace()),
-					zap.String("changefeed", s.ID.Name()),
+					zap.String("changefeedID", s.ID.Name()),
 					zap.Uint64("perviousEpoch", previous),
 					zap.Uint64("currentEpoch", info.Epoch))
 			}

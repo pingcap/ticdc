@@ -61,7 +61,7 @@ func (p *saramaSyncProducer) SendMessage(_ context.Context, topic string, partit
 	}
 	log.Error("kafka message send failed",
 		zap.String("keyspace", p.id.Keyspace()),
-		zap.String("changefeed", p.id.Name()),
+		zap.String("changefeedID", p.id.Name()),
 		zap.String("eventContext", BuildEventLogContext(message.LogInfo)),
 		zap.Error(err))
 	return errors.WrapError(errors.ErrKafkaSendMessage, err)
@@ -87,7 +87,7 @@ func (p *saramaSyncProducer) SendMessages(_ context.Context, topic string, parti
 	}
 	log.Error("kafka message send failed",
 		zap.String("keyspace", p.id.Keyspace()),
-		zap.String("changefeed", p.id.Name()),
+		zap.String("changefeedID", p.id.Name()),
 		zap.String("eventContext", BuildEventLogContext(message.LogInfo)),
 		zap.Error(err))
 	return errors.WrapError(errors.ErrKafkaSendMessage, err)
@@ -97,7 +97,7 @@ func (p *saramaSyncProducer) Close() {
 	if p.closed.Load() {
 		log.Warn("kafka ddl producer already closed",
 			zap.String("keyspace", p.id.Keyspace()),
-			zap.String("changefeed", p.id.Name()))
+			zap.String("changefeedID", p.id.Name()))
 		return
 	}
 
@@ -109,7 +109,7 @@ func (p *saramaSyncProducer) Close() {
 		if err := p.client.Close(); err != nil {
 			log.Warn("kafka ddl producer client close failed",
 				zap.String("keyspace", p.id.Keyspace()),
-				zap.String("changefeed", p.id.Name()),
+				zap.String("changefeedID", p.id.Name()),
 				zap.Duration("duration", time.Since(start)),
 				zap.Error(err))
 		}
@@ -118,7 +118,7 @@ func (p *saramaSyncProducer) Close() {
 		if err := p.producer.Close(); err != nil {
 			log.Error("kafka ddl producer close failed",
 				zap.String("keyspace", p.id.Keyspace()),
-				zap.String("changefeed", p.id.Name()),
+				zap.String("changefeedID", p.id.Name()),
 				zap.Duration("duration", time.Since(start)),
 				zap.Error(err))
 			return
@@ -126,6 +126,6 @@ func (p *saramaSyncProducer) Close() {
 	}
 	log.Info("kafka ddl producer closed",
 		zap.String("keyspace", p.id.Keyspace()),
-		zap.String("changefeed", p.id.Name()),
+		zap.String("changefeedID", p.id.Name()),
 		zap.Duration("duration", time.Since(start)))
 }

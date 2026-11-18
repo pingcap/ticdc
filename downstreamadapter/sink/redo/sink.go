@@ -89,7 +89,7 @@ func New(ctx context.Context, changefeedID common.ChangeFeedID,
 			if closeErr := ddlWriter.Close(); closeErr != nil && !errors.Is(closeErr, context.Canceled) {
 				log.Warn("redo: failed to close ddl writer after create failure",
 					zap.String("keyspace", changefeedID.Keyspace()),
-					zap.String("changefeed", changefeedID.Name()),
+					zap.String("changefeedID", changefeedID.Name()),
 					zap.Error(closeErr))
 			}
 		}
@@ -97,7 +97,7 @@ func New(ctx context.Context, changefeedID common.ChangeFeedID,
 			if closeErr := dmlWriter.Close(); closeErr != nil && !errors.Is(closeErr, context.Canceled) {
 				log.Warn("redo: failed to close dml writer after create failure",
 					zap.String("keyspace", changefeedID.Keyspace()),
-					zap.String("changefeed", changefeedID.Name()),
+					zap.String("changefeedID", changefeedID.Name()),
 					zap.Error(closeErr))
 			}
 		}
@@ -107,7 +107,7 @@ func New(ctx context.Context, changefeedID common.ChangeFeedID,
 	if err != nil {
 		log.Error("redo: failed to create redo log writer",
 			zap.String("keyspace", changefeedID.Keyspace()),
-			zap.String("changefeed", changefeedID.Name()),
+			zap.String("changefeedID", changefeedID.Name()),
 			zap.Duration("duration", time.Since(start)),
 			zap.Error(err))
 		return nil, err
@@ -116,7 +116,7 @@ func New(ctx context.Context, changefeedID common.ChangeFeedID,
 	if err != nil {
 		log.Error("redo: failed to create redo log writer",
 			zap.String("keyspace", changefeedID.Keyspace()),
-			zap.String("changefeed", changefeedID.Name()),
+			zap.String("changefeedID", changefeedID.Name()),
 			zap.Duration("duration", time.Since(start)),
 			zap.Error(err))
 		return nil, err
@@ -158,9 +158,14 @@ func (s *Sink) WriteBlockEvent(event commonEvent.BlockEvent) error {
 			s.metricCollector.observeDDLWrite(time.Since(start))
 		}
 		log.Info("redo sink send DDL event",
-			zap.String("keyspace", s.changefeedID.Keyspace()), zap.String("changefeed", s.changefeedID.Name()),
-			zap.String("query", e.GetDDLQuery()), zap.Uint64("startTs", event.GetStartTs()), zap.Uint64("commitTs", event.GetCommitTs()),
-			zap.String("schema", e.GetSchemaName()), zap.String("table", e.GetTableName()), zap.Int64("tableID", e.GetTableID()))
+			zap.String("keyspace", s.changefeedID.Keyspace()),
+			zap.String("changefeedID", s.changefeedID.Name()),
+			zap.Int64("tableID", e.GetTableID()),
+			zap.Uint64("startTs", event.GetStartTs()),
+			zap.Uint64("commitTs", event.GetCommitTs()),
+			zap.String("query", e.GetDDLQuery()),
+			zap.String("schema", e.GetSchemaName()),
+			zap.String("table", e.GetTableName()))
 	}
 	return nil
 }
@@ -223,7 +228,7 @@ func (s *Sink) Close() {
 		if err := s.ddlWriter.Close(); err != nil && !errors.Is(err, context.Canceled) {
 			log.Error("redo sink fails to close ddl writer",
 				zap.String("keyspace", s.changefeedID.Keyspace()),
-				zap.String("changefeed", s.changefeedID.Name()),
+				zap.String("changefeedID", s.changefeedID.Name()),
 				zap.Error(err))
 		}
 	}
@@ -231,7 +236,7 @@ func (s *Sink) Close() {
 		if err := s.dmlWriter.Close(); err != nil && !errors.Is(err, context.Canceled) {
 			log.Error("redo sink fails to close dml writer",
 				zap.String("keyspace", s.changefeedID.Keyspace()),
-				zap.String("changefeed", s.changefeedID.Name()),
+				zap.String("changefeedID", s.changefeedID.Name()),
 				zap.Error(err))
 		}
 	}
@@ -240,7 +245,7 @@ func (s *Sink) Close() {
 	}
 	log.Info("redo sink closed",
 		zap.String("keyspace", s.changefeedID.Keyspace()),
-		zap.String("changefeed", s.changefeedID.Name()),
+		zap.String("changefeedID", s.changefeedID.Name()),
 		zap.Duration("duration", time.Since(start)))
 }
 

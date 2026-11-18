@@ -30,7 +30,8 @@ func (e *DispatcherManager) TrackMergeOperator(req *heartbeatpb.MergeDispatcherR
 	mergedID := common.NewDispatcherIDFromPB(req.MergedDispatcherID)
 	if mergedID.IsZero() {
 		log.Warn("ignore merge operator with invalid merged dispatcher ID",
-			zap.Stringer("changefeedID", e.changefeedID),
+			zap.String("keyspace", e.changefeedID.Keyspace()),
+			zap.String("changefeedID", e.changefeedID.Name()),
 			zap.Int64("mode", req.Mode))
 		return
 	}
@@ -56,7 +57,8 @@ func (e *DispatcherManager) MaybeCleanupMergeOperator(req *heartbeatpb.MergeDisp
 		return
 	}
 	log.Info("cleanup merge operator because merged dispatcher not found",
-		zap.Stringer("changefeedID", e.changefeedID),
+		zap.String("keyspace", e.changefeedID.Keyspace()),
+		zap.String("changefeedID", e.changefeedID.Name()),
 		zap.String("dispatcherID", mergedID.String()),
 		zap.Int64("mode", req.Mode))
 	e.RemoveMergeOperator(mergedID)
@@ -73,7 +75,8 @@ func (e *DispatcherManager) cleanupFinishedMergeOperators() {
 		}
 		mergedID := common.NewDispatcherIDFromPB(req.MergedDispatcherID)
 		log.Info("cleanup finished merge operator",
-			zap.Stringer("changefeedID", e.changefeedID),
+			zap.String("keyspace", e.changefeedID.Keyspace()),
+			zap.String("changefeedID", e.changefeedID.Name()),
 			zap.String("dispatcherID", mergedID.String()),
 			zap.Int64("mode", req.Mode))
 		e.RemoveMergeOperator(mergedID)
