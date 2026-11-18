@@ -31,6 +31,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/filter"
 	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/node"
+	"github.com/pingcap/ticdc/pkg/ordering"
 	"github.com/pingcap/ticdc/pkg/pdutil"
 	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/ticdc/utils/notifyqueue"
@@ -418,7 +419,7 @@ func (c *eventBroker) tickTableTriggerDispatchers(ctx context.Context) error {
 					ID:   stat.info.GetTableSpan().KeyspaceID,
 					Name: stat.info.GetChangefeedID().Keyspace(),
 				}
-				ddlEvents, endTs, err := c.schemaStore.FetchTableTriggerDDLEvents(keyspaceMeta, key.(common.DispatcherID), stat.filter, startTs, 100)
+				ddlEvents, endTs, err := c.schemaStore.FetchTableTriggerDDLEvents(keyspaceMeta, key.(common.DispatcherID), stat.filter, stat.txnOrderMatcher, startTs, 100)
 				if err != nil {
 					log.Error("table trigger ddl events fetch failed", zap.Uint32("keyspaceID", stat.info.GetTableSpan().KeyspaceID), zap.Stringer("dispatcherID", stat.id), zap.Error(err))
 					return true
@@ -1694,6 +1695,11 @@ func (c *eventBroker) tryGetOrSetChangefeedStatus(info DispatcherInfo) (*changef
 	// changefeed first, which closes all related dispatchers and removes the old
 	// changefeedStatus before a new one is created. So within one changefeedStatus
 	// lifecycle we expect filter config and timezone to stay stable.
+	txnOrderMatcher, err := ordering.NewTxnOrderMatcher(filterConfig.TxnOrderTables, filterConfig.CaseSensitive)
+	if err != nil {
+		return nil, err
+	}
+
 	changefeedFilter, err := filter.GetSharedFilterStorage().GetOrSetFilter(
 		changefeedID, filterConfig, c.timezone)
 	if err != nil {
@@ -1703,6 +1709,7 @@ func (c *eventBroker) tryGetOrSetChangefeedStatus(info DispatcherInfo) (*changef
 	status := newChangefeedStatus(changefeedID, info.GetSyncPointInterval())
 	status.lowLatencyMode = info.IsLowLatencyMode()
 	status.filter = changefeedFilter
+	status.txnOrderMatcher = txnOrderMatcher
 	status.mounter = event.NewMounter(c.tz, info.GetIntegrity())
 	actual, loaded := c.changefeedMap.LoadOrStore(changefeedID, status)
 	if loaded {

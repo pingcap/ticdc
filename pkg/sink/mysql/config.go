@@ -31,6 +31,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/ordering"
 	"github.com/pingcap/ticdc/pkg/security"
 	"github.com/pingcap/ticdc/pkg/sink/sqlmodel"
 	"github.com/pingcap/ticdc/pkg/util"
@@ -100,9 +101,9 @@ const (
 )
 
 type Config struct {
-	TxnOrderFilter tfilter.Filter `json:"-"`
-	sinkURI        *url.URL
-	WorkerCount    int
+	TxnOrderMatcher *ordering.TxnOrderMatcher `json:"-"`
+	sinkURI         *url.URL
+	WorkerCount     int
 	// workerCountSpecified indicates whether WorkerCount is explicitly set by user via sink URI or changefeed config.
 	// It is used to avoid overriding user configuration when applying downstream-specific defaults.
 	workerCountSpecified   bool
@@ -297,7 +298,7 @@ func (c *Config) Apply(
 
 	if cfg != nil {
 		c.mergeConfig(cfg)
-		c.TxnOrderFilter, err = config.ParseTxnOrderTables(cfg.SinkConfig.GetTxnOrderTables(scheme), cfg.CaseSensitive)
+		c.TxnOrderMatcher, err = ordering.NewTxnOrderMatcher(cfg.SinkConfig.GetTxnOrderTables(scheme), cfg.CaseSensitive)
 		if err != nil {
 			return err
 		}

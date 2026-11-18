@@ -515,8 +515,8 @@ func TestApplyTxnOrderTables(t *testing.T) {
 	}
 	cfg := New()
 	require.NoError(t, cfg.Apply(uri, common.NewChangefeedID4Test("test", "ordered"), changefeedConfig))
-	require.True(t, cfg.TxnOrderFilter.MatchTable("APP", "orders"))
-	require.False(t, cfg.TxnOrderFilter.MatchTable("app", "orders"))
+	require.True(t, cfg.TxnOrderMatcher.Match("APP", "orders"))
+	require.False(t, cfg.TxnOrderMatcher.Match("app", "orders"))
 	changefeedConfig.SinkConfig.MySQLConfig.TxnOrderTables = []string{"invalid"}
 	require.ErrorContains(t, New().Apply(uri, common.NewChangefeedID4Test("test", "invalid"), changefeedConfig), "txn-order-tables")
 }

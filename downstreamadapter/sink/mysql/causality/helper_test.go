@@ -18,7 +18,7 @@ import (
 
 	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
-	"github.com/pingcap/ticdc/pkg/config"
+	"github.com/pingcap/ticdc/pkg/ordering"
 	timodel "github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/tidb/pkg/parser/ast"
 	"github.com/pingcap/tidb/pkg/parser/mysql"
@@ -44,7 +44,7 @@ func TestTxnOrderTableKeys(t *testing.T) {
 	}
 	first, second := makeEvent(1), makeEvent(2)
 	require.NotEqual(t, ConflictKeys(first, nil), ConflictKeys(second, nil))
-	f, err := config.ParseTxnOrderTables([]string{"test.ordered"}, false)
+	f, err := ordering.NewTxnOrderMatcher([]string{"test.ordered"}, false)
 	require.NoError(t, err)
 	want := map[uint64]struct{}{uint64(100) | (1 << 63): {}}
 	require.Equal(t, want, ConflictKeys(first, f))

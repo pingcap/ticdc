@@ -23,11 +23,54 @@ import (
 	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
-	"github.com/pingcap/ticdc/pkg/config"
+	"github.com/pingcap/ticdc/pkg/ordering"
 	"github.com/pingcap/ticdc/pkg/sink/mysql"
 	"github.com/pingcap/tidb/pkg/sessionctx/vardef"
 	"github.com/stretchr/testify/require"
 )
+
+func TestTxnOrderTablesFlushBeforeOrderedEvent(t *testing.T) {
+	helper := commonEvent.NewEventTestHelper(t)
+	defer helper.Close()
+	helper.DDL2Job("CREATE TABLE test.regular (id INT PRIMARY KEY)")
+	helper.DDL2Job("CREATE TABLE test.ordered (id INT PRIMARY KEY)")
+	events := []*commonEvent.DMLEvent{
+		helper.DML2Event("test", "regular", "INSERT INTO test.regular VALUES (1)"),
+		helper.DML2Event("test", "regular", "INSERT INTO test.regular VALUES (2)"),
+		helper.DML2Event("test", "ordered", "INSERT INTO test.ordered VALUES (1)"),
+		helper.DML2Event("test", "regular", "INSERT INTO test.regular VALUES (3)"),
+	}
+	ctx, sink, mock := getMysqlSink()
+	sink.maxTxnRows = len(events)
+	sink.cfg.BatchDMLEnable = false
+	sink.cfg.MultiStmtEnable = false
+	sink.cfg.SafeMode = false
+	var err error
+	sink.cfg.TxnOrderMatcher, err = ordering.NewTxnOrderMatcher([]string{"test.ordered"}, false)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		mock.ExpectClose()
+		sink.Close()
+		require.NoError(t, mock.ExpectationsWereMet())
+	})
+
+	mock.ExpectBegin()
+	mock.ExpectExec("INSERT INTO `test`.`regular` (`id`) VALUES (?)").WithArgs(1).WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec("INSERT INTO `test`.`regular` (`id`) VALUES (?)").WithArgs(2).WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectCommit()
+	mock.ExpectBegin()
+	mock.ExpectExec("INSERT INTO `test`.`ordered` (`id`) VALUES (?)").WithArgs(1).WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectCommit()
+	mock.ExpectBegin()
+	mock.ExpectExec("INSERT INTO `test`.`regular` (`id`) VALUES (?)").WithArgs(3).WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectCommit()
+
+	// Preload one mixed batch so queue timing cannot hide the regular -> ordered boundary.
+	input := sink.conflictDetector.GetOutChByCacheID(0)
+	input.Push(events...)
+	input.Close()
+	require.NoError(t, sink.runDMLWriter(ctx, 0))
+}
 
 func TestTxnOrderTablesBacklog(t *testing.T) {
 	helper := commonEvent.NewEventTestHelper(t)
@@ -51,7 +94,7 @@ func TestTxnOrderTablesBacklog(t *testing.T) {
 			cfg.BatchDMLEnable = false
 			cfg.SafeMode = false
 			cfg.DMLMaxRetry = 1
-			cfg.TxnOrderFilter, err = config.ParseTxnOrderTables([]string{"test.ordered"}, false)
+			cfg.TxnOrderMatcher, err = ordering.NewTxnOrderMatcher([]string{"test.ordered"}, false)
 			require.NoError(t, err)
 			ctx, cancel := context.WithCancel(context.Background())
 			sink := NewMySQLSink(ctx, common.NewChangefeedID4Test("test", fmt.Sprint(workers)), cfg, db, false, false, time.Minute, common.DefaultKeyspaceID)

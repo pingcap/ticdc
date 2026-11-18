@@ -33,6 +33,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/filter"
 	"github.com/pingcap/ticdc/pkg/node"
+	"github.com/pingcap/ticdc/pkg/ordering"
 	"github.com/pingcap/ticdc/pkg/routing"
 	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/ticdc/utils"
@@ -106,7 +107,11 @@ func (c *Controller) FinishBootstrap(
 	if isMysqlCompatibleBackend {
 		txnOrderTables = c.replicaConfig.Sink.GetTxnOrderTables("mysql")
 	}
-	f, err := filter.NewFilterWithTxnOrderTables(c.replicaConfig.Filter, "", util.GetOrZero(c.replicaConfig.CaseSensitive), util.GetOrZero(c.replicaConfig.ForceReplicate), txnOrderTables)
+	txnOrderMatcher, err := ordering.NewTxnOrderMatcher(txnOrderTables, util.GetOrZero(c.replicaConfig.CaseSensitive))
+	if err != nil {
+		return nil, err
+	}
+	f, err := filter.NewFilter(c.replicaConfig.Filter, "", util.GetOrZero(c.replicaConfig.CaseSensitive), util.GetOrZero(c.replicaConfig.ForceReplicate))
 	if err != nil {
 		log.Error("load table from scheme store failed",
 			zap.String("changefeed", c.changefeedID.Name()),
@@ -114,7 +119,7 @@ func (c *Controller) FinishBootstrap(
 		return nil, err
 	}
 	schemaStore := appcontext.GetService[schemastore.SchemaStore](appcontext.SchemaStore)
-	tables, err := c.loadTables(ctx, startTs, schemaStore, f)
+	tables, err := c.loadTables(ctx, startTs, schemaStore, f, txnOrderMatcher)
 	if err != nil {
 		log.Error("load table from scheme store failed",
 			zap.String("changefeed", c.changefeedID.Name()),
@@ -128,7 +133,7 @@ func (c *Controller) FinishBootstrap(
 		redoSchemaInfos    map[int64]*heartbeatpb.SchemaInfo
 	)
 	if c.enableRedo {
-		redoTables, err = c.loadTables(ctx, redoStartTs, schemaStore, f)
+		redoTables, err = c.loadTables(ctx, redoStartTs, schemaStore, f, txnOrderMatcher)
 		if err != nil {
 			log.Error("load table from scheme store failed",
 				zap.String("changefeed", c.changefeedID.Name()),
@@ -138,13 +143,13 @@ func (c *Controller) FinishBootstrap(
 	}
 
 	// Step 3: Build working task map from bootstrap responses and Process tables and build schema info
-	addedTables, err := c.loadBootstrapAddedTables(allNodesResp, tables, startTs, common.DefaultMode, schemaStore, f)
+	addedTables, err := c.loadBootstrapAddedTables(allNodesResp, tables, startTs, common.DefaultMode, schemaStore, f, txnOrderMatcher)
 	if err != nil {
 		return nil, err
 	}
 	var redoAddedTables map[int64]bootstrapAddedTable
 	if c.enableRedo {
-		redoAddedTables, err = c.loadBootstrapAddedTables(allNodesResp, redoTables, redoStartTs, common.RedoMode, schemaStore, f)
+		redoAddedTables, err = c.loadBootstrapAddedTables(allNodesResp, redoTables, redoStartTs, common.RedoMode, schemaStore, f, txnOrderMatcher)
 		if err != nil {
 			return nil, err
 		}
@@ -154,11 +159,11 @@ func (c *Controller) FinishBootstrap(
 		common.RedoMode:    redoAddedTables,
 	}
 	if len(txnOrderTables) != 0 {
-		if err := verifyTxnOrderBootstrapSpans(allNodesResp, tables, addedTables, common.DefaultMode, f); err != nil {
+		if err := verifyTxnOrderBootstrapSpans(allNodesResp, tables, addedTables, common.DefaultMode, txnOrderMatcher); err != nil {
 			return nil, err
 		}
 		if c.enableRedo {
-			if err := verifyTxnOrderBootstrapSpans(allNodesResp, redoTables, redoAddedTables, common.RedoMode, f); err != nil {
+			if err := verifyTxnOrderBootstrapSpans(allNodesResp, redoTables, redoAddedTables, common.RedoMode, txnOrderMatcher); err != nil {
 				return nil, err
 			}
 		}
@@ -503,6 +508,7 @@ func (c *Controller) loadBootstrapAddedTables(
 	mode int64,
 	schemaStore schemastore.SchemaStore,
 	f filter.Filter,
+	txnOrderMatcher *ordering.TxnOrderMatcher,
 ) (map[int64]bootstrapAddedTable, error) {
 	knownTables := buildTableSplitMap(tables)
 	candidates := make(map[int64]uint64)
@@ -537,7 +543,7 @@ func (c *Controller) loadBootstrapAddedTables(
 	addedTables := make(map[int64]bootstrapAddedTable)
 	// Keep tracking each candidate after an add: a later drop can invalidate it.
 	for cursor := startTs; cursor < endTs; {
-		events, resolvedTs, err := schemaStore.FetchTableTriggerDDLEvents(c.keyspaceMeta, dispatcherID, f, cursor, 100)
+		events, resolvedTs, err := schemaStore.FetchTableTriggerDDLEvents(c.keyspaceMeta, dispatcherID, f, txnOrderMatcher, cursor, 100)
 		if err != nil {
 			return nil, err
 		}
@@ -631,8 +637,8 @@ func (c *Controller) createSpanReplication(spanInfo *heartbeatpb.BootstrapTableS
 	)
 }
 
-func (c *Controller) loadTables(ctx context.Context, startTs uint64, schemaStore schemastore.SchemaStore, f filter.Filter) ([]commonEvent.Table, error) {
-	return schemaStore.GetAllPhysicalTables(ctx, c.keyspaceMeta, startTs, f)
+func (c *Controller) loadTables(ctx context.Context, startTs uint64, schemaStore schemastore.SchemaStore, f filter.Filter, txnOrderMatcher *ordering.TxnOrderMatcher) ([]commonEvent.Table, error) {
+	return schemaStore.GetAllPhysicalTables(ctx, c.keyspaceMeta, startTs, f, txnOrderMatcher)
 }
 
 func verifyTxnOrderBootstrapSpans(
@@ -640,11 +646,11 @@ func verifyTxnOrderBootstrapSpans(
 	tables []commonEvent.Table,
 	addedTables map[int64]bootstrapAddedTable,
 	mode int64,
-	f filter.Filter,
+	txnOrderMatcher *ordering.TxnOrderMatcher,
 ) error {
 	orderedTables := make(map[int64]struct{})
 	addTable := func(table commonEvent.Table) {
-		if table.SchemaTableName != nil && f.ShouldKeepTxnOrder(table.SchemaName, table.TableName) {
+		if table.SchemaTableName != nil && txnOrderMatcher.Match(table.SchemaName, table.TableName) {
 			orderedTables[table.TableID] = struct{}{}
 		}
 	}

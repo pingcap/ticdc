@@ -24,6 +24,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
+	"github.com/pingcap/ticdc/pkg/ordering"
 	"github.com/pingcap/ticdc/pkg/redo/reader"
 	mysqlsink "github.com/pingcap/ticdc/pkg/sink/mysql"
 	timodel "github.com/pingcap/tidb/pkg/meta/model"
@@ -43,7 +44,7 @@ func TestTxnOrderRedoReplay(t *testing.T) {
 	cfg.MultiStmtEnable = false
 	cfg.BatchDMLEnable = false
 	cfg.DMLMaxRetry = 1
-	cfg.TxnOrderFilter, err = config.ParseTxnOrderTables([]string{"test.ordered"}, false)
+	cfg.TxnOrderMatcher, err = ordering.NewTxnOrderMatcher([]string{"test.ordered"}, false)
 	require.NoError(t, err)
 	ctx, cancel := context.WithCancel(context.Background())
 	sink := dmysql.NewMySQLSink(ctx, common.NewChangefeedID4Test("test", "ordered-redo"), cfg, db, false, false, time.Minute, 0)
@@ -59,7 +60,7 @@ func TestTxnOrderRedoReplay(t *testing.T) {
 	ap := NewRedoApplier(&RedoApplierConfig{})
 	ap.mysqlSink = sink
 	ap.needRecoveryInfo = false
-	ap.txnOrderFilter = cfg.TxnOrderFilter
+	ap.txnOrderMatcher = cfg.TxnOrderMatcher
 	defer ap.spillStore.Cleanup()
 
 	// Spill rows are restored as complete table transactions, even above max-txn-row.

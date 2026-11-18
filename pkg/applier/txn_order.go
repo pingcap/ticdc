@@ -28,13 +28,13 @@ import (
 
 // verifyRedoTable never infers a source name from a lossy routing expression.
 func (ra *RedoApplier) verifyRedoTable(source, target *common.TableName) error {
-	if ra.txnOrderFilter == nil {
+	if ra.txnOrderMatcher == nil {
 		return nil
 	}
 	if source != nil {
 		return ra.verifyTxnOrderTable(source)
 	}
-	if target != nil && ra.hasTableRoute && !ra.txnOrderFilter.MatchTable(target.Schema, target.Table) {
+	if target != nil && ra.hasTableRoute && !ra.txnOrderMatcher.Match(target.Schema, target.Table) {
 		return errors.ErrInvalidReplicaConfig.GenWithStackByArgs(
 			"routed redo log lacks source table identity; use txn-order-tables matching the recorded target names and omit routing rules")
 	}
@@ -42,7 +42,7 @@ func (ra *RedoApplier) verifyRedoTable(source, target *common.TableName) error {
 }
 
 func (ra *RedoApplier) verifyTxnOrderDDL(ctx context.Context, ddl *commonEvent.RedoDDLEvent) error {
-	if ra.txnOrderFilter == nil {
+	if ra.txnOrderMatcher == nil {
 		return nil
 	}
 	if len(ddl.Tables) != 0 {
@@ -131,7 +131,7 @@ func (ra *RedoApplier) verifyLegacyMultiTableDDL(ctx context.Context, ddl *commo
 				if err := ra.verifyRedoTable(nil, &target); err != nil {
 					return err
 				}
-				if !ra.txnOrderFilter.MatchTable(target.Schema, target.Table) {
+				if !ra.txnOrderMatcher.Match(target.Schema, target.Table) {
 					continue
 				}
 				target.IsPartition, err = ra.mysqlSink.IsTablePartitioned(ctx, old.Schema, old.Table)

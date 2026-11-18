@@ -20,14 +20,13 @@ import (
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
-	"github.com/pingcap/ticdc/pkg/config"
-	"github.com/pingcap/ticdc/pkg/filter"
 	"github.com/pingcap/ticdc/pkg/node"
+	"github.com/pingcap/ticdc/pkg/ordering"
 	"github.com/stretchr/testify/require"
 )
 
 func TestTxnOrderBootstrapSpans(t *testing.T) {
-	f, err := filter.NewFilterWithTxnOrderTables(config.NewDefaultFilterConfig(), "", false, false, []string{"test.ordered"})
+	f, err := ordering.NewTxnOrderMatcher([]string{"test.ordered"}, false)
 	require.NoError(t, err)
 	tables := []commonEvent.Table{{TableID: 1, SchemaTableName: &commonEvent.SchemaTableName{SchemaName: "test", TableName: "ordered"}}}
 	whole := common.TableIDToComparableSpan(0, 1)

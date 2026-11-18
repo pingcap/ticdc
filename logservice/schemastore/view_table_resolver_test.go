@@ -61,7 +61,7 @@ func TestCreateViewCanonicalSourceRouting(t *testing.T) {
 			snap := storage.db.NewSnapshot()
 			raw := readPersistedDDLEvent(snap, job.BinlogInfo.FinishedTS)
 			require.NoError(t, snap.Close())
-			ddl, ok, err := buildDDLEvent(&raw, nil, common.DDLSpanTableID)
+			ddl, ok, err := buildDDLEvent(&raw, nil, nil, common.DDLSpanTableID)
 			require.NoError(t, err)
 			require.True(t, ok)
 			// The persisted normalization is useful with routing disabled too.

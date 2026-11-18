@@ -22,7 +22,6 @@ import (
 	bf "github.com/pingcap/ticdc/pkg/binlog-filter"
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/config"
-	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/util"
 	timodel "github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/tidb/pkg/util/chunk"
@@ -77,11 +76,6 @@ type Filter interface {
 	IsForceReplicateEnabled() bool
 	// Verify validates table constraints during changefeed creation and updates.
 	Verify(tableInfos []*common.TableInfo) error
-	// VerifyTxnOrderTable rejects eligible partitioned tables selected for ordering.
-	// The caller must ensure that the table is eligible for replication.
-	VerifyTxnOrderTable(tableInfo *common.TableInfo) error
-	// ShouldKeepTxnOrder reports whether a table requires complete, ordered transactions.
-	ShouldKeepTxnOrder(schema, table string) bool
 }
 
 type DMLFilterContext struct {
@@ -91,8 +85,7 @@ type DMLFilterContext struct {
 // filter implements Filter.
 type filter struct {
 	// tableFilter is used to filter in dml/ddl event by table name.
-	tableFilter    tfilter.Filter
-	txnOrderFilter tfilter.Filter
+	tableFilter tfilter.Filter
 	// dmlExprFilter is used to filter out dml event by its columns value.
 	dmlExprFilter *dmlExprFilter
 	// sqlEventFilter is used to filter out dml/ddl event by its type or query.
@@ -107,16 +100,6 @@ type filter struct {
 
 // NewFilter creates a filter.
 func NewFilter(cfg *config.FilterConfig, tz string, caseSensitive bool, forceReplicate bool) (Filter, error) {
-	return NewFilterWithTxnOrderTables(cfg, tz, caseSensitive, forceReplicate, nil)
-}
-
-// NewFilterWithTxnOrderTables also validates tables selected for transaction ordering.
-// Callers must pass ordering rules only for MySQL-compatible sinks.
-func NewFilterWithTxnOrderTables(cfg *config.FilterConfig, tz string, caseSensitive bool, forceReplicate bool, txnOrderTables []string) (Filter, error) {
-	txnOrderFilter, err := config.ParseTxnOrderTables(txnOrderTables, caseSensitive)
-	if err != nil {
-		return nil, err
-	}
 	f, err := VerifyTableRules(cfg)
 	if err != nil {
 		return nil, err
@@ -140,7 +123,6 @@ func NewFilterWithTxnOrderTables(cfg *config.FilterConfig, tz string, caseSensit
 	}
 	return &filter{
 		tableFilter:             f,
-		txnOrderFilter:          txnOrderFilter,
 		dmlExprFilter:           dmlExprFilter,
 		sqlEventFilter:          sqlEventFilter,
 		updateOnlyColumnsFilter: updateOnlyColumnsFilter,
@@ -182,9 +164,6 @@ func (f *filter) ShouldIgnoreDMLByEventType(dmlType common.RowType, tableInfo *c
 
 	if f.ShouldIgnoreTable(tableInfo.GetSchemaName(), tableInfo.GetTableName()) {
 		return true, nil
-	}
-	if err := f.VerifyTxnOrderTable(tableInfo); err != nil {
-		return false, err
 	}
 
 	ignoreByEventType, err := f.sqlEventFilter.shouldSkipDML(tableInfo.GetSchemaName(), tableInfo.GetTableName(), dmlType)
@@ -252,30 +231,8 @@ func (f *filter) ShouldIgnoreSchema(schema string) bool {
 }
 
 func (f *filter) Verify(tableInfos []*common.TableInfo) error {
-	if f.txnOrderFilter == nil {
-		return nil
-	}
-	for _, tableInfo := range tableInfos {
-		if f.IsEligibleTable(tableInfo) {
-			if err := f.VerifyTxnOrderTable(tableInfo); err != nil {
-				return err
-			}
-		}
-	}
 	return nil
 	// return f.dmlExprFilter.verify(tableInfos)
-}
-
-func (f *filter) ShouldKeepTxnOrder(schema, table string) bool {
-	return f.txnOrderFilter != nil && !f.ShouldIgnoreTable(schema, table) && f.txnOrderFilter.MatchTable(schema, table)
-}
-
-func (f *filter) VerifyTxnOrderTable(tableInfo *common.TableInfo) error {
-	if tableInfo != nil && tableInfo.IsPartitionTable() && f.ShouldKeepTxnOrder(tableInfo.GetSchemaName(), tableInfo.GetTableName()) {
-		return errors.ErrInvalidReplicaConfig.GenWithStackByArgs(
-			"sink.mysql-config.txn-order-tables does not support partitioned table " + tableInfo.TableName.String())
-	}
-	return nil
 }
 
 func (f *filter) IsEligibleTable(tableInfo *common.TableInfo) bool {
@@ -377,7 +334,7 @@ func (s *SharedFilterStorage) GetOrSetFilter(
 		filterCfg.EventFilters = append(filterCfg.EventFilters, f)
 	}
 	// generate table filter
-	f, err := NewFilterWithTxnOrderTables(filterCfg, timeZone, cfg.CaseSensitive, cfg.ForceReplicate, cfg.TxnOrderTables)
+	f, err := NewFilter(filterCfg, timeZone, cfg.CaseSensitive, cfg.ForceReplicate)
 	if err != nil {
 		return nil, err
 	}
@@ -409,6 +366,8 @@ func isFilterConfigEqual(cfg1, cfg2 *eventpb.FilterConfig) bool {
 		return false
 	}
 
-	// Use protobuf's built-in Equal method for content comparison
-	return proto.Equal(cfg1, cfg2)
+	// Compare only the configuration that affects replication filtering.
+	return cfg1.CaseSensitive == cfg2.CaseSensitive &&
+		cfg1.ForceReplicate == cfg2.ForceReplicate &&
+		proto.Equal(cfg1.FilterConfig, cfg2.FilterConfig)
 }

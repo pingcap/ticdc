@@ -20,6 +20,7 @@ import (
 
 	"github.com/BurntSushi/toml"
 	"github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/ordering"
 	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/stretchr/testify/require"
 )
@@ -33,16 +34,16 @@ func TestTxnOrderTables(t *testing.T) {
 		require.NoError(t, err)
 		require.NoError(t, cfg.ValidateAndAdjust(uri))
 		require.False(t, util.GetOrZero(cfg.Scheduler.EnableTableAcrossNodes))
-		f, err := ParseTxnOrderTables(cfg.Sink.GetTxnOrderTables(scheme), false)
+		f, err := ordering.NewTxnOrderMatcher(cfg.Sink.GetTxnOrderTables(scheme), false)
 		require.NoError(t, err)
-		require.True(t, f.MatchTable("app", "orders"))
-		require.True(t, f.MatchTable("APP", "LEDGER_1"))
-		require.False(t, f.MatchTable("app", "ledger_skip"))
-		require.False(t, f.MatchTable("app", "other"))
-		f, err = ParseTxnOrderTables(cfg.Sink.MySQLConfig.TxnOrderTables, true)
+		require.True(t, f.Match("app", "orders"))
+		require.True(t, f.Match("APP", "LEDGER_1"))
+		require.False(t, f.Match("app", "ledger_skip"))
+		require.False(t, f.Match("app", "other"))
+		f, err = ordering.NewTxnOrderMatcher(cfg.Sink.MySQLConfig.TxnOrderTables, true)
 		require.NoError(t, err)
-		require.False(t, f.MatchTable("app", "orders"))
-		require.True(t, f.MatchTable("APP", "orders"))
+		require.False(t, f.Match("app", "orders"))
+		require.True(t, f.Match("APP", "orders"))
 		require.Equal(t, cfg.Sink.MySQLConfig.TxnOrderTables, cfg.Clone().Sink.MySQLConfig.TxnOrderTables)
 		for _, forceSplit := range []bool{false, true} {
 			cfg.Scheduler.EnableTableAcrossNodes = util.AddressOf(true)
@@ -74,7 +75,7 @@ func TestTxnOrderTables(t *testing.T) {
 		require.Nil(t, cfg.Sink.GetTxnOrderTables(uri.Scheme))
 		require.Equal(t, []string{"invalid"}, cfg.Sink.MySQLConfig.TxnOrderTables)
 	}
-	f, err := ParseTxnOrderTables(nil, false)
+	f, err := ordering.NewTxnOrderMatcher(nil, false)
 	require.NoError(t, err)
 	require.Nil(t, f)
 }

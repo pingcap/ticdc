@@ -26,13 +26,13 @@ import (
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/ordering"
 	"github.com/pingcap/ticdc/pkg/redo"
 	misc "github.com/pingcap/ticdc/pkg/redo/common"
 	"github.com/pingcap/ticdc/pkg/redo/reader"
 	codeccommon "github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"github.com/pingcap/ticdc/pkg/util"
 	timodel "github.com/pingcap/tidb/pkg/meta/model"
-	tfilter "github.com/pingcap/tidb/pkg/util/table-filter"
 	"go.uber.org/atomic"
 	"go.uber.org/zap"
 	"golang.org/x/sync/errgroup"
@@ -75,7 +75,7 @@ type RedoApplier struct {
 	appliedLogCount uint64
 
 	needRecoveryInfo bool
-	txnOrderFilter   tfilter.Filter
+	txnOrderMatcher  *ordering.TxnOrderMatcher
 	hasTableRoute    bool
 }
 
@@ -427,7 +427,7 @@ func (ra *RedoApplier) applyRow(
 }
 
 func (ra *RedoApplier) verifyTxnOrderTable(table *commonType.TableName) error {
-	if ra.txnOrderFilter != nil && table != nil && table.IsPartition && ra.txnOrderFilter.MatchTable(table.Schema, table.Table) {
+	if ra.txnOrderMatcher != nil && table != nil && table.IsPartition && ra.txnOrderMatcher.Match(table.Schema, table.Table) {
 		return errors.ErrInvalidReplicaConfig.GenWithStackByArgs(
 			"sink.mysql-config.txn-order-tables does not support partitioned table " + table.String())
 	}
@@ -540,7 +540,7 @@ func (ra *RedoApplier) Apply(egCtx context.Context) (err error) {
 	if err != nil {
 		return errors.WrapError(errors.ErrSinkURIInvalid, util.MaskSensitiveDataInURLError(err), util.MaskSensitiveDataInURIForError(ra.cfg.SinkURI))
 	}
-	ra.txnOrderFilter, err = config.ParseTxnOrderTables(ra.cfg.SinkConfig.GetTxnOrderTables(sinkURI.Scheme), ra.cfg.CaseSensitive)
+	ra.txnOrderMatcher, err = ordering.NewTxnOrderMatcher(ra.cfg.SinkConfig.GetTxnOrderTables(sinkURI.Scheme), ra.cfg.CaseSensitive)
 	if err != nil {
 		return err
 	}

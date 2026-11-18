@@ -27,7 +27,6 @@ import (
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/util"
-	tfilter "github.com/pingcap/tidb/pkg/util/table-filter"
 	"go.uber.org/zap"
 )
 
@@ -780,22 +779,6 @@ func (s *SinkConfig) GetTxnOrderTables(scheme string) []string {
 		return nil
 	}
 	return s.MySQLConfig.TxnOrderTables
-}
-
-// ParseTxnOrderTables parses ordering rules. A nil filter disables ordering.
-func ParseTxnOrderTables(rules []string, caseSensitive bool) (tfilter.Filter, error) {
-	if len(rules) == 0 {
-		return nil, nil
-	}
-	f, err := tfilter.Parse(rules)
-	if err != nil {
-		return nil, errors.WrapError(errors.ErrInvalidReplicaConfig, err,
-			"invalid sink.mysql-config.txn-order-tables")
-	}
-	if !caseSensitive {
-		f = tfilter.CaseInsensitive(f)
-	}
-	return f, nil
 }
 
 // CloudStorageConfig represents a cloud storage sink configuration

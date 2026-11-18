@@ -22,6 +22,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/filter"
+	"github.com/pingcap/ticdc/pkg/ordering"
 	"github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/tidb/pkg/parser/ast"
 	"github.com/stretchr/testify/require"
@@ -47,9 +48,11 @@ func TestTxnOrderSnapshotAndDDL(t *testing.T) {
 			snap := db.NewSnapshot()
 			defer snap.Close()
 			for _, rule := range []string{"test.ordered", "test.unmatched"} {
-				f, err := filter.NewFilterWithTxnOrderTables(config.NewDefaultFilterConfig(), "", false, false, []string{rule})
+				f, err := filter.NewFilter(config.NewDefaultFilterConfig(), "", false, false)
 				require.NoError(t, err)
-				tables, err := loadAllPhysicalTablesAtTs(snap, 100, 100, f, nil, 0)
+				matcher, err := ordering.NewTxnOrderMatcher([]string{rule}, false)
+				require.NoError(t, err)
+				tables, err := loadAllPhysicalTablesAtTs(snap, 100, 100, f, matcher, nil, 0)
 				if partitioned && rule == "test.ordered" {
 					require.ErrorContains(t, err, "txn-order-tables does not support partitioned table")
 				} else {
@@ -65,7 +68,7 @@ func TestTxnOrderSnapshotAndDDL(t *testing.T) {
 					TableID: 200, TableName: "ordered", TableInfo: tableInfo, FinishedTs: 101,
 					Query: "CREATE TABLE test.ordered (id INT PRIMARY KEY)",
 				}
-				_, _, err = buildDDLEvent(raw, f, common.DDLSpanTableID)
+				_, _, err = buildDDLEvent(raw, f, matcher, common.DDLSpanTableID)
 				if partitioned && rule == "test.ordered" {
 					require.ErrorContains(t, err, "txn-order-tables does not support partitioned table")
 				} else {
@@ -76,7 +79,9 @@ func TestTxnOrderSnapshotAndDDL(t *testing.T) {
 				return
 			}
 			// Renaming into the ordered set and acquiring a unique key must also validate.
-			f, err := filter.NewFilterWithTxnOrderTables(config.NewDefaultFilterConfig(), "", false, false, []string{"test.ordered"})
+			f, err := filter.NewFilter(config.NewDefaultFilterConfig(), "", false, false)
+			require.NoError(t, err)
+			matcher, err := ordering.NewTxnOrderMatcher([]string{"test.ordered"}, false)
 			require.NoError(t, err)
 			for _, ddlType := range []model.ActionType{model.ActionRenameTable, model.ActionAlterTablePartitioning, model.ActionAddIndex, model.ActionCreateTables, model.ActionRenameTables} {
 				raw := &PersistedDDLEvent{Type: byte(ddlType), SchemaName: "test", TableInfo: tableInfo}
@@ -85,16 +90,24 @@ func TestTxnOrderSnapshotAndDDL(t *testing.T) {
 					raw.MultipleTableInfos = []*model.TableInfo{tableInfo}
 					raw.SchemaNames = []string{"test"}
 				}
-				require.ErrorContains(t, verifyTxnOrderDDL(raw, f), "does not support partitioned table")
+				require.ErrorContains(t, verifyTxnOrderDDL(raw, f, matcher), "does not support partitioned table")
 			}
 			noKey := tableInfo.Clone()
 			noKey.PKIsHandle = false
 			noKey.Indices = nil
 			raw := &PersistedDDLEvent{SchemaName: "test", TableInfo: noKey}
-			require.NoError(t, verifyTxnOrderDDL(raw, f))
-			forced, err := filter.NewFilterWithTxnOrderTables(config.NewDefaultFilterConfig(), "", false, true, []string{"test.ordered"})
+			require.NoError(t, verifyTxnOrderDDL(raw, f, matcher))
+			forced, err := filter.NewFilter(config.NewDefaultFilterConfig(), "", false, true)
 			require.NoError(t, err)
-			require.ErrorContains(t, verifyTxnOrderDDL(raw, forced), "does not support partitioned table")
+			require.ErrorContains(t, verifyTxnOrderDDL(raw, forced, matcher), "does not support partitioned table")
+			excludedConfig := config.NewDefaultFilterConfig()
+			excludedConfig.Rules = []string{"*.*", "!test.ordered"}
+			excluded, err := filter.NewFilter(excludedConfig, "", false, false)
+			require.NoError(t, err)
+			require.NoError(t, verifyTxnOrderDDL(raw, excluded, matcher))
+			tables, err := loadAllPhysicalTablesAtTs(snap, 100, 100, excluded, matcher, nil, 0)
+			require.NoError(t, err)
+			require.Empty(t, tables)
 		})
 	}
 }

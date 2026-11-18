@@ -21,9 +21,9 @@ import (
 	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/ordering"
 	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/ticdc/utils/chann"
-	tfilter "github.com/pingcap/tidb/pkg/util/table-filter"
 	"github.com/prometheus/client_golang/prometheus"
 	"go.uber.org/atomic"
 	"go.uber.org/zap"
@@ -35,7 +35,7 @@ import (
 // have their original orders preserved. Transactions in different
 // channels can be executed concurrently.
 type ConflictDetector struct {
-	txnOrderFilter tfilter.Filter
+	txnOrderMatcher *ordering.TxnOrderMatcher
 	// resolvedTxnCaches are used to cache resolved transactions.
 	resolvedTxnCaches []txnCache
 
@@ -56,10 +56,10 @@ type ConflictDetector struct {
 
 // New creates a new ConflictDetector.
 func New(
-	numSlots uint64, opt TxnCacheOption, changefeedID common.ChangeFeedID, txnOrderFilter tfilter.Filter,
+	numSlots uint64, opt TxnCacheOption, changefeedID common.ChangeFeedID, txnOrderMatcher *ordering.TxnOrderMatcher,
 ) *ConflictDetector {
 	ret := &ConflictDetector{
-		txnOrderFilter:               txnOrderFilter,
+		txnOrderMatcher:              txnOrderMatcher,
 		resolvedTxnCaches:            make([]txnCache, opt.Count),
 		slots:                        NewSlots(numSlots),
 		notifiedNodes:                chann.NewUnlimitedChannelDefault[func()](),
@@ -102,7 +102,7 @@ func (d *ConflictDetector) Run(ctx context.Context) error {
 // ConflictKeys must be sorted by the slot index.
 func (d *ConflictDetector) Add(event *commonEvent.DMLEvent) {
 	start := time.Now()
-	hashes := ConflictKeys(event, d.txnOrderFilter)
+	hashes := ConflictKeys(event, d.txnOrderMatcher)
 	node := d.slots.AllocNode(hashes)
 
 	event.AddPostFlushFunc(func() {

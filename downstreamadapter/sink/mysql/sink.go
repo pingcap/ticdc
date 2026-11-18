@@ -227,7 +227,7 @@ func newMySQLSinkWithDBs(
 				Size:          1024,
 				BlockStrategy: causality.BlockStrategyWaitEmpty,
 			},
-			changefeedID, cfg.TxnOrderFilter),
+			changefeedID, cfg.TxnOrderMatcher),
 		isNormal:                       atomic.NewBool(true),
 		cfg:                            cfg,
 		maxTxnRows:                     cfg.MaxTxnRow,
@@ -303,6 +303,9 @@ func (s *Sink) runDMLWriter(ctx context.Context, idx int) error {
 			singleFlushStart := time.Now()
 
 			flushEvent := func(beginIndex, endIndex int, rowCount int32) error {
+				if beginIndex == endIndex {
+					return nil
+				}
 				workerHandledRows.Add(float64(rowCount))
 				err := writer.Flush(txnEvents[beginIndex:endIndex])
 				if err != nil {
@@ -313,20 +316,28 @@ func (s *Sink) runDMLWriter(ctx context.Context, idx int) error {
 				return nil
 			}
 
-			beginIndex, rowCount := 0, txnEvents[0].Len()
-			workerEventRowCount.Observe(float64(rowCount))
-			for i := 1; i < len(txnEvents); i++ {
-				workerEventRowCount.Observe(float64(txnEvents[i].Len()))
-				previousTable := txnEvents[i-1].TableInfo
-				ordered := s.cfg.TxnOrderFilter != nil && s.cfg.TxnOrderFilter.MatchTable(previousTable.GetSchemaName(), previousTable.GetTableName())
-				if ordered || rowCount+txnEvents[i].Len() > int32(s.maxTxnRows) {
+			beginIndex, rowCount := 0, int32(0)
+			for i, txnEvent := range txnEvents {
+				eventRowCount := txnEvent.Len()
+				workerEventRowCount.Observe(float64(eventRowCount))
+				tableInfo := txnEvent.TableInfo
+				if s.cfg.TxnOrderMatcher != nil && s.cfg.TxnOrderMatcher.Match(tableInfo.GetSchemaName(), tableInfo.GetTableName()) {
 					if err := flushEvent(beginIndex, i, rowCount); err != nil {
 						return errors.Trace(err)
 					}
-					beginIndex, rowCount = i, txnEvents[i].Len()
-				} else {
-					rowCount += txnEvents[i].Len()
+					if err := flushEvent(i, i+1, eventRowCount); err != nil {
+						return errors.Trace(err)
+					}
+					beginIndex, rowCount = i+1, 0
+					continue
 				}
+				if rowCount+eventRowCount > int32(s.maxTxnRows) {
+					if err := flushEvent(beginIndex, i, rowCount); err != nil {
+						return errors.Trace(err)
+					}
+					beginIndex, rowCount = i, 0
+				}
+				rowCount += eventRowCount
 			}
 			// flush last batch
 			if err := flushEvent(beginIndex, len(txnEvents), rowCount); err != nil {

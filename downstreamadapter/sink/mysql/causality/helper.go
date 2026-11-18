@@ -21,18 +21,18 @@ import (
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
+	"github.com/pingcap/ticdc/pkg/ordering"
 	"github.com/pingcap/tidb/pkg/parser/mysql"
 	"github.com/pingcap/tidb/pkg/util/chunk"
-	tfilter "github.com/pingcap/tidb/pkg/util/table-filter"
 	"go.uber.org/zap"
 )
 
 // ConflictKeys implements causality.txnEvent interface.
-func ConflictKeys(event *commonEvent.DMLEvent, txnOrderFilter tfilter.Filter) map[uint64]struct{} {
+func ConflictKeys(event *commonEvent.DMLEvent, txnOrderMatcher *ordering.TxnOrderMatcher) map[uint64]struct{} {
 	if event.Len() == 0 {
 		return nil
 	}
-	if txnOrderFilter != nil && txnOrderFilter.MatchTable(event.TableInfo.GetSchemaName(), event.TableInfo.GetTableName()) {
+	if txnOrderMatcher != nil && txnOrderMatcher.Match(event.TableInfo.GetSchemaName(), event.TableInfo.GetTableName()) {
 		// Reserve the high bit to keep table IDs separate from 32-bit row hashes.
 		return map[uint64]struct{}{uint64(event.PhysicalTableID) | (1 << 63): {}}
 	}

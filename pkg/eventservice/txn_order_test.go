@@ -18,13 +18,67 @@ import (
 	"context"
 	"testing"
 
+	"github.com/gogo/protobuf/proto"
+	"github.com/pingcap/ticdc/eventpb"
 	"github.com/pingcap/ticdc/logservice/eventstore"
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/filter"
+	"github.com/pingcap/ticdc/pkg/ordering"
 	"github.com/stretchr/testify/require"
 )
+
+func TestTxnOrderMatcherChangesIndependentlyOfFilter(t *testing.T) {
+	broker, _, _, _ := newEventBrokerForTest()
+	defer broker.close()
+	info := newMockDispatcherInfoForTest(t)
+	original, err := broker.tryGetOrSetChangefeedStatus(info)
+	require.NoError(t, err)
+	require.False(t, original.txnOrderMatcher.Match("test", "ordered"))
+
+	updated := proto.Clone(info.filterConfig).(*eventpb.FilterConfig)
+	updated.TxnOrderTables = []string{"test.ordered"}
+	data, err := proto.Marshal(updated)
+	require.NoError(t, err)
+	info.filterConfig = &eventpb.FilterConfig{}
+	require.NoError(t, proto.Unmarshal(data, info.filterConfig))
+	// Recreate changefeed-scoped state as happens after pausing for a config update.
+	broker.changefeedMap.Delete(info.GetChangefeedID())
+	current, err := broker.tryGetOrSetChangefeedStatus(info)
+	require.NoError(t, err)
+	require.Same(t, original.filter, current.filter)
+	require.True(t, current.txnOrderMatcher.Match("TEST", "ORDERED"))
+	require.False(t, current.txnOrderMatcher.Match("test", "unordered"))
+	dispatcher := newDispatcherStat(info, 1, 1, nil, current)
+	require.Same(t, current.txnOrderMatcher, dispatcher.txnOrderMatcher)
+}
+
+func TestTxnOrderPartitionValidationRespectsFiltering(t *testing.T) {
+	helper := event.NewEventTestHelper(t)
+	defer helper.Close()
+	cfg := config.NewDefaultFilterConfig()
+	cfg.Rules = []string{"test.*", "!test.excluded"}
+	f, err := filter.NewFilter(cfg, "", false, false)
+	require.NoError(t, err)
+	matcher, err := ordering.NewTxnOrderMatcher([]string{"test.ordered", "test.excluded"}, false)
+	require.NoError(t, err)
+	for _, table := range []string{"ordered", "unordered", "excluded"} {
+		t.Run(table, func(t *testing.T) {
+			tableInfo := helper.DDL2Event("CREATE TABLE test." + table + " (id INT PRIMARY KEY) PARTITION BY HASH(id) PARTITIONS 2").TableInfo
+			processor := newDMLProcessor(nil, nil, f, false, common.DefaultMode, false)
+			processor.txnOrderMatcher = matcher
+			err := processor.startTxn(common.NewDispatcherID(), tableInfo.TableName.TableID, tableInfo, 1, 2, true)
+			if table == "ordered" {
+				require.ErrorContains(t, err, "txn-order-tables does not support partitioned table")
+				require.Nil(t, processor.currentTxn)
+			} else {
+				require.NoError(t, err)
+				require.True(t, processor.currentTxn.shouldSplitTxn)
+			}
+		})
+	}
+}
 
 func TestTxnOrderTablesKeepCompleteTransactions(t *testing.T) {
 	original := config.GetGlobalServerConfig()
@@ -47,10 +101,12 @@ func TestTxnOrderTablesKeepCompleteTransactions(t *testing.T) {
 	tableID := info.GetTableSpan().TableID
 	for _, rule := range []string{"test.t", "test.other"} {
 		t.Run(rule, func(t *testing.T) {
-			f, err := filter.NewFilterWithTxnOrderTables(config.NewDefaultFilterConfig(), "", false, false, []string{rule})
+			f, err := filter.NewFilter(config.NewDefaultFilterConfig(), "", false, false)
 			require.NoError(t, err)
 			status := newChangefeedStatus(info.GetChangefeedID(), 0)
 			status.filter = f
+			status.txnOrderMatcher, err = ordering.NewTxnOrderMatcher([]string{rule}, false)
+			require.NoError(t, err)
 			disp := newDispatcherStat(info, 1, 1, nil, status)
 			makeDispatcherReady(disp)
 			schema := NewMockSchemaStore()

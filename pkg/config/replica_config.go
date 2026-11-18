@@ -26,6 +26,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/config/outdated"
 	cerror "github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/integrity"
+	"github.com/pingcap/ticdc/pkg/ordering"
 	"github.com/pingcap/ticdc/pkg/redo"
 	"github.com/pingcap/ticdc/pkg/util"
 	"go.uber.org/zap"
@@ -315,7 +316,7 @@ func (c *ReplicaConfig) ValidateAndAdjust(sinkURI *url.URL) error { // check sin
 			return err
 		}
 	}
-	txnOrderFilter, err := ParseTxnOrderTables(c.Sink.GetTxnOrderTables(GetScheme(sinkURI)), util.GetOrZero(c.CaseSensitive))
+	txnOrderMatcher, err := ordering.NewTxnOrderMatcher(c.Sink.GetTxnOrderTables(GetScheme(sinkURI)), util.GetOrZero(c.CaseSensitive))
 	if err != nil {
 		return err
 	}
@@ -361,7 +362,7 @@ func (c *ReplicaConfig) ValidateAndAdjust(sinkURI *url.URL) error { // check sin
 			return err
 		}
 	}
-	if txnOrderFilter != nil && util.GetOrZero(c.Scheduler.EnableTableAcrossNodes) {
+	if txnOrderMatcher != nil && util.GetOrZero(c.Scheduler.EnableTableAcrossNodes) {
 		// A table must have one dispatcher to preserve its transaction order.
 		return cerror.ErrInvalidReplicaConfig.FastGenByArgs(
 			"sink.mysql-config.txn-order-tables cannot be used with scheduler.enable-table-across-nodes = true")

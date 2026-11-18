@@ -24,8 +24,8 @@ import (
 	"github.com/pingcap/ticdc/downstreamadapter/sink/mysql/causality"
 	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
-	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/ordering"
 	mysqlsink "github.com/pingcap/ticdc/pkg/sink/mysql"
 	"github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/tidb/pkg/parser/ast"
@@ -34,11 +34,11 @@ import (
 )
 
 func TestRoutedRedoPreservesOrdering(t *testing.T) {
-	f, err := config.ParseTxnOrderTables([]string{"app.orders"}, false)
+	f, err := ordering.NewTxnOrderMatcher([]string{"app.orders"}, false)
 	require.NoError(t, err)
 	ap := NewRedoApplier(&RedoApplierConfig{})
 	ap.needRecoveryInfo = false
-	ap.txnOrderFilter = f
+	ap.txnOrderMatcher = f
 	ap.hasTableRoute = true
 	defer ap.spillStore.Cleanup()
 	source := &common.TableName{Schema: "app", Table: "orders", TableID: 42}
@@ -106,7 +106,7 @@ func TestRedoMultiTablePartitionMetadata(t *testing.T) {
 		ap := NewRedoApplier(&RedoApplierConfig{})
 		ap.needRecoveryInfo = false
 		ap.hasTableRoute = true
-		ap.txnOrderFilter, err = config.ParseTxnOrderTables([]string{"app.ordered_*"}, false)
+		ap.txnOrderMatcher, err = ordering.NewTxnOrderMatcher([]string{"app.ordered_*"}, false)
 		require.NoError(t, err)
 		// No sink is installed: rejection must happen before any downstream work.
 		require.ErrorContains(t, ap.applyDDL(context.Background(), restored, 100), "does not support partitioned table")
@@ -135,7 +135,7 @@ func TestLegacyRedoRenameChecksEveryTable(t *testing.T) {
 			ap := NewRedoApplier(&RedoApplierConfig{})
 			ap.mysqlSink = sink
 			ap.needRecoveryInfo = false
-			ap.txnOrderFilter, err = config.ParseTxnOrderTables([]string{"test.ordered_*"}, false)
+			ap.txnOrderMatcher, err = ordering.NewTxnOrderMatcher([]string{"test.ordered_*"}, false)
 			require.NoError(t, err)
 			defer ap.spillStore.Cleanup()
 			query := "SELECT EXISTS(SELECT 1 FROM information_schema.partitions WHERE table_schema = ? AND table_name = ? AND partition_name IS NOT NULL)"
@@ -183,7 +183,7 @@ func TestLegacyRedoCreateTablesChecksEveryPartitionClause(t *testing.T) {
 	ap := NewRedoApplier(&RedoApplierConfig{})
 	defer ap.spillStore.Cleanup()
 	var err error
-	ap.txnOrderFilter, err = config.ParseTxnOrderTables([]string{"test.ordered_*"}, false)
+	ap.txnOrderMatcher, err = ordering.NewTxnOrderMatcher([]string{"test.ordered_*"}, false)
 	require.NoError(t, err)
 	ddl := &commonEvent.RedoDDLEvent{Type: byte(model.ActionCreateTables), DDL: &commonEvent.DDLEventInRedoLog{
 		Query: "CREATE TABLE test.regular(id INT PRIMARY KEY); CREATE TABLE test.ordered_p(id INT PRIMARY KEY) PARTITION BY HASH(id) PARTITIONS 2",
