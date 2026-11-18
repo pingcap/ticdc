@@ -29,6 +29,7 @@ import (
 	"github.com/pingcap/log"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	"github.com/pingcap/ticdc/pkg/config"
+	"github.com/pingcap/ticdc/pkg/etcd"
 	"github.com/pingcap/ticdc/pkg/keyspace"
 	"github.com/pingcap/ticdc/pkg/server/mock"
 	"github.com/stretchr/testify/require"
@@ -50,8 +51,12 @@ func TestLogLevelRouteAuthenticationRealm(t *testing.T) {
 	log.SetLevel(zapcore.InfoLevel)
 
 	ctrl := gomock.NewController(t)
+	apiServer := mock.NewMockServer(ctrl)
+	etcdClient := etcd.NewMockCDCEtcdClient(ctrl)
+	apiServer.EXPECT().GetEtcdClient().Return(etcdClient)
+	etcdClient.EXPECT().GetEtcdClient().Return(nil)
 	router := gin.New()
-	RegisterOpenAPIV2Routes(router, NewOpenAPIV2(mock.NewMockServer(ctrl)))
+	RegisterOpenAPIV2Routes(router, NewOpenAPIV2(apiServer))
 
 	request := httptest.NewRequest(
 		http.MethodPost,
@@ -62,8 +67,7 @@ func TestLogLevelRouteAuthenticationRealm(t *testing.T) {
 	response := httptest.NewRecorder()
 	router.ServeHTTP(response, request)
 
-	require.Equal(t, http.StatusBadRequest, response.Code, response.Body.String())
-	require.Contains(t, response.Body.String(), "missing required query parameter keyspace")
+	require.Equal(t, http.StatusUnauthorized, response.Code, response.Body.String())
 	require.Equal(t, zapcore.InfoLevel, log.GetLevel())
 }
 
