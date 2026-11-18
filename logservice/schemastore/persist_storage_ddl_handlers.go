@@ -2523,7 +2523,7 @@ func buildCreateTableQueryForMaterializedView(rawEvent *PersistedDDLEvent) strin
 		if col.Hidden {
 			continue
 		}
-		definition := fmt.Sprintf("%s %s", common.QuoteName(col.Name.O), col.FieldType.CompactStr())
+		definition := fmt.Sprintf("%s %s", common.QuoteName(col.Name.O), col.FieldType.String())
 		if mysql.HasNotNullFlag(col.GetFlag()) || mysql.HasPriKeyFlag(col.GetFlag()) {
 			definition += " NOT NULL"
 		}
