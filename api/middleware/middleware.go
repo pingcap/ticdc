@@ -271,3 +271,8 @@ func GetKeyspaceFromContext(c *gin.Context) *keyspacepb.KeyspaceMeta {
 	}
 	return meta
 }
+
+// SetKeyspaceInContext stores keyspace metadata for downstream middleware.
+func SetKeyspaceInContext(c *gin.Context, meta *keyspacepb.KeyspaceMeta) {
+	c.Set(ctxKeyspaceKey, meta)
+}

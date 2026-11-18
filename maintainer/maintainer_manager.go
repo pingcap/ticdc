@@ -74,9 +74,6 @@ func NewMaintainerManager(
 	return m
 }
 
-<<<<<<< HEAD
-// recvMessages is the message handler for maintainer manager
-=======
 func logInvalidMaintainerMessage(msg *messaging.TargetMessage, reason string) {
 	log.Warn("ignore invalid maintainer message",
 		zap.String("from", msg.From.String()),
@@ -97,8 +94,7 @@ func (m *Manager) recvMaintainerMessage(ctx context.Context, msg *messaging.Targ
 	return m.dispatcherMaintainerMessage(ctx, common.NewChangefeedIDFromPB(req.ChangefeedID), msg)
 }
 
-// recvMessages is the message handler for maintainer manager.
->>>>>>> 1c011427d (*: harden API access and downstream query handling (#6581))
+// recvMessages is the message handler for maintainer manager
 func (m *Manager) recvMessages(ctx context.Context, msg *messaging.TargetMessage) error {
 	if len(msg.Message) == 0 {
 		logInvalidMaintainerMessage(msg, "missing payload")
@@ -108,13 +104,7 @@ func (m *Manager) recvMessages(ctx context.Context, msg *messaging.TargetMessage
 	// Coordinator related messages
 	case messaging.TypeAddMaintainerRequest,
 		messaging.TypeRemoveMaintainerRequest,
-<<<<<<< HEAD
 		messaging.TypeCoordinatorBootstrapRequest:
-=======
-		messaging.TypeCoordinatorBootstrapRequest,
-		messaging.TypeSetNodeLivenessRequest,
-		messaging.TypeSetDispatcherDrainTargetRequest,
-		messaging.TypeNodeHeartbeatResponse:
 		switch msg.Type {
 		case messaging.TypeAddMaintainerRequest:
 			if msg.Message[0].(*heartbeatpb.AddMaintainerRequest).Id == nil {
@@ -127,7 +117,6 @@ func (m *Manager) recvMessages(ctx context.Context, msg *messaging.TargetMessage
 				return nil
 			}
 		}
->>>>>>> 1c011427d (*: harden API access and downstream query handling (#6581))
 		select {
 		case <-ctx.Done():
 			return ctx.Err()

@@ -44,9 +44,9 @@ import (
 const checkRunningAddIndexSQL = `
 SELECT *
 FROM information_schema.ddl_jobs
-WHERE DB_NAME = ?
-    AND TABLE_NAME = ?
-    AND JOB_TYPE LIKE "add index%"
+WHERE DB_NAME = "%s"
+    AND TABLE_NAME = "%s"
+    AND JOB_TYPE LIKE "add index%%"
     AND (STATE = "running" OR STATE = "queueing")
 LIMIT 1;
 `
@@ -54,25 +54,14 @@ LIMIT 1;
 // Ref: https://github.com/pingcap/tidb/issues/55725
 const checkRunningAddIndexSQLForOldVersion = `
 ADMIN SHOW DDL JOBS 1
-<<<<<<< HEAD
-WHERE DB_NAME = "%s"
-    AND TABLE_NAME = "%s"
-    AND JOB_TYPE LIKE "add index%%"
-    AND (STATE = "running" OR STATE = "queueing");
-`
-
-const checkRunningSQL = `SELECT * FROM information_schema.ddl_jobs
-	WHERE CREATE_TIME >= "%s" AND QUERY = "%s";`
-=======
 WHERE DB_NAME = ?
     AND TABLE_NAME = ?
     AND JOB_TYPE LIKE "add index%"
     AND (STATE = "running" OR STATE = "queueing");
 `
 
-const checkRunningSQL = `SELECT * FROM information_schema.ddl_jobs 
+const checkRunningSQL = `SELECT * FROM information_schema.ddl_jobs
 	WHERE CREATE_TIME >= ? AND QUERY = ?;`
->>>>>>> 1c011427d (*: harden API access and downstream query handling (#6581))
 
 // CheckIfBDRModeIsSupported checks if the downstream supports set tidb_cdc_write_source variable
 func CheckIfBDRModeIsSupported(ctx context.Context, db *sql.DB) (bool, error) {

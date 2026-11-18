@@ -28,9 +28,18 @@ import (
 	"github.com/pingcap/ticdc/pkg/config/kerneltype"
 	"github.com/pingcap/ticdc/pkg/etcd"
 	"github.com/pingcap/ticdc/pkg/keyspace"
-	"github.com/pingcap/ticdc/pkg/server/mock"
+	"github.com/pingcap/ticdc/pkg/server"
 	"github.com/stretchr/testify/require"
 )
+
+type apiTestServer struct {
+	server.Server
+	etcdClient etcd.CDCEtcdClient
+}
+
+func (s *apiTestServer) GetEtcdClient() etcd.CDCEtcdClient {
+	return s.etcdClient
+}
 
 func TestTableInspectionRoutesRequireAuthentication(t *testing.T) {
 	gin.SetMode(gin.TestMode)
@@ -48,10 +57,9 @@ func TestTableInspectionRoutesRequireAuthentication(t *testing.T) {
 	}
 
 	ctrl := gomock.NewController(t)
-	apiServer := mock.NewMockServer(ctrl)
 	etcdClient := etcd.NewMockCDCEtcdClient(ctrl)
-	apiServer.EXPECT().GetEtcdClient().Return(etcdClient).Times(len(paths))
 	etcdClient.EXPECT().GetEtcdClient().Return(nil).Times(len(paths))
+	apiServer := &apiTestServer{etcdClient: etcdClient}
 
 	if kerneltype.IsNextGen() {
 		previous, _ := appcontext.TryGetService[keyspace.Manager](appcontext.KeyspaceManager)
@@ -93,10 +101,9 @@ func TestDebugInfoRequiresAuthentication(t *testing.T) {
 	config.StoreGlobalServerConfig(cfg)
 
 	ctrl := gomock.NewController(t)
-	apiServer := mock.NewMockServer(ctrl)
 	etcdClient := etcd.NewMockCDCEtcdClient(ctrl)
-	apiServer.EXPECT().GetEtcdClient().Return(etcdClient)
 	etcdClient.EXPECT().GetEtcdClient().Return(nil)
+	apiServer := &apiTestServer{etcdClient: etcdClient}
 
 	router := gin.New()
 	RegisterOpenAPIV2Routes(router, NewOpenAPIV2(apiServer))

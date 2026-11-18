@@ -27,6 +27,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/common"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
+	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/ticdc/server/watcher"
 	"github.com/stretchr/testify/require"
@@ -34,7 +35,7 @@ import (
 )
 
 func TestHandleStatusIgnoresInvalidBlockStatus(t *testing.T) {
-	testutil.SetUpTestServices(t)
+	testutil.SetUpTestServices()
 	tableTriggerEventDispatcherID := common.NewDispatcherID()
 	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
 	ddlSpan := replica.NewWorkingSpanReplication(cfID, tableTriggerEventDispatcherID,
@@ -46,7 +47,7 @@ func TestHandleStatusIgnoresInvalidBlockStatus(t *testing.T) {
 		}, "node1", false)
 	spanController := span.NewController(cfID, ddlSpan, nil, nil, nil, common.DefaultKeyspaceID, common.DefaultMode)
 	operatorController := operator.NewOperatorController(cfID, spanController, 1000, common.DefaultMode)
-	barrier := NewBarrier(spanController, operatorController, false, nil, common.DefaultMode, nil)
+	barrier := NewBarrier(spanController, operatorController, false, nil, common.DefaultMode)
 	require.NotPanics(t, func() {
 		require.Nil(t, barrier.HandleStatus("node1", nil))
 		require.Nil(t, barrier.HandleStatus("node1", &heartbeatpb.BlockStatusRequest{}))

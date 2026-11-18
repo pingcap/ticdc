@@ -338,8 +338,6 @@ func (info *ChangeFeedInfo) String() (str string) {
 	return str
 }
 
-<<<<<<< HEAD
-=======
 // MaskChangefeedInfo returns masked metadata for display without modifying data.
 func MaskChangefeedInfo(data []byte) (string, error) {
 	info := new(ChangeFeedInfo)
@@ -363,7 +361,6 @@ func (info *ChangeFeedInfo) maskSensitiveData() {
 	}
 }
 
->>>>>>> 1c011427d (*: harden API access and downstream query handling (#6581))
 // GetStartTs returns StartTs if it's specified or using the
 // CreateTime of changefeed.
 func (info *ChangeFeedInfo) GetStartTs() uint64 {

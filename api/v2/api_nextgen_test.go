@@ -27,7 +27,6 @@ import (
 	"github.com/pingcap/kvproto/pkg/pdpb"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	"github.com/pingcap/ticdc/pkg/keyspace"
-	"github.com/pingcap/ticdc/pkg/server/mock"
 	"github.com/stretchr/testify/require"
 )
 
@@ -44,7 +43,7 @@ func TestTableInspectionRoutesRejectInvalidKeyspace(t *testing.T) {
 	appcontext.SetService[keyspace.Manager](appcontext.KeyspaceManager, keyspaceManager)
 
 	router := gin.New()
-	RegisterOpenAPIV2Routes(router, NewOpenAPIV2(mock.NewMockServer(ctrl)))
+	RegisterOpenAPIV2Routes(router, NewOpenAPIV2(&apiTestServer{}))
 
 	paths := []string{"/api/v2/verify_table", "/api/v2/get_all_tables"}
 	for _, path := range paths {
