@@ -1344,15 +1344,22 @@ func (c *eventBroker) addDispatcher(info DispatcherInfo) error {
 	id := info.GetID()
 	span := info.GetTableSpan()
 	changefeedID := info.GetChangefeedID()
+	status, err := c.tryGetOrSetChangefeedStatus(info)
+	if err != nil {
+		return err
+	}
 
 	if existing := c.getDispatcher(id); existing != nil {
 		// REGISTER may be a retry or a recreated collector starting at epoch zero.
 		// Release the old store registrations before replacing their ID mappings,
 		// then let the new dispatcher follow the normal Ready/RESET handshake.
 		c.removeDispatcher(existing.Load().info)
+		// Removing the last dispatcher can also remove its changefeed status.
+		status, err = c.tryGetOrSetChangefeedStatus(info)
+		if err != nil {
+			return err
+		}
 	}
-
-	status := c.getOrSetChangefeedStatus(info)
 	dispatcher := newDispatcherStat(info, uint64(len(c.scanTaskQueues)), uint64(len(c.messageCh)), nil, status)
 	dispatcherPtr := &atomic.Pointer[dispatcherStat]{}
 	dispatcherPtr.Store(dispatcher)
@@ -1410,7 +1417,7 @@ func (c *eventBroker) addDispatcher(info DispatcherInfo) error {
 		ID:   span.KeyspaceID,
 		Name: changefeedID.Keyspace(),
 	}
-	err := c.schemaStore.RegisterTable(c.ctx, keyspaceMeta, span.GetTableID(), info.GetStartTs())
+	err = c.schemaStore.RegisterTable(c.ctx, keyspaceMeta, span.GetTableID(), info.GetStartTs())
 	if err != nil {
 		log.Error("register table to schemaStore failed",
 			zap.Uint32("keyspaceID", span.KeyspaceID),
@@ -1540,6 +1547,11 @@ func (c *eventBroker) resetDispatcher(dispatcherInfo DispatcherInfo) error {
 		return nil
 	}
 
+	status, err := c.tryGetOrSetChangefeedStatus(dispatcherInfo)
+	if err != nil {
+		return err
+	}
+
 	// Mark the old dispatcher as removed and cancel its scan before cleaning up
 	// resources shared with that scan.
 	oldStat.markRemoved()
@@ -1573,8 +1585,6 @@ func (c *eventBroker) resetDispatcher(dispatcherInfo DispatcherInfo) error {
 			return err
 		}
 	}
-	status := c.getOrSetChangefeedStatus(dispatcherInfo)
-
 	newStat := newDispatcherStat(dispatcherInfo, uint64(len(c.scanTaskQueues)), uint64(len(c.messageCh)), tableInfo, status)
 	newStat.copyStatistics(oldStat)
 
@@ -1655,10 +1665,15 @@ func (c *eventBroker) runLargeTxnCleanupWorker(
 	}
 }
 
-func (c *eventBroker) getOrSetChangefeedStatus(info DispatcherInfo) *changefeedStatus {
+func (c *eventBroker) tryGetOrSetChangefeedStatus(info DispatcherInfo) (*changefeedStatus, error) {
 	changefeedID := info.GetChangefeedID()
+	filterConfig := info.GetFilterConfig()
+	if filterConfig == nil || filterConfig.FilterConfig == nil {
+		return nil, errors.ErrInvalidReplicaConfig.GenWithStackByArgs(
+			"dispatcher filter config is required")
+	}
 	if stat, ok := c.changefeedMap.Load(changefeedID); ok {
-		return stat.(*changefeedStatus)
+		return stat.(*changefeedStatus), nil
 	}
 
 	// Filter config is changefeed scoped. In production, a config change must pause the
@@ -1671,12 +1686,9 @@ func (c *eventBroker) getOrSetChangefeedStatus(info DispatcherInfo) *changefeedS
 	}
 
 	changefeedFilter, err := filter.GetSharedFilterStorage().GetOrSetFilter(
-		changefeedID, info.GetFilterConfig(), c.timezone)
+		changefeedID, filterConfig, c.timezone)
 	if err != nil {
-		log.Panic("create filter failed",
-			zap.Stringer("changefeedID", changefeedID),
-			zap.Any("filterConfig", info.GetFilterConfig()),
-			zap.Error(err))
+		return nil, err
 	}
 
 	status := newChangefeedStatus(changefeedID, info.GetSyncPointInterval())
@@ -1686,7 +1698,7 @@ func (c *eventBroker) getOrSetChangefeedStatus(info DispatcherInfo) *changefeedS
 	status.mounter = event.NewMounter(c.tz, info.GetIntegrity())
 	actual, loaded := c.changefeedMap.LoadOrStore(changefeedID, status)
 	if loaded {
-		return actual.(*changefeedStatus)
+		return actual.(*changefeedStatus), nil
 	}
 	if status.lowLatencyMode {
 		select {
@@ -1697,6 +1709,17 @@ func (c *eventBroker) getOrSetChangefeedStatus(info DispatcherInfo) *changefeedS
 	log.Info("new changefeed status", zap.Stringer("changefeedID", changefeedID))
 	if status.scanWindowController != nil {
 		initializeScanWindowMetrics(changefeedID.String())
+	}
+	return status, nil
+}
+
+func (c *eventBroker) getOrSetChangefeedStatus(info DispatcherInfo) *changefeedStatus {
+	status, err := c.tryGetOrSetChangefeedStatus(info)
+	if err != nil {
+		log.Error("create changefeed status failed",
+			zap.Stringer("changefeedID", info.GetChangefeedID()),
+			zap.Error(err))
+		return nil
 	}
 	return status
 }

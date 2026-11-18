@@ -27,11 +27,8 @@ import (
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/filter"
 	"github.com/pingcap/ticdc/pkg/integrity"
-<<<<<<< HEAD
 	"github.com/pingcap/ticdc/pkg/metrics"
-=======
 	"github.com/pingcap/ticdc/pkg/ordering"
->>>>>>> c68c69d88 (sink: support per-table transaction ordering for MySQL sinks (#6860))
 	"github.com/pingcap/tidb/pkg/util/chunk"
 	"go.uber.org/zap"
 )
@@ -829,19 +826,11 @@ type dmlProcessor struct {
 	mounter      event.Mounter
 	schemaGetter schemaGetter
 
-<<<<<<< HEAD
-	filter         filter.Filter
-	filterContext  filter.DMLFilterContext
-	dispatcherStat *dispatcherStat
-	spillDir       string
-=======
-	filter                   filter.Filter
-	txnOrderMatcher          *ordering.TxnOrderMatcher
-	filterContext            filter.DMLFilterContext
-	dispatcherStat           *dispatcherStat
-	spillDir                 string
-	cleanupLargeTxnAfterScan bool
->>>>>>> c68c69d88 (sink: support per-table transaction ordering for MySQL sinks (#6860))
+	filter          filter.Filter
+	txnOrderMatcher *ordering.TxnOrderMatcher
+	filterContext   filter.DMLFilterContext
+	dispatcherStat  *dispatcherStat
+	spillDir        string
 
 	// dmlTypeFilterCache caches the pre-decode filter result within the current transaction.
 	// The cache is reset when a new transaction starts. It is safe because tableInfo

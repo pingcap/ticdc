@@ -21,11 +21,8 @@ import (
 	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/errors"
-<<<<<<< HEAD
-	"github.com/pingcap/ticdc/pkg/sink/mysql"
-=======
 	"github.com/pingcap/ticdc/pkg/ordering"
->>>>>>> c68c69d88 (sink: support per-table transaction ordering for MySQL sinks (#6860))
+	"github.com/pingcap/ticdc/pkg/sink/mysql"
 	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/ticdc/utils/chann"
 	"github.com/prometheus/client_golang/prometheus"

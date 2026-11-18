@@ -395,7 +395,16 @@ func (ra *RedoApplier) applyRow(
 		return err
 	}
 
-	ra.eventsGroup[tableID].append(row.ToDMLEvent())
+	event := row.ToDMLEvent()
+	if source := row.Row.SourceTable; source != nil &&
+		(source.Schema != row.Row.Table.Schema || source.Table != row.Row.Table.Table) {
+		// Match ordering rules against the source while writing the recorded target.
+		info := event.TableInfo.CloneWithRouting(row.Row.Table.Schema, row.Row.Table.Table)
+		info.TableName.Schema, info.TableName.Table = source.Schema, source.Table
+		info.TableName.IsPartition = source.IsPartition
+		event.TableInfo = info
+	}
+	ra.eventsGroup[tableID].append(event)
 
 	ra.appliedLogCount++
 	return nil

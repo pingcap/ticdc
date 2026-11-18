@@ -85,8 +85,6 @@ func TestChangefeedStatusUsesOwnMounter(t *testing.T) {
 	require.NotSame(t, firstStatus.mounter, secondStatus.mounter)
 }
 
-<<<<<<< HEAD
-=======
 func TestTryGetOrSetChangefeedStatusRejectsInvalidFilter(t *testing.T) {
 	broker, _, _, _ := newEventBrokerForTest()
 	defer broker.close()
@@ -113,7 +111,6 @@ func TestTryGetOrSetChangefeedStatusRejectsInvalidFilter(t *testing.T) {
 	require.Nil(t, status)
 }
 
->>>>>>> c68c69d88 (sink: support per-table transaction ordering for MySQL sinks (#6860))
 func popScanTask(t *testing.T, broker *eventBroker, workerIndex int) scanTask {
 	t.Helper()
 	task, ok := broker.scanTaskQueues[workerIndex].pop()

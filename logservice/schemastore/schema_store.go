@@ -30,11 +30,8 @@ import (
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/filter"
 	"github.com/pingcap/ticdc/pkg/keyspace"
-<<<<<<< HEAD
 	"github.com/pingcap/ticdc/pkg/metrics"
-=======
 	"github.com/pingcap/ticdc/pkg/ordering"
->>>>>>> c68c69d88 (sink: support per-table transaction ordering for MySQL sinks (#6860))
 	"github.com/pingcap/ticdc/pkg/pdutil"
 	"github.com/pingcap/ticdc/pkg/txnutil/gc"
 	"github.com/tikv/client-go/v2/oracle"

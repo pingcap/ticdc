@@ -485,7 +485,7 @@ func TestConflictKeysOpenProtocolWithoutPrimaryKey(t *testing.T) {
 			require.Len(t, event.TableInfo.GetColumns(), 2)
 			require.Len(t, event.TableInfo.GetIndices(), 1)
 			var conflictKeys map[uint64]struct{}
-			require.NotPanics(t, func() { conflictKeys = ConflictKeys(event) })
+			require.NotPanics(t, func() { conflictKeys = ConflictKeys(event, nil) })
 			require.NotEmpty(t, conflictKeys)
 			keys = append(keys, conflictKeys)
 
@@ -506,7 +506,7 @@ func TestConflictKeysOpenProtocolWithoutPrimaryKey(t *testing.T) {
 			replayed := decoded.RedoRow.ToDMLEvent()
 			t.Cleanup(replayed.PostFlush)
 			replayed.DispatcherID = event.DispatcherID
-			require.Equal(t, conflictKeys, ConflictKeys(replayed))
+			require.Equal(t, conflictKeys, ConflictKeys(replayed, nil))
 		}
 	}
 	require.Len(t, keys, 3)

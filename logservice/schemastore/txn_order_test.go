@@ -15,7 +15,6 @@
 package schemastore
 
 import (
-	"context"
 	"testing"
 
 	"github.com/cockroachdb/pebble"
@@ -43,8 +42,8 @@ func TestTxnOrderSnapshotAndDDL(t *testing.T) {
 			}
 			batch := db.NewBatch()
 			defer batch.Close()
-			require.NoError(t, addSchemaInfoToBatchWithEncryption(context.Background(), batch, 100, dbInfo, nil, 0))
-			_, _, _, _, err = addTableInfoToBatchWithEncryption(context.Background(), batch, 100, dbInfo, tableInfo, nil, 0, nil)
+			addSchemaInfoToBatch(batch, 100, dbInfo)
+			_, _, _, _, err = addTableInfoToBatchWithEncryption(batch, 100, dbInfo, tableInfo, nil, 0, nil)
 			require.NoError(t, err)
 			require.NoError(t, batch.Commit(pebble.NoSync))
 			snap := db.NewSnapshot()

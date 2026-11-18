@@ -102,7 +102,7 @@ func TestTxnOrderTablesKeepCompleteTransactions(t *testing.T) {
 	}
 	info := newMockDispatcherInfoForTest(t)
 	tableID := info.GetTableSpan().TableID
-	wholeSpan := common.TableIDToComparableSpan(info.span.KeyspaceID, tableID)
+	wholeSpan := common.TableIDToComparableSpan(testTableTriggerKeyspaceID, tableID)
 	info.span = &wholeSpan
 	for _, rule := range []string{"test.t", "test.other"} {
 		t.Run(rule, func(t *testing.T) {
@@ -171,7 +171,7 @@ func TestTxnOrderScanReportsInvalidTable(t *testing.T) {
 			info.filterConfig.TxnOrderTables = []string{tc.rule}
 			info.startTs = tc.start.FinishedTs
 			tableID := tc.start.TableInfo.TableName.TableID
-			span := common.TableIDToComparableSpan(info.span.KeyspaceID, tableID)
+			span := common.TableIDToComparableSpan(testTableTriggerKeyspaceID, tableID)
 			if tc.split {
 				span.EndKey = append(append([]byte{}, span.StartKey...), 1)
 			}

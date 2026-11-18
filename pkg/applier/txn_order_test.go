@@ -61,9 +61,8 @@ func TestTxnOrderRedoReplay(t *testing.T) {
 	ap.mysqlSink = sink
 	ap.needRecoveryInfo = false
 	ap.txnOrderMatcher = cfg.TxnOrderMatcher
-	defer ap.spillStore.Cleanup()
 
-	// Spill rows are restored as complete table transactions, even above max-txn-row.
+	// Redo rows are grouped into complete table transactions, even above max-txn-row.
 	mock.ExpectBegin()
 	for id := int64(1); id <= 4; id++ {
 		commitTs := uint64(110)
@@ -108,7 +107,6 @@ func TestTxnOrderRedoInvalidRules(t *testing.T) {
 		SinkURI:    "mysql://127.0.0.1:1/",
 		SinkConfig: &config.SinkConfig{MySQLConfig: &config.MySQLConfig{TxnOrderTables: []string{"invalid"}}},
 	})
-	defer ap.spillStore.Cleanup()
 	require.ErrorContains(t, ap.Apply(context.Background()), "txn-order-tables")
 }
 
@@ -135,7 +133,6 @@ func TestTxnOrderRedoSkipsValidationForRecoveredRows(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			ap := NewRedoApplier(&RedoApplierConfig{})
-			t.Cleanup(func() { require.NoError(t, ap.spillStore.Cleanup()) })
 			ap.txnOrderMatcher = matcher
 			ap.hasTableRoute = tc.routed
 			row := &commonEvent.RedoDMLEvent{Row: &commonEvent.DMLEventInRedoLog{
@@ -153,7 +150,7 @@ func TestTxnOrderRedoSkipsValidationForRecoveredRows(t *testing.T) {
 			ap.tableDDLTs[tc.table.TableID] = ddlTs{ts: 100}
 			require.ErrorContains(t, ap.applyRow(row, 0), tc.want)
 			require.Zero(t, ap.appliedLogCount)
-			require.Zero(t, ap.spillStore.Stats().PayloadWriteCount)
+			require.Empty(t, ap.eventsGroup[tc.table.TableID].events)
 		})
 	}
 }

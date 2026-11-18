@@ -29,7 +29,7 @@ func TestTxnOrderBootstrapSpans(t *testing.T) {
 	f, err := ordering.NewTxnOrderMatcher([]string{"test.ordered"}, false)
 	require.NoError(t, err)
 	tables := []commonEvent.Table{{TableID: 1, SchemaTableName: &commonEvent.SchemaTableName{SchemaName: "test", TableName: "ordered"}}}
-	whole := common.TableIDToComparableSpan(0, 1)
+	whole := common.TableIDToComparableSpan(1, 1)
 	partial := whole
 	partial.EndKey = append(append([]byte{}, whole.StartKey...), 1)
 	for _, tc := range []struct {
