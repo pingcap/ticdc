@@ -420,6 +420,15 @@ func (d *dispatcherStat) handleSingleDataEvents(events []dispatcher.DispatcherEv
 	}
 	from := events[0].From
 	state := d.loadCurrentEpochState()
+	// Configuration rejections are sent before the handshake with sequence 0.
+	if ddl, ok := events[0].Event.(*commonEvent.DDLEvent); ok && ddl.Seq == 0 && ddl.Err != "" {
+		if from != nil && d.session.acceptsConfigError(*from, ddl.Epoch, state.epoch) {
+			if target, ok := d.target.(dispatcher.Dispatcher); ok {
+				target.HandleError(ddl.GetError())
+			}
+		}
+		return false
+	}
 	if !d.isFromCurrentEpoch(events[0], state) {
 		log.Info("receive DDL/SyncPoint/Handshake event from a stale epoch, ignore it",
 			zap.Stringer("changefeedID", d.target.GetChangefeedID()),

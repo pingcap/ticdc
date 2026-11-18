@@ -15,8 +15,10 @@
 package schemastore
 
 import (
+	"context"
 	"fmt"
 	"testing"
+	"time"
 
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/errors"
@@ -24,6 +26,20 @@ import (
 	parser_model "github.com/pingcap/tidb/pkg/parser/model"
 	"github.com/stretchr/testify/require"
 )
+
+func TestGetTableInfoAtTsReturnsRetryableWhenUnresolved(t *testing.T) {
+	keyspace := &keyspaceSchemaStore{}
+	keyspace.resolvedTs.Store(19)
+	store := &schemaStore{keyspaceSchemaStoreMap: map[uint32]*keyspaceSchemaStore{
+		common.DefaultKeyspaceID: keyspace,
+	}}
+	ctx, cancel := context.WithTimeout(t.Context(), time.Second)
+	defer cancel()
+	info, err := store.GetTableInfoAtTs(ctx, common.DefaultKeyspace, 1, 20)
+	require.Nil(t, info)
+	require.ErrorIs(t, err, errors.ErrChangefeedRetryable)
+	require.ErrorContains(t, err, "checkpoint 20 (resolved 19)")
+}
 
 func TestGetTableInfoAtTs(t *testing.T) {
 	normal := newEligibleTableInfoForTest(100, "normal")

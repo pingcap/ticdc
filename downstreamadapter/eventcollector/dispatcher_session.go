@@ -471,6 +471,20 @@ func (s *dispatcherSession) removeFromLocked(serverID node.ID) {
 	s.sendMessage(msg)
 }
 
+func (s *dispatcherSession) acceptsConfigError(from node.ID, epoch, currentEpoch uint64) bool {
+	conn := &s.connState
+	conn.RLock()
+	defer conn.RUnlock()
+	if conn.removed {
+		return false
+	}
+	if epoch == 0 {
+		return from == s.localServerID && conn.localReadyPending ||
+			from == conn.pendingRemoteEventServiceID && !from.IsEmpty()
+	}
+	return epoch == currentEpoch && from == conn.currentEventServiceID && !from.IsEmpty()
+}
+
 func (s *dispatcherSession) handleSignalEvent(event dispatcher.DispatcherEvent) {
 	if s.connState.isRemoved() {
 		return

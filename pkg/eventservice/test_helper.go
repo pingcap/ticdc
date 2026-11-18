@@ -122,12 +122,23 @@ func (m *mockSchemaStore) GetTableInfo(_ context.Context, _ common.KeyspaceMeta,
 	return nil, nil
 }
 
-func (m *mockSchemaStore) GetTableInfoAtTs(ctx context.Context, keyspaceMeta common.KeyspaceMeta, tableID int64, ts uint64) (*common.TableInfo, error) {
-	info, err := m.GetTableInfo(ctx, keyspaceMeta, tableID, ts)
-	if info == nil && err == nil {
-		return nil, errors.ErrSchemaStorageTableMiss.GenWithStackByArgs(tableID)
+func (m *mockSchemaStore) GetTableInfoAtTs(_ context.Context, _ common.KeyspaceMeta, tableID int64, ts uint64) (*common.TableInfo, error) {
+	if m.getTableInfoError != nil {
+		return nil, m.getTableInfoError
 	}
-	return info, err
+	if info, ok := m.TableInfo[tableID]; ok && info.deleteVersion <= ts {
+		return nil, &schemastore.TableDeletedError{}
+	}
+	ddls := m.DDLEvents[tableID]
+	end := sort.Search(len(ddls), func(i int) bool {
+		return ddls[i].FinishedTs > ts
+	})
+	for i := end - 1; i >= 0; i-- {
+		if info := ddls[i].TableInfo; info != nil {
+			return info, nil
+		}
+	}
+	return nil, errors.ErrSchemaStorageTableMiss.GenWithStackByArgs(tableID)
 }
 
 func (m *mockSchemaStore) GetAllPhysicalTables(_ context.Context, _ common.KeyspaceMeta, _ uint64, _ filter.Filter, _ *ordering.TxnOrderMatcher) ([]commonEvent.Table, error) {

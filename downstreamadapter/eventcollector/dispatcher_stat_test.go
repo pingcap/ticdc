@@ -1616,6 +1616,35 @@ func TestHandleDDLErrorWithTableRouting(t *testing.T) {
 	require.Equal(t, uint64(90), stat.tableInfoVersion.Load())
 }
 
+func TestHandleDispatcherConfigRejectionBeforeHandshake(t *testing.T) {
+	target := newMockDispatcher(common.NewDispatcherID(), 0)
+	var reported []error
+	target.handleError = func(err error) { reported = append(reported, err) }
+	local := node.ID("local")
+	remote := node.ID("remote")
+	stat := newDispatcherStatInternal(target, nil, local, func(*messaging.TargetMessage) {}, nil)
+	require.True(t, stat.session.beginRegister(local))
+	deliver := func(from node.ID, epoch uint64) {
+		e := dispatcher.NewDispatcherEvent(&from, &commonEvent.DDLEvent{Epoch: epoch, Err: "invalid txn-order-tables"})
+		require.False(t, (&EventsHandler{}).GetType(e).Droppable)
+		require.False(t, stat.handleSingleDataEvents([]dispatcher.DispatcherEvent{e}))
+	}
+	deliver(remote, 0)
+	require.Empty(t, reported)
+	deliver(local, 0)
+	require.Len(t, reported, 1)
+	require.ErrorContains(t, reported[0], "invalid txn-order-tables")
+
+	markSessionReceiving(stat.session, remote)
+	stat.currentEpoch.Store(newDispatcherEpochState(2, 0, 0))
+	deliver(remote, 1)
+	deliver(local, 2)
+	require.Len(t, reported, 1)
+	deliver(remote, 2)
+	require.Len(t, reported, 2)
+	require.Zero(t, stat.loadCurrentEpochState().lastEventSeq.Load())
+}
+
 func TestHandleSingleDataEventsUpdatesSyncPointStateAndDedupsSameTsSyncPoint(t *testing.T) {
 	t.Parallel()
 

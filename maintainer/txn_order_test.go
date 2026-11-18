@@ -54,10 +54,10 @@ func TestFinishBootstrapTxnOrderUsesSpanCheckpoint(t *testing.T) {
 					TableName: common.TableName{Schema: "test", Table: "t1", TableID: 1}, UpdateTS: 10,
 				}},
 				commonEvent.DDLEvent{FinishedTs: 20, TableInfo: &common.TableInfo{
-					TableName: common.TableName{Schema: "test", Table: "ordered", TableID: 1}, UpdateTS: 20,
+					TableName: common.TableName{Schema: "test", Table: "ordered", TableID: 1}, UpdateTS: 10,
 				}},
 				commonEvent.DDLEvent{FinishedTs: 30, TableInfo: &common.TableInfo{
-					TableName: common.TableName{Schema: "test", Table: "ordinary", TableID: 1}, UpdateTS: 30,
+					TableName: common.TableName{Schema: "test", Table: "ordinary", TableID: 1}, UpdateTS: 10,
 				}},
 			)
 			appcontext.SetService(appcontext.SchemaStore, store)

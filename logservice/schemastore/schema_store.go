@@ -54,7 +54,8 @@ type SchemaStore interface {
 	// info cache.
 	GetTableInfo(ctx context.Context, keyspaceMeta common.KeyspaceMeta, tableID int64, ts uint64) (*common.TableInfo, error)
 
-	// GetTableInfoAtTs also supports tables with no local dispatcher registration.
+	// GetTableInfoAtTs supports unregistered tables and returns a retryable error
+	// while the requested timestamp is unresolved.
 	GetTableInfoAtTs(ctx context.Context, keyspaceMeta common.KeyspaceMeta, tableID int64, ts uint64) (*common.TableInfo, error)
 
 	// TODO: how to respect tableFilter
@@ -426,8 +427,11 @@ func (s *schemaStore) GetTableInfoAtTs(ctx context.Context, keyspaceMeta common.
 		return nil, err
 	}
 
-	if err := store.waitResolvedTs(ctx, tableID, ts, 2*time.Second); err != nil {
-		return nil, err
+	// Bootstrap runs on the maintainer event loop. Let it retry rather than
+	// block the loop while the local schema store catches up to a span.
+	if resolvedTs := store.resolvedTs.Load(); resolvedTs < ts {
+		return nil, errors.ErrChangefeedRetryable.GenWithStack(
+			"schema store has not resolved table %d at checkpoint %d (resolved %d)", tableID, ts, resolvedTs)
 	}
 	return store.dataStorage.getTableInfoAtTs(tableID, ts)
 }
