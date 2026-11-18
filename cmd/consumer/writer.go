@@ -335,15 +335,12 @@ func (w *writer) Flush(ctx context.Context) error {
 	if err := w.flushDDL(ctx); err != nil {
 		return err
 	}
-	active := make(map[int64]*dmlWrite)
-	blocked := make(map[int64]bool)
-	tables := make(map[int64]*dmlWrite)
 	pending := w.pendingDML
 	for len(w.pendingDML) != 0 {
 		if err := context.Cause(ctx); err != nil {
 			return err
 		}
-		batch, end := w.selectBatch(active, blocked, tables)
+		batch, end := w.selectBatch()
 		if batch == nil {
 			break
 		}
@@ -361,10 +358,10 @@ func (w *writer) Flush(ctx context.Context) error {
 	return w.flushDDL(ctx)
 }
 
-func (w *writer) selectBatch(active map[int64]*dmlWrite, blocked map[int64]bool, tables map[int64]*dmlWrite) (*writeBatch, int) {
-	clear(active)
-	clear(blocked)
-	clear(tables)
+func (w *writer) selectBatch() (*writeBatch, int) {
+	active := make(map[int64]*dmlWrite)
+	blocked := make(map[int64]bool)
+	tables := make(map[int64]*dmlWrite)
 	for _, batch := range w.inFlight {
 		for _, item := range batch.items {
 			active[item.dml.PhysicalTableID] = item
@@ -575,13 +572,13 @@ func (w *writer) advanceCheckpoint() {
 	// A watermark covers every input through its timestamp. Checkpoints also
 	// account for decoded events still awaiting delivery in the conductor.
 	var (
-		unfinished uint64 = math.MaxUint64
-		pending    bool
+		unfinished       uint64 = math.MaxUint64
+		pending          bool
+		unfinishedTables map[int64]uint64
 	)
 	if w.hasUnsubmitted {
 		unfinished, pending = w.unsubmitted, true
 	}
-	var unfinishedTables map[int64]uint64
 	if len(w.mutations) != 0 {
 		unfinishedTables = make(map[int64]uint64, len(w.unsubmittedTables))
 		maps.Copy(unfinishedTables, w.unsubmittedTables)

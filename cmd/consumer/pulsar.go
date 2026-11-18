@@ -147,13 +147,12 @@ func newPulsarReader(opts sourceOptions) *pulsarReader {
 	for id, partitionTopic := range topics {
 		partitions[partitionTopic] = int32(id)
 	}
-	c := &pulsarReader{
+	return &pulsarReader{
 		client:     client,
 		consumer:   consumer,
 		topic:      topic,
 		partitions: partitions,
 	}
-	return c
 }
 
 func (c *pulsarReader) Streams() []stream {
@@ -178,13 +177,12 @@ func (c *pulsarReader) Read(ctx context.Context) ([]*sourcePayload, error) {
 	if !ok {
 		return nil, errors.ErrPulsarInvalidConfig.GenWithStackByArgs("Pulsar partitions changed; restart the consumer")
 	}
-	size := int64(len(message.Key()) + len(message.Payload()))
 	id := message.ID()
 	return []*sourcePayload{{
 		Stream: partition,
 		Key:    []byte(message.Key()),
 		Value:  message.Payload(),
-		Bytes:  size,
+		Bytes:  int64(len(message.Key()) + len(message.Payload())),
 		Ack: func(ctx context.Context) error {
 			return c.confirmPosition(ctx, id)
 		},

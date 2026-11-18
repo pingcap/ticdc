@@ -93,24 +93,21 @@ type storageReader struct {
 
 // newStorageReader opens the storage described by the upstream URI.
 func newStorageReader(ctx context.Context, opts sourceOptions) *storageReader {
-	upstreamURI := opts.UpstreamURI
 	replicaConfig := opts.ReplicaConfig
-	protocol := opts.CodecConfig.Protocol
-	storage, err := util.GetExternalStorageWithDefaultTimeout(ctx, upstreamURI.String())
+	storage, err := util.GetExternalStorageWithDefaultTimeout(ctx, opts.UpstreamURI.String())
 	if err != nil {
 		log.Panic("Storage client initialization failed", zap.Error(err))
 	}
-	c := &storageReader{
+	return &storageReader{
 		storage:        storage,
 		dateSeparator:  util.GetOrZero(replicaConfig.Sink.DateSeparator),
-		fileExtension:  helper.GetFileExtension(protocol),
+		fileExtension:  helper.GetFileExtension(opts.CodecConfig.Protocol),
 		fileIndexWidth: util.GetOrZero(replicaConfig.Sink.FileIndexWidth),
 		schemas:        make(map[cloudstorage.SchemaPathKey]*cloudstorage.SchemaFile),
 		fileIndices:    make(map[cloudstorage.DMLPathKey]map[cloudstorage.FileIndexKey]uint64),
 		ddlWatermarks:  make(map[string]uint64),
 		tableIDs:       make(map[storageTableKey]int64),
 	}
-	return c
 }
 
 func (c *storageReader) readFile(ctx context.Context, path string) ([]byte, error) {
@@ -290,8 +287,7 @@ func (c *storageReader) Read(ctx context.Context) ([]*sourcePayload, error) {
 	}
 	input := c.inputs[0]
 	key := input.key
-	tableKey := key.GetKey()
-	ddlWatermark := c.ddlWatermark(tableKey)
+	ddlWatermark := c.ddlWatermark(key.GetKey())
 	switch {
 	case input.index.Idx < input.end && key.TableVersion >= ddlWatermark:
 		c.inputs[0].index.Idx++
@@ -299,7 +295,7 @@ func (c *storageReader) Read(ctx context.Context) ([]*sourcePayload, error) {
 		c.inputs[0] = storageInput{}
 		c.inputs = c.inputs[1:]
 	}
-	schema := c.schemas[input.key.SchemaPathKey]
+	schema := c.schemas[key.SchemaPathKey]
 	if schema == nil {
 		log.Panic("Storage DML file has no matching schema", zap.String("schema", key.Schema), zap.String("table", key.Table), zap.Uint64("tableVersion", key.TableVersion))
 	}

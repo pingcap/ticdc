@@ -61,7 +61,6 @@ type kafkaReader struct {
 
 func newKafkaReader(ctx context.Context, opts sourceOptions) *kafkaReader {
 	upstreamURI := opts.UpstreamURI
-	consumerID := opts.ConsumerID
 	replicaConfig := opts.ReplicaConfig
 	codecConfig := opts.CodecConfig
 	topic := strings.Trim(upstreamURI.Path, "/")
@@ -74,7 +73,7 @@ func newKafkaReader(ctx context.Context, opts sourceOptions) *kafkaReader {
 	}
 	kafkaOptions := []kgo.Opt{
 		kgo.SeedBrokers(strings.Split(upstreamURI.Host, ",")...),
-		kgo.ConsumerGroup(consumerID),
+		kgo.ConsumerGroup(opts.ConsumerID),
 		kgo.ConsumeTopics(topic),
 		kgo.ConsumeResetOffset(kgo.NewOffset().AtStart()),
 		kgo.DisableAutoCommit(),
@@ -123,8 +122,7 @@ func newKafkaReader(ctx context.Context, opts sourceOptions) *kafkaReader {
 	if err != nil {
 		log.Panic("Kafka client initialization failed", zap.Error(err))
 	}
-	admin := kadm.NewClient(client)
-	metadata, err := admin.Metadata(ctx, topic)
+	metadata, err := kadm.NewClient(client).Metadata(ctx, topic)
 	if err != nil {
 		log.Panic("Kafka topic metadata lookup failed", zap.String("topic", topic), zap.Error(err))
 	}
@@ -185,12 +183,11 @@ func (c *kafkaReader) Read(ctx context.Context) ([]*sourcePayload, error) {
 			Offset:      record.Offset,
 			LeaderEpoch: record.LeaderEpoch,
 		}
-		size := int64(len(record.Key) + len(record.Value))
 		batch = append(batch, &sourcePayload{
 			Stream: record.Partition,
 			Key:    record.Key,
 			Value:  record.Value,
-			Bytes:  size,
+			Bytes:  int64(len(record.Key) + len(record.Value)),
 			Offset: record.Offset,
 			Ack: func(ctx context.Context) error {
 				if err := c.client.CommitRecords(ctx, &position); err != nil {

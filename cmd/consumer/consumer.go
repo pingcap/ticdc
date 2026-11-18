@@ -28,7 +28,7 @@ import (
 
 type consumer struct {
 	reader    sourceReader
-	decoder   *decodeGroup
+	decoder   *decoderGroup
 	conductor *conductor
 	writer    *writer
 }
@@ -99,7 +99,7 @@ func (c *consumer) readSource(ctx context.Context) error {
 		if err != nil {
 			return err
 		}
-		if err := c.decoder.AddEvents(ctx, inputs); err != nil {
+		if err := c.decoder.AddPayload(ctx, inputs); err != nil {
 			return err
 		}
 	}

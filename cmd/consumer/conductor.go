@@ -87,8 +87,7 @@ func (c *conductor) Start(ctx context.Context, tasks <-chan []decodedEvent, w *w
 	g.Go(func() error {
 		return c.confirm(ctx)
 	})
-	err := g.Wait()
-	return err
+	return g.Wait()
 }
 
 func (c *conductor) run(ctx context.Context, tasks <-chan []decodedEvent, w *writer) error {
