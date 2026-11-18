@@ -14,14 +14,17 @@
 package logcoordinator
 
 import (
+	"context"
 	"testing"
 	"time"
 
+	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/logservice/logservicepb"
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/ticdc/pkg/pdutil"
+	"github.com/pingcap/ticdc/utils/chann"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/assert"
@@ -36,6 +39,45 @@ func newLogCoordinatorForTest() *logCoordinator {
 	c.nodes.m = make(map[node.ID]*node.Info)
 	c.changefeedStates.m = make(map[common.GID]*changefeedState)
 	return c
+}
+
+func TestReusableEventServiceResponseEchoesRequestID(t *testing.T) {
+	c := newLogCoordinatorForTest()
+	mc := messaging.NewMockMessageCenter()
+	c.messageCenter = mc
+	c.requestChan = chann.NewAutoDrainChann[requestAndTarget](chann.Cap(2))
+	t.Cleanup(c.requestChan.CloseAndDrain)
+	ctx, cancel := context.WithCancel(t.Context())
+	exited := make(chan error, 1)
+	go func() { exited <- c.Run(ctx) }()
+	t.Cleanup(func() {
+		cancel()
+		require.ErrorIs(t, <-exited, context.Canceled)
+	})
+	for _, requestID := range []uint64{0, 42} {
+		query := &logservicepb.ReusableEventServiceRequest{ID: common.NewDispatcherID().ToPB(), Span: &heartbeatpb.TableSpan{TableID: 1}, StartTs: 100, RequestID: requestID}
+		data, err := query.Marshal()
+		require.NoError(t, err)
+		decoded := &logservicepb.ReusableEventServiceRequest{}
+		require.NoError(t, decoded.Unmarshal(data))
+		message := messaging.NewSingleTargetMessage("log-coordinator", messaging.LogCoordinatorTopic, decoded)
+		message.From = "collector"
+		require.NoError(t, c.handleMessage(ctx, message))
+		select {
+		case reply := <-mc.GetMessageChannel():
+			require.Equal(t, message.From, reply.To)
+			require.Equal(t, logCoordinatorClientTopic, reply.Topic)
+			response := reply.Message[0].(*logservicepb.ReusableEventServiceResponse)
+			encoded, err := response.Marshal()
+			require.NoError(t, err)
+			roundTrip := &logservicepb.ReusableEventServiceResponse{}
+			require.NoError(t, roundTrip.Unmarshal(encoded))
+			require.Equal(t, query.ID, roundTrip.ID)
+			require.Equal(t, requestID, roundTrip.RequestID)
+		case <-time.After(time.Second):
+			t.Fatal("no reusable event service response")
+		}
+	}
 }
 
 func TestEventBrokerDispatcherCountReports(t *testing.T) {

@@ -121,6 +121,11 @@ type Credential struct {
 
 	ClientUserRequired bool     `toml:"client-user-required" json:"client-user-required"`
 	ClientAllowedUser  []string `toml:"client-allowed-user" json:"client-allowed-user"`
+	// ClientAdminUser lists the users allowed to call administrative APIs, such as
+	// setting the log level and redaction mode, operating failpoints, resigning the
+	// owner and using the unsafe APIs. It is only checked when ClientUserRequired is
+	// true, and it should be a subset of ClientAllowedUser.
+	ClientAdminUser []string `toml:"client-admin-user" json:"client-admin-user"`
 
 	// RedactInfoLog controls log redaction to prevent sensitive data from appearing in logs.
 	// Accepts boolean (true→ON, false→OFF) or string values ("off", "on", "marker").

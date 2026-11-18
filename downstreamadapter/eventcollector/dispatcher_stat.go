@@ -124,6 +124,22 @@ func (d *dispatcherStat) loadCurrentEpochState() *dispatcherEpochState {
 	return state
 }
 
+// RESET and source changes hold requestMu, so this snapshot cannot combine a
+// source from one registration with the epoch of another registration.
+func (d *dispatcherStat) loadCurrentEventSource() (*dispatcherEpochState, node.ID) {
+	d.session.requestMu.Lock()
+	defer d.session.requestMu.Unlock()
+	source := d.session.getEventServiceID()
+	if d.session.connState.isRemoved() {
+		source = ""
+	}
+	return d.loadCurrentEpochState(), source
+}
+
+func isFromEventService(event dispatcher.DispatcherEvent, source node.ID) bool {
+	return !source.IsEmpty() && event.From != nil && *event.From == source
+}
+
 func (d *dispatcherStat) run() {
 	d.session.startLocalRegistration()
 }
@@ -325,8 +341,11 @@ func (d *dispatcherStat) isFromCurrentEpoch(event dispatcher.DispatcherEvent, st
 func (d *dispatcherStat) handleBatchDataEvents(events []dispatcher.DispatcherEvent) bool {
 	var validEvents []dispatcher.DispatcherEvent
 	hasDML := false
-	state := d.loadCurrentEpochState()
+	state, source := d.loadCurrentEventSource()
 	for _, event := range events {
+		if !isFromEventService(event, source) {
+			continue
+		}
 		if !d.isFromCurrentEpoch(event, state) {
 			if logger.IsDebugEnabled() {
 				log.Debug("receive DML/Resolved event from a stale epoch, ignore it",
@@ -409,7 +428,10 @@ func (d *dispatcherStat) handleSingleDataEvents(events []dispatcher.DispatcherEv
 		log.Panic("should not happen: only one event should be sent for DDL/SyncPoint/Handshake event")
 	}
 	from := events[0].From
-	state := d.loadCurrentEpochState()
+	state, source := d.loadCurrentEventSource()
+	if !isFromEventService(events[0], source) {
+		return false
+	}
 	if !d.isFromCurrentEpoch(events[0], state) {
 		log.Info("receive DDL/SyncPoint/Handshake event from a stale epoch, ignore it",
 			zap.Stringer("changefeedID", d.target.GetChangefeedID()),
@@ -551,7 +573,10 @@ func (d *dispatcherStat) handleDropEvent(event dispatcher.DispatcherEvent) {
 			zap.Any("event", event))
 	}
 
-	state := d.loadCurrentEpochState()
+	state, source := d.loadCurrentEventSource()
+	if !isFromEventService(event, source) {
+		return
+	}
 	if !d.isFromCurrentEpoch(event, state) {
 		if logger.IsDebugEnabled() {
 			log.Debug("receive a drop event from a stale epoch, ignore it",
@@ -573,6 +598,10 @@ func (d *dispatcherStat) handleDropEvent(event dispatcher.DispatcherEvent) {
 }
 
 func (d *dispatcherStat) handleHandshakeEvent(event dispatcher.DispatcherEvent) {
+	state, source := d.loadCurrentEventSource()
+	if !isFromEventService(event, source) {
+		return
+	}
 	log.Info("handle handshake event",
 		zap.Stringer("changefeedID", d.target.GetChangefeedID()),
 		zap.Stringer("dispatcherID", d.getDispatcherID()),
@@ -582,7 +611,6 @@ func (d *dispatcherStat) handleHandshakeEvent(event dispatcher.DispatcherEvent) 
 	if !ok {
 		log.Panic("handshake event is not a handshake event", zap.Any("event", event))
 	}
-	state := d.loadCurrentEpochState()
 	if !d.isFromCurrentEpoch(event, state) {
 		log.Info("receive a handshake event from a stale epoch, ignore it",
 			zap.Stringer("changefeedID", d.target.GetChangefeedID()),
@@ -617,11 +645,10 @@ func (d *dispatcherStat) handleHandshakeEvent(event dispatcher.DispatcherEvent) 
 }
 
 func (d *dispatcherStat) getHeartbeatReport() (node.ID, uint64, uint64, bool) {
-	eventServiceID := d.session.getEventServiceID()
+	state, eventServiceID := d.loadCurrentEventSource()
 	if eventServiceID.IsEmpty() {
 		return "", 0, 0, false
 	}
-	state := d.loadCurrentEpochState()
 	checkpointTs := min(d.target.GetCheckpointTs(), state.maxEventTs.Load())
 	return eventServiceID, checkpointTs, state.epoch, true
 }

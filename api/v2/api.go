@@ -38,9 +38,17 @@ func RegisterOpenAPIV2Routes(router *gin.Engine, api OpenAPIV2) {
 	v2.Use(middleware.LogMiddleware())
 	v2.Use(middleware.ErrorHandleMiddleware())
 
+	coordinatorMiddleware := middleware.ForwardToCoordinatorMiddleware(api.server)
+	authenticateMiddleware := middleware.AuthenticateMiddleware(api.server)
+	adminMiddleware := middleware.AdminMiddleware(api.server)
+	keyspaceCheckerMiddleware := middleware.KeyspaceCheckerMiddleware()
+	keyspaceNameCheckerMiddleware := middleware.KeyspaceNameCheckerMiddleware()
+
 	v2.GET("status", api.ServerStatus)
-	v2.POST("log", api.SetLogLevel)
-	v2.POST("log/redact", api.SetRedactMode)
+	v2.POST("log", middleware.ChangefeedOperationMiddleware("set_log_level"),
+		keyspaceCheckerMiddleware, adminMiddleware, api.SetLogLevel)
+	v2.POST("log/redact", middleware.ChangefeedOperationMiddleware("set_redact_mode"),
+		keyspaceCheckerMiddleware, adminMiddleware, api.SetRedactMode)
 	// For compatibility with the old API.
 	// TiDB Operator relies on this API to determine whether the TiCDC node is healthy.
 	router.GET("/status", api.ServerStatus)
@@ -50,19 +58,22 @@ func RegisterOpenAPIV2Routes(router *gin.Engine, api OpenAPIV2) {
 	debugGroup := router.Group("/debug")
 	debugGroup.Use(middleware.LogMiddleware())
 	debugGroup.Use(middleware.ErrorHandleMiddleware())
-	debugGroup.POST("/failpoints", api.EnableFailpoint)
-	debugGroup.DELETE("/failpoints", api.DisableFailpoint)
-	debugGroup.GET("/failpoints", api.ListFailpoints)
-	debugGroup.GET("/puller", api.GetPullerDebugInfo)
+	debugGroup.Use(keyspaceCheckerMiddleware)
+	debugGroup.POST("/failpoints", middleware.ChangefeedOperationMiddleware("enable_failpoint"),
+		adminMiddleware, api.EnableFailpoint)
+	debugGroup.DELETE("/failpoints", middleware.ChangefeedOperationMiddleware("disable_failpoint"),
+		adminMiddleware, api.DisableFailpoint)
+	debugGroup.GET("/failpoints", middleware.ChangefeedOperationMiddleware("list_failpoints"),
+		adminMiddleware, api.ListFailpoints)
+	debugGroup.GET("/puller", middleware.ChangefeedOperationMiddleware("get_puller_debug_info"),
+		adminMiddleware, api.GetPullerDebugInfo)
 	debugGroup.GET(
 		"/puller/subscriptions/:subscription_id/regions/:region_id",
+		middleware.ChangefeedOperationMiddleware("get_puller_debug_region"),
+		adminMiddleware,
 		api.GetPullerDebugRegion,
 	)
 
-	coordinatorMiddleware := middleware.ForwardToCoordinatorMiddleware(api.server)
-	authenticateMiddleware := middleware.AuthenticateMiddleware(api.server)
-	keyspaceCheckerMiddleware := middleware.KeyspaceCheckerMiddleware()
-	keyspaceNameCheckerMiddleware := middleware.KeyspaceNameCheckerMiddleware()
 	v2.GET("health", coordinatorMiddleware, api.ServerHealth)
 
 	// changefeed apis
@@ -107,7 +118,8 @@ func RegisterOpenAPIV2Routes(router *gin.Engine, api OpenAPIV2) {
 
 	// owner apis
 	ownerGroup := v2.Group("/owner")
-	ownerGroup.Use(coordinatorMiddleware)
+	ownerGroup.Use(keyspaceCheckerMiddleware, authenticateMiddleware, adminMiddleware, coordinatorMiddleware,
+		middleware.ChangefeedOperationMiddleware("resign_owner"))
 	ownerGroup.POST("/resign", api.ResignOwner)
 
 	// common APIs
@@ -115,8 +127,14 @@ func RegisterOpenAPIV2Routes(router *gin.Engine, api OpenAPIV2) {
 
 	// unsafe apis
 	unsafeGroup := v2.Group("/unsafe")
-	unsafeGroup.Use(coordinatorMiddleware, keyspaceCheckerMiddleware, authenticateMiddleware)
-	unsafeGroup.GET("/metadata", api.CDCMetaData)
-	unsafeGroup.POST("/resolve_lock", api.ResolveLock)
-	unsafeGroup.DELETE("/service_gc_safepoint", api.DeleteServiceGcSafePoint)
+	unsafeGroup.Use(keyspaceCheckerMiddleware, authenticateMiddleware, adminMiddleware, coordinatorMiddleware)
+	// The operation middleware is registered after the coordinator middleware so that
+	// only the node that executes the operation records it.
+	unsafeGroup.GET("/metadata", middleware.ChangefeedOperationMiddleware("get_unsafe_metadata"),
+		api.CDCMetaData)
+	unsafeGroup.POST("/resolve_lock", middleware.ChangefeedOperationMiddleware("resolve_lock"),
+		api.ResolveLock)
+	unsafeGroup.DELETE("/service_gc_safepoint",
+		middleware.ChangefeedOperationMiddleware("delete_service_gc_safepoint"),
+		api.DeleteServiceGcSafePoint)
 }

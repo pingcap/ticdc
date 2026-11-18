@@ -43,6 +43,7 @@ function run() {
    cert-allowed-cn = [\"fake_cn\"]
    client-user-required = true
    client-allowed-user=[\"ticdc\"]
+   client-admin-user=[\"ticdc\"]
   " >$WORK_DIR/server.toml
 
 	run_cdc_server \
