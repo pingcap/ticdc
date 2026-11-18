@@ -1032,6 +1032,10 @@ func applyTxnOrderDDLPolicy(rawEvent *PersistedDDLEvent, tableFilter filter.Filt
 		return err
 	}
 	for i, info := range rawEvent.MultipleTableInfos {
+		// Intermediate rename steps do not describe a table in the final schema.
+		if info != nil && info.ID == InvalidTableID {
+			continue
+		}
 		schema := rawEvent.SchemaName
 		if len(rawEvent.SchemaNames) > i {
 			schema = rawEvent.SchemaNames[i]

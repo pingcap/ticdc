@@ -169,3 +169,52 @@ func TestTxnOrderBatchCreateKeepsOnlyMatchedTablesUnsplit(t *testing.T) {
 		{SchemaID: 100, TableID: 201, Splitable: true},
 	}, decoded.NeedAddedTables)
 }
+
+func TestTxnOrderRenameTablesValidatesFinalNames(t *testing.T) {
+	f, err := filter.NewFilter(config.NewDefaultFilterConfig(), "", false, false)
+	require.NoError(t, err)
+
+	job := buildRenameTablesJobForTest(
+		[]int64{100, 101}, []int64{101, 100}, []int64{200, 200},
+		[]string{"test", "ordered_db"}, []string{"p", "tmp"}, []string{"tmp", "p2"}, 1010)
+	job.Query = "RENAME TABLE test.p TO ordered_db.tmp, ordered_db.tmp TO test.p2"
+	// Both entries carry the final table name in the TiDB DDL job.
+	for i := range job.BinlogInfo.MultipleTableInfos {
+		job.BinlogInfo.MultipleTableInfos[i] = newEligiblePartitionTableInfoForTest(
+			200, "p2", []model.PartitionDefinition{{ID: 201}, {ID: 202}})
+	}
+	raw, err := buildPersistedDDLEventForRenameTables(buildPersistedDDLEventFuncArgs{
+		job: job,
+		databaseMap: map[int64]*BasicDatabaseInfo{
+			100: {Name: "test"},
+			101: {Name: "ordered_db"},
+		},
+	})
+	require.NoError(t, err)
+	require.EqualValues(t, InvalidTableID, raw.MultipleTableInfos[0].ID)
+
+	for _, tc := range []struct {
+		rule string
+		want string
+	}{
+		{rule: "ordered_db.*"},
+		{rule: "test.p2", want: "does not support partitioned table test.p2"},
+	} {
+		t.Run(tc.rule, func(t *testing.T) {
+			matcher, err := ordering.NewTxnOrderMatcher([]string{tc.rule}, false)
+			require.NoError(t, err)
+			ddl, ok, err := buildDDLEvent(&raw, f, matcher, common.DDLSpanTableID)
+			require.NoError(t, err)
+			require.True(t, ok)
+			if tc.want != "" {
+				require.ErrorContains(t, ddl.GetError(), tc.want)
+				require.True(t, errors.ShouldFailChangefeed(ddl.GetError()))
+				return
+			}
+			require.NoError(t, ddl.GetError())
+			queries, err := commonEvent.SplitQueries(ddl.Query)
+			require.NoError(t, err)
+			require.Len(t, queries, 2)
+		})
+	}
+}
