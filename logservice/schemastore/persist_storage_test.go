@@ -3194,6 +3194,140 @@ func TestActionMViewRefreshOutOfPlaceCutoverDDL(t *testing.T) {
 	checkState(t, pStorage)
 }
 
+func TestActionMViewRefreshOutOfPlaceCutoverDDLReplacesOutputMLog(t *testing.T) {
+	dbPath := fmt.Sprintf("/tmp/testdb-%s", t.Name())
+	t.Cleanup(func() {
+		_ = os.RemoveAll(dbPath)
+	})
+
+	const (
+		schemaID      int64  = 100
+		schemaName    string = "test"
+		baseTableID   int64  = 150
+		oldMViewID    int64  = 200
+		oldMLogID     int64  = 201
+		newMViewID    int64  = 300
+		newMLogID     int64  = 301
+		mviewName     string = "mv_parent"
+		mlogTableName string = "$mlog$mv_parent"
+	)
+
+	createMViewJob := buildCreateMaterializedViewJobForTest(
+		schemaID, oldMViewID, mviewName, []int64{baseTableID}, "select * from t_base", 1010,
+	)
+	getCreateMaterializedViewTableInfo(createMViewJob).MaterializedViewBase = &model.MaterializedViewBaseInfo{
+		MLogID: oldMLogID,
+	}
+
+	cutoverJob := &model.Job{
+		Type:     model.ActionMViewRefreshOutOfPlaceCutover,
+		Version:  model.JobVersion2,
+		SchemaID: schemaID,
+		TableID:  oldMViewID,
+		Query:    fmt.Sprintf("REFRESH MATERIALIZED VIEW `%s`.`%s` COMPLETE OUT OF PLACE", schemaName, mviewName),
+		BinlogInfo: &model.HistoryInfo{
+			TableInfo:  newEligibleMaterializedViewTableInfoForTest(newMViewID, mviewName, []int64{baseTableID}, "select * from t_base"),
+			FinishedTS: 1040,
+		},
+	}
+	cutoverJob.BinlogInfo.TableInfo.MaterializedViewBase = &model.MaterializedViewBaseInfo{
+		MLogID: newMLogID,
+	}
+	cutoverJob.FillArgs(&model.RefreshMaterializedViewCompleteOutOfPlaceCutoverArgs{
+		OldMViewID:    oldMViewID,
+		ShadowTableID: newMViewID,
+		OldMLogID:     oldMLogID,
+		NewMLogID:     newMLogID,
+		BuildReadTSO:  1039,
+	})
+
+	checkCutoverState := func(t *testing.T, pStorage *persistentStorage) {
+		t.Helper()
+
+		require.NotContains(t, pStorage.tableMap, oldMViewID)
+		require.NotContains(t, pStorage.tableMap, oldMLogID)
+		require.True(t, pStorage.tableMap[newMViewID].IsMaterializedView)
+		require.Equal(t, &BasicTableInfo{
+			SchemaID:              schemaID,
+			Name:                  mlogTableName,
+			IsMaterializedViewLog: true,
+		}, pStorage.tableMap[newMLogID])
+		require.NotContains(t, pStorage.databaseMap[schemaID].Tables, oldMViewID)
+		require.NotContains(t, pStorage.databaseMap[schemaID].Tables, oldMLogID)
+		require.Contains(t, pStorage.databaseMap[schemaID].Tables, newMViewID)
+		require.Contains(t, pStorage.databaseMap[schemaID].Tables, newMLogID)
+
+		newMLogInfo, err := pStorage.forceGetTableInfo(newMLogID, 1040)
+		require.NoError(t, err)
+		require.Equal(t, newMLogID, newMLogInfo.TableName.TableID)
+		require.Equal(t, mlogTableName, newMLogInfo.TableName.Table)
+
+		var deletedErr *TableDeletedError
+		_, err = pStorage.forceGetTableInfo(oldMLogID, 1040)
+		require.ErrorAs(t, err, &deletedErr)
+
+		physicalTables, err := pStorage.getAllPhysicalTables(1040, nil)
+		require.NoError(t, err)
+		for _, table := range physicalTables {
+			require.NotEqual(t, newMLogID, table.TableID)
+		}
+
+		mlogEvents, err := pStorage.fetchTableDDLEvents(common.NewDispatcherID(), newMLogID, nil, 0, 1040)
+		require.NoError(t, err)
+		require.Empty(t, mlogEvents)
+	}
+
+	pStorage := newPersistentStorageForTest(dbPath, nil)
+	for _, job := range []*model.Job{
+		buildCreateSchemaJobForTest(schemaID, schemaName, 1000),
+		createMViewJob,
+		buildCreateMaterializedViewLogJobForTest(schemaID, oldMLogID, mlogTableName, oldMViewID, 1020),
+		{
+			Type:     model.ActionCreateMaterializedViewShadow,
+			SchemaID: schemaID,
+			TableID:  newMViewID,
+			BinlogInfo: &model.HistoryInfo{
+				TableInfo:  newEligibleTableInfoForTest(newMViewID, "__mv_shadow_200_1"),
+				FinishedTS: 1030,
+			},
+		},
+		cutoverJob,
+	} {
+		require.NoError(t, pStorage.handleDDLJob(job))
+	}
+	checkCutoverState(t, pStorage)
+	cutoverEvent := func() PersistedDDLEvent {
+		snap := pStorage.db.NewSnapshot()
+		defer snap.Close()
+		return readPersistedDDLEvent(snap, 1040)
+	}()
+	require.Equal(t, oldMLogID, cutoverEvent.OldMLogID)
+	require.Equal(t, newMLogID, cutoverEvent.NewMLogID)
+	require.Equal(t, mlogTableName, cutoverEvent.MLogTableName)
+
+	pStorage.close()
+	pStorage = loadPersistentStorageFromPathForTest(dbPath, math.MaxUint64)
+	checkCutoverState(t, pStorage)
+
+	// Events written before this fix did not persist the MLog replacement fields.
+	// Verify that restart can recover the replacement from the new MV metadata.
+	cutoverEvent.OldMLogID = 0
+	cutoverEvent.NewMLogID = 0
+	cutoverEvent.MLogTableName = ""
+	require.NoError(t, writePersistedDDLEvent(pStorage.db, &cutoverEvent))
+	pStorage.close()
+	pStorage = loadPersistentStorageFromPathForTest(dbPath, math.MaxUint64)
+	checkCutoverState(t, pStorage)
+
+	require.NoError(t, pStorage.handleDDLJob(buildDropMaterializedViewLogJobForTest(schemaID, newMLogID, 1050)))
+	require.NotContains(t, pStorage.tableMap, newMLogID)
+	pStorage.close()
+
+	pStorage = loadPersistentStorageFromPathForTest(dbPath, math.MaxUint64)
+	defer pStorage.close()
+	require.NotContains(t, pStorage.tableMap, newMLogID)
+}
+
 func TestActionMViewRefreshOutOfPlaceCutoverDDLWithTableFilter(t *testing.T) {
 	dbPath := fmt.Sprintf("/tmp/testdb-%s", t.Name())
 	t.Cleanup(func() {

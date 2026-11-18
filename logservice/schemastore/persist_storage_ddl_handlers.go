@@ -376,10 +376,10 @@ var allDDLHandlers = map[model.ActionType]*persistStorageDDLHandler{
 	model.ActionMViewRefreshOutOfPlaceCutover: {
 		buildPersistedDDLEventFunc: buildPersistedDDLEventForMViewRefreshOutOfPlaceCutover,
 		updateDDLHistoryFunc:       updateDDLHistoryForMViewRefreshOutOfPlaceCutover,
-		updateFullTableInfoFunc:    updateFullTableInfoForTruncateTable,
-		updateSchemaMetadataFunc:   updateSchemaMetadataForTruncateTable,
-		iterateEventTablesFunc:     iterateEventTablesForTruncateTable,
-		extractTableInfoFunc:       extractTableInfoFuncForTruncateTable,
+		updateFullTableInfoFunc:    updateFullTableInfoForMViewRefreshOutOfPlaceCutover,
+		updateSchemaMetadataFunc:   updateSchemaMetadataForMViewRefreshOutOfPlaceCutover,
+		iterateEventTablesFunc:     iterateEventTablesForMViewRefreshOutOfPlaceCutover,
+		extractTableInfoFunc:       extractTableInfoFuncForMViewRefreshOutOfPlaceCutover,
 		buildDDLEventFunc:          buildDDLEventForMViewRefreshOutOfPlaceCutover,
 	},
 	model.ActionTruncateTablePartition: {
@@ -976,12 +976,128 @@ func buildPersistedDDLEventForMViewRefreshOutOfPlaceCutover(args buildPersistedD
 	event.ExtraTableID = cutoverArgs.ShadowTableID
 	event.SchemaName = getSchemaName(args.databaseMap, event.SchemaID)
 	event.TableName = event.TableInfo.Name.O
+	if (cutoverArgs.OldMLogID == 0) != (cutoverArgs.NewMLogID == 0) {
+		log.Panic("old and new materialized view log ids must both be set or unset",
+			zap.Int64("jobID", event.ID),
+			zap.Int64("oldMLogID", cutoverArgs.OldMLogID),
+			zap.Int64("newMLogID", cutoverArgs.NewMLogID))
+	}
+	if cutoverArgs.OldMLogID != 0 {
+		oldMLogInfo, ok := args.tableMap[cutoverArgs.OldMLogID]
+		if !ok || !isMaterializedViewLogBasicTable(oldMLogInfo) {
+			log.Panic("old materialized view log not found for materialized view cutover",
+				zap.Int64("jobID", event.ID),
+				zap.Int64("oldMLogID", cutoverArgs.OldMLogID))
+		}
+		event.OldMLogID = cutoverArgs.OldMLogID
+		event.NewMLogID = cutoverArgs.NewMLogID
+		event.MLogTableName = oldMLogInfo.Name
+	}
 	if isPartitionTable(event.TableInfo) {
 		for id := range args.partitionMap[event.TableID] {
 			event.PrevPartitions = append(event.PrevPartitions, id)
 		}
 	}
 	return event
+}
+
+func fillMLogReplacementFromLegacyMViewCutoverEvent(
+	event *PersistedDDLEvent, tableMap map[int64]*BasicTableInfo,
+) {
+	if event.OldMLogID != 0 || event.NewMLogID != 0 || event.TableInfo == nil ||
+		event.TableInfo.MaterializedViewBase == nil || event.TableInfo.MaterializedViewBase.MLogID == 0 {
+		return
+	}
+
+	mlogName := model.MaterializedViewLogTableName(event.TableInfo.Name).O
+	for tableID, tableInfo := range tableMap {
+		if tableInfo.SchemaID != event.SchemaID || !isMaterializedViewLogBasicTable(tableInfo) ||
+			!strings.EqualFold(tableInfo.Name, mlogName) {
+			continue
+		}
+		if event.OldMLogID != 0 {
+			log.Panic("multiple old materialized view logs found for legacy materialized view cutover",
+				zap.Int64("firstMLogID", event.OldMLogID),
+				zap.Int64("secondMLogID", tableID),
+				zap.String("mlogName", mlogName))
+		}
+		event.OldMLogID = tableID
+		event.NewMLogID = event.TableInfo.MaterializedViewBase.MLogID
+		event.MLogTableName = tableInfo.Name
+	}
+	if event.OldMLogID == 0 {
+		log.Panic("old materialized view log not found for legacy materialized view cutover",
+			zap.Int64("oldMViewID", event.TableID),
+			zap.Int64("newMLogID", event.TableInfo.MaterializedViewBase.MLogID),
+			zap.String("mlogName", mlogName))
+	}
+}
+
+func fillMLogReplacementFromLegacyMViewCutoverFullTableInfo(
+	event *PersistedDDLEvent, tableInfoMap map[int64]*model.TableInfo,
+) {
+	if event.OldMLogID != 0 || event.NewMLogID != 0 || event.TableInfo == nil ||
+		event.TableInfo.MaterializedViewBase == nil || event.TableInfo.MaterializedViewBase.MLogID == 0 {
+		return
+	}
+
+	for tableID, tableInfo := range tableInfoMap {
+		if !isMaterializedViewLogTable(tableInfo) || tableInfo.MaterializedViewLog.BaseTableID != event.TableID {
+			continue
+		}
+		if event.OldMLogID != 0 {
+			log.Panic("multiple old materialized view logs found for legacy materialized view cutover",
+				zap.Int64("firstMLogID", event.OldMLogID),
+				zap.Int64("secondMLogID", tableID))
+		}
+		event.OldMLogID = tableID
+		event.NewMLogID = event.TableInfo.MaterializedViewBase.MLogID
+		event.MLogTableName = tableInfo.Name.O
+	}
+	if event.OldMLogID == 0 {
+		log.Panic("old materialized view log table info not found for legacy materialized view cutover",
+			zap.Int64("oldMViewID", event.TableID),
+			zap.Int64("newMLogID", event.TableInfo.MaterializedViewBase.MLogID))
+	}
+}
+
+func getMLogReplacementFromMViewCutoverEvent(event *PersistedDDLEvent) (int64, string) {
+	if event.NewMLogID != 0 {
+		return event.NewMLogID, event.MLogTableName
+	}
+	if event.TableInfo == nil || event.TableInfo.MaterializedViewBase == nil ||
+		event.TableInfo.MaterializedViewBase.MLogID == 0 {
+		return 0, ""
+	}
+	return event.TableInfo.MaterializedViewBase.MLogID,
+		model.MaterializedViewLogTableName(event.TableInfo.Name).O
+}
+
+func isMLogIDInMViewCutoverEvent(event *PersistedDDLEvent, tableID int64) bool {
+	newMLogID, _ := getMLogReplacementFromMViewCutoverEvent(event)
+	if newMLogID == 0 {
+		return false
+	}
+	if event.OldMLogID != 0 {
+		return tableID == event.OldMLogID || tableID == newMLogID
+	}
+	if tableID == newMLogID {
+		return true
+	}
+	if isPartitionTable(event.TableInfo) {
+		for _, partitionID := range event.PrevPartitions {
+			if tableID == partitionID {
+				return false
+			}
+		}
+		for _, partitionID := range getAllPartitionIDs(event.TableInfo) {
+			if tableID == partitionID {
+				return false
+			}
+		}
+		return true
+	}
+	return tableID != event.TableID && tableID != event.ExtraTableID
 }
 
 func buildPersistedDDLEventForRenameTable(args buildPersistedDDLEventFuncArgs) PersistedDDLEvent {
@@ -1506,12 +1622,16 @@ func updateDDLHistoryForTruncateTable(args updateDDLHistoryFuncArgs) []uint64 {
 }
 
 func updateDDLHistoryForMViewRefreshOutOfPlaceCutover(args updateDDLHistoryFuncArgs) []uint64 {
+	fillMLogReplacementFromLegacyMViewCutoverEvent(args.ddlEvent, args.tableMap)
 	args.appendTableTriggerDDLHistory(args.ddlEvent.FinishedTs)
 	if isPartitionTable(args.ddlEvent.TableInfo) {
 		args.appendTablesDDLHistory(args.ddlEvent.FinishedTs, getAllPartitionIDs(args.ddlEvent.TableInfo)...)
 		args.appendTablesDDLHistory(args.ddlEvent.FinishedTs, args.ddlEvent.PrevPartitions...)
 	} else {
 		args.appendTablesDDLHistory(args.ddlEvent.FinishedTs, args.ddlEvent.TableID, args.ddlEvent.ExtraTableID)
+	}
+	if args.ddlEvent.OldMLogID != 0 {
+		args.appendTablesDDLHistory(args.ddlEvent.FinishedTs, args.ddlEvent.OldMLogID, args.ddlEvent.NewMLogID)
 	}
 	return args.tableTriggerDDLHistory
 }
@@ -1648,6 +1768,27 @@ func updateFullTableInfoForTruncateTable(args updateFullTableInfoFuncArgs) {
 	args.tableInfoMap[args.event.ExtraTableID] = args.event.TableInfo
 }
 
+func updateFullTableInfoForMViewRefreshOutOfPlaceCutover(args updateFullTableInfoFuncArgs) {
+	fillMLogReplacementFromLegacyMViewCutoverFullTableInfo(args.event, args.tableInfoMap)
+	updateFullTableInfoForTruncateTable(args)
+	if args.event.OldMLogID == 0 {
+		return
+	}
+
+	oldMLogInfo, ok := args.tableInfoMap[args.event.OldMLogID]
+	if !ok || !isMaterializedViewLogTable(oldMLogInfo) {
+		log.Panic("old materialized view log table info not found for materialized view cutover",
+			zap.Int64("oldMLogID", args.event.OldMLogID),
+			zap.Int64("newMLogID", args.event.NewMLogID))
+	}
+	newMLogInfo := oldMLogInfo.Clone()
+	newMLogInfo.ID = args.event.NewMLogID
+	newMLogInfo.Name = parser_model.NewCIStr(args.event.MLogTableName)
+	newMLogInfo.MaterializedViewLog.BaseTableID = args.event.ExtraTableID
+	delete(args.tableInfoMap, args.event.OldMLogID)
+	args.tableInfoMap[args.event.NewMLogID] = newMLogInfo
+}
+
 func updateFullTableInfoForExchangeTablePartition(args updateFullTableInfoFuncArgs) {
 	physicalIDs := getAllPartitionIDs(args.event.TableInfo)
 	droppedIDs := getDroppedIDs(args.event.PrevPartitions, physicalIDs)
@@ -1742,6 +1883,29 @@ func updateSchemaMetadataForTruncateTable(args updateSchemaMetadataFuncArgs) {
 		partitionInfo := make(BasicPartitionInfo)
 		partitionInfo.AddPartitionIDs(getAllPartitionIDs(args.event.TableInfo)...)
 		args.partitionMap[newTableID] = partitionInfo
+	}
+}
+
+func updateSchemaMetadataForMViewRefreshOutOfPlaceCutover(args updateSchemaMetadataFuncArgs) {
+	fillMLogReplacementFromLegacyMViewCutoverEvent(args.event, args.tableMap)
+	updateSchemaMetadataForTruncateTable(args)
+	if args.event.OldMLogID == 0 {
+		return
+	}
+
+	oldMLogInfo, ok := args.tableMap[args.event.OldMLogID]
+	if !ok || !isMaterializedViewLogBasicTable(oldMLogInfo) {
+		log.Panic("old materialized view log metadata not found for materialized view cutover",
+			zap.Int64("oldMLogID", args.event.OldMLogID),
+			zap.Int64("newMLogID", args.event.NewMLogID))
+	}
+	args.removeTableFromDB(args.event.OldMLogID, args.event.SchemaID)
+	delete(args.tableMap, args.event.OldMLogID)
+	args.addTableToDB(args.event.NewMLogID, args.event.SchemaID)
+	args.tableMap[args.event.NewMLogID] = &BasicTableInfo{
+		SchemaID:              args.event.SchemaID,
+		Name:                  args.event.MLogTableName,
+		IsMaterializedViewLog: true,
 	}
 }
 
@@ -1903,6 +2067,13 @@ func iterateEventTablesForTruncateTable(event *PersistedDDLEvent, apply func(tab
 		apply(getAllPartitionIDs(event.TableInfo)...)
 	} else {
 		apply(event.ExtraTableID, event.TableID)
+	}
+}
+
+func iterateEventTablesForMViewRefreshOutOfPlaceCutover(event *PersistedDDLEvent, apply func(tableId ...int64)) {
+	iterateEventTablesForTruncateTable(event, apply)
+	if event.OldMLogID != 0 {
+		apply(event.OldMLogID, event.NewMLogID)
 	}
 }
 
@@ -2088,6 +2259,23 @@ func extractTableInfoFuncForTruncateTable(event *PersistedDDLEvent, tableID int6
 	}
 	log.Panic("should not reach here", zap.Int64("tableID", tableID))
 	return nil, false
+}
+
+func extractTableInfoFuncForMViewRefreshOutOfPlaceCutover(event *PersistedDDLEvent, tableID int64) (*common.TableInfo, bool) {
+	newMLogID, mlogTableName := getMLogReplacementFromMViewCutoverEvent(event)
+	if isMLogIDInMViewCutoverEvent(event, tableID) {
+		if tableID != newMLogID {
+			return nil, true
+		}
+		return common.WrapTableInfo(event.SchemaName, &model.TableInfo{
+			ID:   newMLogID,
+			Name: parser_model.NewCIStr(mlogTableName),
+			MaterializedViewLog: &model.MaterializedViewLogInfo{
+				BaseTableID: event.ExtraTableID,
+			},
+		}), false
+	}
+	return extractTableInfoFuncForTruncateTable(event, tableID)
 }
 
 func extractTableInfoFuncForAddPartition(event *PersistedDDLEvent, tableID int64) (*common.TableInfo, bool) {
@@ -2673,6 +2861,9 @@ func buildDDLEventForNormalDDLOnSingleTable(rawEvent *PersistedDDLEvent, tableFi
 }
 
 func buildDDLEventForMViewRefreshOutOfPlaceCutover(rawEvent *PersistedDDLEvent, tableFilter filter.Filter, tableID int64) (commonEvent.DDLEvent, bool, error) {
+	if tableID != 0 && isMLogIDInMViewCutoverEvent(rawEvent, tableID) {
+		return commonEvent.DDLEvent{}, false, nil
+	}
 	if tableID == 0 {
 		tableID = rawEvent.ExtraTableID
 	}

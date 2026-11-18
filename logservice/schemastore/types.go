@@ -51,6 +51,12 @@ type PersistedDDLEvent struct {
 	// - for RenameTable, it is the table name of the old table
 	ExtraTableName string `msg:"extra_table_name"`
 
+	// The following fields are only used for materialized view out-of-place
+	// refresh cutover when the materialized view has an output MLog.
+	OldMLogID     int64  `msg:"old_mlog_id"`
+	NewMLogID     int64  `msg:"new_mlog_id"`
+	MLogTableName string `msg:"mlog_table_name"`
+
 	// the following fields are only used for RenameTables
 	SchemaIDs        []int64  `msg:"schema_ids"`
 	SchemaNames      []string `msg:"schema_names"`
