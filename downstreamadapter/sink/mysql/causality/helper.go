@@ -79,7 +79,8 @@ func genRowKeys(row commonEvent.RowChange, tableInfo *common.TableInfo, dispatch
 		// An integer primary key (or an explicit extra handle) may not have
 		// an IndexInfo, so retain its dependency separately.
 		pkIndex := tableInfo.GetPKIndex()
-		if tableInfo.PKIsHandle() || (len(pkIndex) == 1 && pkIndex[0] == model.ExtraHandleID) {
+		// Decoded schemas may set PKIsHandle without a primary column.
+		if len(pkIndex) == 1 && (tableInfo.PKIsHandle() || pkIndex[0] == model.ExtraHandleID) {
 			pkColumns := []*model.IndexColumn{{
 				Offset: tableInfo.MustGetColumnOffsetByID(pkIndex[0]),
 				Length: types.UnspecifiedLength,
