@@ -31,6 +31,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/keyspace"
 	"github.com/pingcap/ticdc/pkg/server/mock"
 	"github.com/stretchr/testify/require"
+	clientv3 "go.etcd.io/etcd/client/v3"
 	"go.uber.org/zap/zapcore"
 )
 
@@ -52,13 +53,40 @@ func TestLogLevelRouteRequiresAuthentication(t *testing.T) {
 	apiServer := mock.NewMockServer(ctrl)
 	etcdClient := etcd.NewMockCDCEtcdClient(ctrl)
 	apiServer.EXPECT().GetEtcdClient().Return(etcdClient)
-	etcdClient.EXPECT().GetEtcdClient().Return(nil)
+	path := "/api/v2/log"
+	useCredentials := false
+	if kerneltype.IsNextGen() {
+		previous, _ := appcontext.TryGetService[keyspace.Manager](appcontext.KeyspaceManager)
+		t.Cleanup(func() { appcontext.SetService(appcontext.KeyspaceManager, previous) })
+		keyspaceManager := keyspace.NewMockManager(ctrl)
+		keyspaceManager.EXPECT().LoadKeyspace(gomock.Any(), "auth-keyspace").Return(
+			&keyspacepb.KeyspaceMeta{
+				Keyspace: &keyspacepb.KeyspaceMeta_Id{Id: 42},
+				Name:     "auth-keyspace",
+			}, nil,
+		)
+		appcontext.SetService[keyspace.Manager](appcontext.KeyspaceManager, keyspaceManager)
+		client := etcd.NewMockClient(ctrl)
+		client.EXPECT().Get(
+			gomock.Any(),
+			"/keyspaces/tidb/42/topology/tidb",
+			gomock.Any(),
+		).Return(&clientv3.GetResponse{}, nil)
+		etcdClient.EXPECT().GetEtcdClient().Return(client)
+		path += "?keyspace=auth-keyspace"
+		useCredentials = true
+	} else {
+		etcdClient.EXPECT().GetEtcdClient().Return(nil)
+	}
 
 	router := gin.New()
 	RegisterOpenAPIV2Routes(router, NewOpenAPIV2(apiServer))
 
-	request := httptest.NewRequest(http.MethodPost, "/api/v2/log", strings.NewReader(`{"log_level":"error"}`))
+	request := httptest.NewRequest(http.MethodPost, path, strings.NewReader(`{"log_level":"error"}`))
 	request.Header.Set("Content-Type", "application/json")
+	if useCredentials {
+		request.SetBasicAuth("alice", "password")
+	}
 	response := httptest.NewRecorder()
 	router.ServeHTTP(response, request)
 
