@@ -38,9 +38,14 @@ func RegisterOpenAPIV2Routes(router *gin.Engine, api OpenAPIV2) {
 	v2.Use(middleware.LogMiddleware())
 	v2.Use(middleware.ErrorHandleMiddleware())
 
+	coordinatorMiddleware := middleware.ForwardToCoordinatorMiddleware(api.server)
+	authenticateMiddleware := middleware.AuthenticateMiddleware(api.server)
+	keyspaceCheckerMiddleware := middleware.KeyspaceCheckerMiddleware()
+	keyspaceNameCheckerMiddleware := middleware.KeyspaceNameCheckerMiddleware()
+
 	v2.GET("status", api.ServerStatus)
 	v2.POST("log", api.SetLogLevel)
-	v2.POST("log/redact", api.SetRedactMode)
+	v2.POST("log/redact", keyspaceCheckerMiddleware, authenticateMiddleware, api.SetRedactMode)
 	// For compatibility with the old API.
 	// TiDB Operator relies on this API to determine whether the TiCDC node is healthy.
 	router.GET("/status", api.ServerStatus)
@@ -50,6 +55,7 @@ func RegisterOpenAPIV2Routes(router *gin.Engine, api OpenAPIV2) {
 	debugGroup := router.Group("/debug")
 	debugGroup.Use(middleware.LogMiddleware())
 	debugGroup.Use(middleware.ErrorHandleMiddleware())
+	debugGroup.Use(keyspaceCheckerMiddleware, authenticateMiddleware)
 	debugGroup.POST("/failpoints", api.EnableFailpoint)
 	debugGroup.DELETE("/failpoints", api.DisableFailpoint)
 	debugGroup.GET("/failpoints", api.ListFailpoints)
@@ -59,10 +65,6 @@ func RegisterOpenAPIV2Routes(router *gin.Engine, api OpenAPIV2) {
 		api.GetPullerDebugRegion,
 	)
 
-	coordinatorMiddleware := middleware.ForwardToCoordinatorMiddleware(api.server)
-	authenticateMiddleware := middleware.AuthenticateMiddleware(api.server)
-	keyspaceCheckerMiddleware := middleware.KeyspaceCheckerMiddleware()
-	keyspaceNameCheckerMiddleware := middleware.KeyspaceNameCheckerMiddleware()
 	v2.GET("health", coordinatorMiddleware, api.ServerHealth)
 
 	// changefeed apis
@@ -107,7 +109,7 @@ func RegisterOpenAPIV2Routes(router *gin.Engine, api OpenAPIV2) {
 
 	// owner apis
 	ownerGroup := v2.Group("/owner")
-	ownerGroup.Use(coordinatorMiddleware)
+	ownerGroup.Use(keyspaceCheckerMiddleware, authenticateMiddleware, coordinatorMiddleware)
 	ownerGroup.POST("/resign", api.ResignOwner)
 
 	// common APIs
