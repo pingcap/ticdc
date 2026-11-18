@@ -512,6 +512,82 @@ func TestHandleMessageIgnoresInvalidSingleMessagePayloads(t *testing.T) {
 	})
 }
 
+func TestHandleMessageRejectsInvalidDispatcherRequests(t *testing.T) {
+	service := &eventService{dispatcherInfoChan: make(chan DispatcherInfo, 8)}
+	changefeedID := common.NewChangefeedID4Test("default", "test")
+	validSpan := common.TableIDToComparableSpan(0, 100)
+
+	request := func(from node.ID, serverID string, span *heartbeatpb.TableSpan, action eventpb.ActionType) *messaging.TargetMessage {
+		return &messaging.TargetMessage{
+			From: from,
+			Type: messaging.TypeDispatcherRequest,
+			Message: []messaging.IOTypeT{
+				&messaging.DispatcherRequest{
+					DispatcherRequest: &eventpb.DispatcherRequest{
+						ClusterId:    1,
+						ChangefeedId: changefeedID.ToPB(),
+						DispatcherId: common.NewDispatcherID().ToPB(),
+						TableSpan:    span,
+						ServerId:     serverID,
+						ActionType:   action,
+					},
+				},
+			},
+		}
+	}
+
+	// A capture can only operate on its own dispatchers.
+	require.NoError(t, service.handleMessage(t.Context(),
+		request("server1", "server2", &validSpan, eventpb.ActionType_ACTION_TYPE_REGISTER)))
+	require.Empty(t, service.dispatcherInfoChan)
+
+	// The span must stay inside the key range of the table it claims.
+	outOfRange := &heartbeatpb.TableSpan{TableID: 100, StartKey: []byte("a"), EndKey: []byte("z")}
+	require.NoError(t, service.handleMessage(t.Context(),
+		request("server1", "server1", outOfRange, eventpb.ActionType_ACTION_TYPE_REGISTER)))
+	require.Empty(t, service.dispatcherInfoChan)
+
+	// A zero table id is only valid for the DDL span.
+	zeroTable := &heartbeatpb.TableSpan{TableID: 0, StartKey: []byte{1}, EndKey: []byte{2}}
+	require.NoError(t, service.handleMessage(t.Context(),
+		request("server1", "server1", zeroTable, eventpb.ActionType_ACTION_TYPE_RESET)))
+	require.Empty(t, service.dispatcherInfoChan)
+
+	// A removal request does not carry a span.
+	require.NoError(t, service.handleMessage(t.Context(),
+		request("server1", "server1", nil, eventpb.ActionType_ACTION_TYPE_REMOVE)))
+	info := <-service.dispatcherInfoChan
+	require.Equal(t, eventpb.ActionType_ACTION_TYPE_REMOVE, info.GetActionType())
+
+	require.NoError(t, service.handleMessage(t.Context(),
+		request("server1", "server1", &validSpan, eventpb.ActionType_ACTION_TYPE_REGISTER)))
+	info = <-service.dispatcherInfoChan
+	require.Equal(t, eventpb.ActionType_ACTION_TYPE_REGISTER, info.GetActionType())
+	require.True(t, info.GetTableSpan().Equal(&validSpan))
+}
+
+func TestValidateTableSpan(t *testing.T) {
+	validSpan := common.TableIDToComparableSpan(0, 100)
+	require.NoError(t, validateTableSpan(&validSpan))
+	require.NoError(t, validateTableSpan(common.KeyspaceDDLSpan(0)))
+
+	// A sub span of the same table is valid.
+	subSpan := &heartbeatpb.TableSpan{
+		TableID:  validSpan.TableID,
+		StartKey: validSpan.StartKey,
+		EndKey:   append(append([]byte{}, validSpan.StartKey...), 'k'),
+	}
+	require.NoError(t, validateTableSpan(subSpan))
+
+	outOfRange := &heartbeatpb.TableSpan{
+		TableID:  validSpan.TableID,
+		StartKey: validSpan.StartKey,
+		EndKey:   append(append([]byte{}, validSpan.EndKey...), 'z'),
+	}
+	require.Error(t, validateTableSpan(outOfRange))
+	require.Error(t, validateTableSpan(nil))
+}
+
 var _ eventstore.EventStore = &mockEventStore{}
 
 // mockEventStore is a mock implementation of the EventStore interface

@@ -90,6 +90,11 @@ var (
 		errors.RFCCodeText("CDC:ErrDispatcherFailed"),
 	)
 
+	ErrInvalidDispatcherRequest = errors.Normalize(
+		"invalid dispatcher request: %s",
+		errors.RFCCodeText("CDC:ErrInvalidDispatcherRequest"),
+	)
+
 	ErrColumnSelectorFailed = errors.Normalize(
 		"column selector failed",
 		errors.RFCCodeText("CDC:ErrColumnSelectorFailed"),
