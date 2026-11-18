@@ -79,8 +79,6 @@ func NewBarrier(spanController *span.Controller,
 func (b *Barrier) HandleStatus(from node.ID,
 	request *heartbeatpb.BlockStatusRequest,
 ) []*messaging.TargetMessage {
-<<<<<<< HEAD
-=======
 	if request == nil || request.ChangefeedID == nil {
 		log.Warn("ignore invalid block status request",
 			zap.String("from", from.String()),
@@ -90,7 +88,6 @@ func (b *Barrier) HandleStatus(from node.ID,
 	log.Debug("handle block status", zap.String("from", from.String()),
 		zap.String("changefeed", request.ChangefeedID.GetName()),
 		zap.Any("detail", request), zap.Int64("mode", b.mode))
->>>>>>> 1c011427d (*: harden API access and downstream query handling (#6581))
 	eventDispatcherIDsMap := make(map[*BarrierEvent][]*heartbeatpb.DispatcherID)
 	actions := map[node.ID][]*heartbeatpb.DispatcherStatus{}
 	var dispatcherStatus []*heartbeatpb.DispatcherStatus
