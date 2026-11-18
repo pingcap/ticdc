@@ -83,6 +83,8 @@ func TestTxnOrderSnapshotAndDDL(t *testing.T) {
 					require.True(t, errors.ShouldFailChangefeed(decoded.GetError()))
 				} else {
 					require.NoError(t, ddl.GetError())
+					require.Len(t, ddl.NeedAddedTables, 1)
+					require.Equal(t, rule != "test.ordered", ddl.NeedAddedTables[0].Splitable)
 				}
 				// Existing table dispatchers must receive the same validation error.
 				raw.Type = byte(model.ActionAddIndex)
@@ -115,24 +117,55 @@ func TestTxnOrderSnapshotAndDDL(t *testing.T) {
 					raw.MultipleTableInfos = []*model.TableInfo{tableInfo}
 					raw.SchemaNames = []string{"test"}
 				}
-				require.ErrorContains(t, verifyTxnOrderDDL(raw, f, matcher), "does not support partitioned table")
+				require.ErrorContains(t, applyTxnOrderDDLPolicy(raw, f, matcher, nil), "does not support partitioned table")
 			}
 			noKey := tableInfo.Clone()
 			noKey.PKIsHandle = false
 			noKey.Indices = nil
 			raw := &PersistedDDLEvent{SchemaName: "test", TableInfo: noKey}
-			require.NoError(t, verifyTxnOrderDDL(raw, f, matcher))
+			require.NoError(t, applyTxnOrderDDLPolicy(raw, f, matcher, nil))
 			forced, err := filter.NewFilter(config.NewDefaultFilterConfig(), "", false, true)
 			require.NoError(t, err)
-			require.ErrorContains(t, verifyTxnOrderDDL(raw, forced, matcher), "does not support partitioned table")
+			require.ErrorContains(t, applyTxnOrderDDLPolicy(raw, forced, matcher, nil), "does not support partitioned table")
 			excludedConfig := config.NewDefaultFilterConfig()
 			excludedConfig.Rules = []string{"*.*", "!test.ordered"}
 			excluded, err := filter.NewFilter(excludedConfig, "", false, false)
 			require.NoError(t, err)
-			require.NoError(t, verifyTxnOrderDDL(raw, excluded, matcher))
+			require.NoError(t, applyTxnOrderDDLPolicy(raw, excluded, matcher, nil))
 			tables, err := loadAllPhysicalTablesAtTs(snap, 100, 100, excluded, matcher, nil, 0)
 			require.NoError(t, err)
 			require.Empty(t, tables)
 		})
 	}
+}
+
+func TestTxnOrderBatchCreateKeepsOnlyMatchedTablesUnsplit(t *testing.T) {
+	f, err := filter.NewFilter(config.NewDefaultFilterConfig(), "", false, false)
+	require.NoError(t, err)
+	matcher, err := ordering.NewTxnOrderMatcher([]string{"test.ordered"}, false)
+	require.NoError(t, err)
+	raw := &PersistedDDLEvent{
+		Type:       byte(model.ActionCreateTables),
+		SchemaID:   100,
+		SchemaName: "test",
+		FinishedTs: 101,
+		Query:      "CREATE TABLE test.ordered (id INT PRIMARY KEY); CREATE TABLE test.regular (id INT PRIMARY KEY)",
+		MultipleTableInfos: []*model.TableInfo{
+			newEligibleTableInfoForTest(200, "ordered"),
+			newEligibleTableInfoForTest(201, "regular"),
+		},
+	}
+
+	ddl, ok, err := buildDDLEvent(raw, f, matcher, common.DDLSpanTableID)
+	require.NoError(t, err)
+	require.True(t, ok)
+	require.NoError(t, ddl.GetError())
+	data, err := ddl.Marshal()
+	require.NoError(t, err)
+	var decoded commonEvent.DDLEvent
+	require.NoError(t, decoded.Unmarshal(data))
+	require.ElementsMatch(t, []commonEvent.Table{
+		{SchemaID: 100, TableID: 200, Splitable: false},
+		{SchemaID: 100, TableID: 201, Splitable: true},
+	}, decoded.NeedAddedTables)
 }

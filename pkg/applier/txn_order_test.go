@@ -90,7 +90,9 @@ func TestTxnOrderRedoReplay(t *testing.T) {
 	}
 	require.NoError(t, ap.waitTableFlush(ctx, 42, 120))
 	partition := &common.TableName{Schema: "test", Table: "ordered", TableID: 43, IsPartition: true}
-	require.ErrorContains(t, ap.applyRow(&commonEvent.RedoDMLEvent{Row: &commonEvent.DMLEventInRedoLog{Table: partition}}, 100), "does not support partitioned table")
+	require.ErrorContains(t, ap.applyRow(&commonEvent.RedoDMLEvent{Row: &commonEvent.DMLEventInRedoLog{
+		Table: partition, CommitTs: 130,
+	}}, 100), "does not support partitioned table")
 	require.ErrorContains(t, ap.applyDDL(ctx, &commonEvent.RedoDDLEvent{
 		Type: byte(timodel.ActionCreateTable), TableName: *partition, DDL: &commonEvent.DDLEventInRedoLog{CommitTs: 130},
 	}, 100), "does not support partitioned table")
@@ -108,4 +110,50 @@ func TestTxnOrderRedoInvalidRules(t *testing.T) {
 	})
 	defer ap.spillStore.Cleanup()
 	require.ErrorContains(t, ap.Apply(context.Background()), "txn-order-tables")
+}
+
+func TestTxnOrderRedoSkipsValidationForRecoveredRows(t *testing.T) {
+	matcher, err := ordering.NewTxnOrderMatcher([]string{"test.ordered"}, false)
+	require.NoError(t, err)
+	for _, tc := range []struct {
+		name   string
+		table  common.TableName
+		routed bool
+		want   string
+	}{
+		{
+			name:  "ordered partition",
+			table: common.TableName{Schema: "test", Table: "ordered", TableID: 42, IsPartition: true},
+			want:  "does not support partitioned table",
+		},
+		{
+			name:   "routed legacy row without source identity",
+			table:  common.TableName{Schema: "archive", Table: "ordered_copy", TableID: 42},
+			routed: true,
+			want:   "lacks source table identity",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ap := NewRedoApplier(&RedoApplierConfig{})
+			t.Cleanup(func() { require.NoError(t, ap.spillStore.Cleanup()) })
+			ap.txnOrderMatcher = matcher
+			ap.hasTableRoute = tc.routed
+			row := &commonEvent.RedoDMLEvent{Row: &commonEvent.DMLEventInRedoLog{
+				Table:    &tc.table,
+				CommitTs: 101,
+			}}
+			ap.needRecoveryInfo = false
+			require.NoError(t, ap.applyRow(row, 101))
+			ap.needRecoveryInfo = true
+			ap.tableDDLTs[tc.table.TableID] = ddlTs{ts: 101}
+			require.NoError(t, ap.applyRow(row, 0))
+			ap.tableDDLTs[tc.table.TableID] = ddlTs{ts: 100, skipDML: true}
+			require.NoError(t, ap.applyRow(row, 0))
+
+			ap.tableDDLTs[tc.table.TableID] = ddlTs{ts: 100}
+			require.ErrorContains(t, ap.applyRow(row, 0), tc.want)
+			require.Zero(t, ap.appliedLogCount)
+			require.Zero(t, ap.spillStore.Stats().PayloadWriteCount)
+		})
+	}
 }

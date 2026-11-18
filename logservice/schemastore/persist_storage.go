@@ -990,7 +990,7 @@ func getDDLHandler(rawEvent *PersistedDDLEvent) *persistStorageDDLHandler {
 func buildDDLEvent(rawEvent *PersistedDDLEvent, tableFilter filter.Filter, txnOrderMatcher *ordering.TxnOrderMatcher, tableID int64) (commonEvent.DDLEvent, bool, error) {
 	ddl, ok, err := getDDLHandler(rawEvent).buildDDLEventFunc(rawEvent, tableFilter, tableID)
 	if err == nil && ok {
-		if validationErr := verifyTxnOrderDDL(rawEvent, tableFilter, txnOrderMatcher); validationErr != nil {
+		if validationErr := applyTxnOrderDDLPolicy(rawEvent, tableFilter, txnOrderMatcher, ddl.NeedAddedTables); validationErr != nil {
 			// Deliver permanent validation failures through the dispatcher error path.
 			ddl.Err = errors.WrapChangefeedUnretryableErr(validationErr).Error()
 		}
@@ -998,13 +998,24 @@ func buildDDLEvent(rawEvent *PersistedDDLEvent, tableFilter filter.Filter, txnOr
 	return ddl, ok, err
 }
 
-// verifyTxnOrderDDL checks post-DDL schemas before admitting new table dispatchers.
-func verifyTxnOrderDDL(rawEvent *PersistedDDLEvent, tableFilter filter.Filter, txnOrderMatcher *ordering.TxnOrderMatcher) error {
+// applyTxnOrderDDLPolicy validates post-DDL schemas and keeps ordered additions unsplit.
+func applyTxnOrderDDLPolicy(rawEvent *PersistedDDLEvent, tableFilter filter.Filter, txnOrderMatcher *ordering.TxnOrderMatcher, addedTables []commonEvent.Table) error {
 	if txnOrderMatcher == nil {
 		return nil
 	}
+	exchangePartition := model.ActionType(rawEvent.Type) == model.ActionExchangeTablePartition
+	var orderedIDs map[int64]struct{}
+	if len(addedTables) != 0 && !exchangePartition {
+		orderedIDs = make(map[int64]struct{}, len(addedTables))
+	}
 	verify := func(schema string, info *model.TableInfo) error {
-		if info == nil || info.GetPartitionInfo() == nil || !txnOrderMatcher.Match(schema, info.Name.O) {
+		if info == nil || !txnOrderMatcher.Match(schema, info.Name.O) {
+			return nil
+		}
+		if info.GetPartitionInfo() == nil {
+			if orderedIDs != nil {
+				orderedIDs[info.ID] = struct{}{}
+			}
 			return nil
 		}
 		tableInfo := common.WrapTableInfo(schema, info)
@@ -1014,7 +1025,7 @@ func verifyTxnOrderDDL(rawEvent *PersistedDDLEvent, tableFilter filter.Filter, t
 		return verifyTxnOrderTable(txnOrderMatcher, tableInfo)
 	}
 	schema := rawEvent.SchemaName
-	if model.ActionType(rawEvent.Type) == model.ActionExchangeTablePartition {
+	if exchangePartition {
 		schema = rawEvent.ExtraSchemaName
 	}
 	if err := verify(schema, rawEvent.TableInfo); err != nil {
@@ -1027,6 +1038,18 @@ func verifyTxnOrderDDL(rawEvent *PersistedDDLEvent, tableFilter filter.Filter, t
 		}
 		if err := verify(schema, info); err != nil {
 			return err
+		}
+	}
+	for i := range addedTables {
+		added := &addedTables[i]
+		if exchangePartition {
+			// EXCHANGE PARTITION can assign the normal table a former partition ID.
+			info, _ := extractTableInfoFuncForExchangeTablePartition(rawEvent, added.TableID)
+			if info != nil && txnOrderMatcher.Match(info.GetSchemaName(), info.GetTableName()) {
+				added.Splitable = false
+			}
+		} else if _, ordered := orderedIDs[added.TableID]; ordered {
+			added.Splitable = false
 		}
 	}
 	return nil
@@ -1050,15 +1073,11 @@ func verifyTxnOrderTable(matcher *ordering.TxnOrderMatcher, tableInfo *common.Ta
 // dispatcher's cached table info with the event's own table info without
 // knowing the DDL type.
 func buildTableDDLEvent(rawEvent *PersistedDDLEvent, tableFilter filter.Filter, txnOrderMatcher *ordering.TxnOrderMatcher, tableID int64) (commonEvent.DDLEvent, bool, error) {
-	handler := getDDLHandler(rawEvent)
-	ddlEvent, ok, err := handler.buildDDLEventFunc(rawEvent, tableFilter, tableID)
+	ddlEvent, ok, err := buildDDLEvent(rawEvent, tableFilter, txnOrderMatcher, tableID)
 	if err != nil || !ok {
 		return ddlEvent, ok, err
 	}
-	if err := verifyTxnOrderDDL(rawEvent, tableFilter, txnOrderMatcher); err != nil {
-		ddlEvent.Err = errors.WrapChangefeedUnretryableErr(err).Error()
-	}
-	tableInfo, _ := handler.extractTableInfoFunc(rawEvent, tableID)
+	tableInfo, _ := getDDLHandler(rawEvent).extractTableInfoFunc(rawEvent, tableID)
 	change := &commonEvent.TableStateChange{
 		PhysicalTableID: tableID,
 		Kind:            commonEvent.TableStateUnchanged,

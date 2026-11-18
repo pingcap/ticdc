@@ -24,9 +24,12 @@ import (
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/filter"
+	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/ticdc/pkg/ordering"
 	"github.com/stretchr/testify/require"
+	"go.uber.org/atomic"
 )
 
 func TestTxnOrderMatcherChangesIndependentlyOfFilter(t *testing.T) {
@@ -99,6 +102,8 @@ func TestTxnOrderTablesKeepCompleteTransactions(t *testing.T) {
 	}
 	info := newMockDispatcherInfoForTest(t)
 	tableID := info.GetTableSpan().TableID
+	wholeSpan := common.TableIDToComparableSpan(info.span.KeyspaceID, tableID)
+	info.span = &wholeSpan
 	for _, rule := range []string{"test.t", "test.other"} {
 		t.Run(rule, func(t *testing.T) {
 			f, err := filter.NewFilter(config.NewDefaultFilterConfig(), "", false, false)
@@ -131,6 +136,90 @@ func TestTxnOrderTablesKeepCompleteTransactions(t *testing.T) {
 					require.Equal(t, int32(1), txn.Len())
 				}
 			}
+		})
+	}
+}
+
+func TestTxnOrderScanReportsInvalidTable(t *testing.T) {
+	helper := event.NewEventTestHelper(t)
+	t.Cleanup(helper.Close)
+	partitioned := helper.DDL2Event("CREATE TABLE test.partitioned (id INT PRIMARY KEY) PARTITION BY HASH(id) PARTITIONS 2")
+	original := helper.DDL2Event("CREATE TABLE test.regular (id INT PRIMARY KEY)")
+	renamed := helper.DDL2Event("RENAME TABLE test.regular TO test.ordered")
+	require.NotNil(t, renamed.TableInfo)
+
+	for _, tc := range []struct {
+		name   string
+		start  *event.DDLEvent
+		rule   string
+		rename bool
+		split  bool
+		want   string
+	}{
+		{name: "partitioned DML", start: partitioned, rule: "test.partitioned", want: "does not support partitioned table test.partitioned"},
+		{name: "rename split span", start: original, rule: "test.ordered", rename: true, split: true, want: "does not support split spans for table test.ordered"},
+		{name: "ordered DML on split span", start: renamed, rule: "test.ordered", split: true, want: "does not support split spans for table test.ordered"},
+		{name: "rename complete span", start: original, rule: "test.ordered", rename: true},
+		{name: "rename unmatched split span", start: original, rule: "test.unrelated", rename: true, split: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			broker, store, schema, _ := newEventBrokerForTest()
+			broker.close()
+
+			info := newMockDispatcherInfoForTest(t)
+			info.epoch = 1
+			info.filterConfig.TxnOrderTables = []string{tc.rule}
+			info.startTs = tc.start.FinishedTs
+			tableID := tc.start.TableInfo.TableName.TableID
+			span := common.TableIDToComparableSpan(info.span.KeyspaceID, tableID)
+			if tc.split {
+				span.EndKey = append(append([]byte{}, span.StartKey...), 1)
+			}
+			info.span = &span
+			require.NoError(t, broker.addDispatcher(info))
+			stat := broker.getDispatcher(info.GetID()).Load()
+			stat.setHandshaked()
+			schema.AppendDDLEvent(tableID, *tc.start)
+			endTs := info.startTs + 2
+			if tc.rename {
+				ddl := *renamed
+				ddl.TableStateChange = &event.TableStateChange{PhysicalTableID: tableID, Kind: event.TableStateUpdated}
+				schema.AppendDDLEvent(tableID, ddl)
+				endTs = ddl.FinishedTs
+			} else {
+				require.NoError(t, store.AppendEvents(info.GetID(), endTs, &common.RawKVEntry{
+					StartTs: info.startTs + 1, CRTs: endTs, Key: span.StartKey,
+				}))
+			}
+			schema.resolvedTs, schema.maxDDLCommitTs = endTs, endTs
+			stat.receivedResolvedTs.Store(endTs)
+			stat.eventStoreCommitTs.Store(endTs)
+			quota := atomic.NewUint64(broker.scanLimitInBytes)
+			stat.changefeedStat.availableMemoryQuota.Store(node.ID(info.GetServerID()), quota)
+			if tc.want != "" {
+				stat.enableSyncPoint = true
+				stat.nextSyncPoint.Store(info.startTs + 1)
+			}
+			stat.scanState = dispatcherScanQueued
+			broker.doScan(t.Context(), stat)
+			messages := broker.getMessageCh(stat.messageWorkerIndex, false)
+			if tc.want == "" {
+				require.NotEmpty(t, messages)
+				ddl := (<-messages).e.(*event.DDLEvent)
+				require.Empty(t, ddl.Err)
+				require.Equal(t, endTs, stat.sentResolvedTs.Load())
+				return
+			}
+			require.Len(t, messages, 1)
+			ddl := (<-messages).e.(*event.DDLEvent)
+			data, err := ddl.Marshal()
+			require.NoError(t, err)
+			var decoded event.DDLEvent
+			require.NoError(t, decoded.Unmarshal(data))
+			require.ErrorContains(t, decoded.GetError(), tc.want)
+			require.True(t, errors.ShouldFailChangefeed(decoded.GetError()))
+			require.Equal(t, info.startTs, stat.sentResolvedTs.Load())
+			require.Equal(t, broker.scanLimitInBytes, quota.Load())
 		})
 	}
 }

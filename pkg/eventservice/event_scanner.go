@@ -252,9 +252,25 @@ func (s *eventScanner) fetchDDLEvents(stat *dispatcherStat, dataRange common.Dat
 
 	result := make([]event.Event, 0, len(ddlEvents))
 	for _, item := range ddlEvents {
+		// A rename can select a table that was previously allowed to have split spans.
+		if stat.isSplitSpan && item.Err == "" && item.TableStateChange != nil &&
+			item.TableStateChange.Kind == event.TableStateUpdated && matchesTxnOrder(stat.txnOrderMatcher, stat.filter, item.TableInfo) &&
+			(stat.filter == nil || stat.filter.IsEligibleTable(item.TableInfo)) {
+			return nil, txnOrderSplitSpanError(item.TableInfo)
+		}
 		result = append(result, &item)
 	}
 	return result, nil
+}
+
+func matchesTxnOrder(matcher *ordering.TxnOrderMatcher, tableFilter filter.Filter, info *common.TableInfo) bool {
+	return matcher != nil && info != nil && matcher.Match(info.GetSchemaName(), info.GetTableName()) &&
+		(tableFilter == nil || !tableFilter.ShouldIgnoreTable(info.GetSchemaName(), info.GetTableName()))
+}
+
+func txnOrderSplitSpanError(info *common.TableInfo) error {
+	return errors.ErrInvalidReplicaConfig.GenWithStackByArgs(
+		"sink.mysql-config.txn-order-tables does not support split spans for table " + info.TableName.String())
 }
 
 // closeIterator closes the event iterator and records metrics.
@@ -914,11 +930,13 @@ func (p *dmlProcessor) startTxn(
 	commitTs uint64,
 	shouldSplitTxn bool,
 ) error {
-	if tableInfo != nil && p.txnOrderMatcher.Match(tableInfo.GetSchemaName(), tableInfo.GetTableName()) &&
-		(p.filter == nil || !p.filter.ShouldIgnoreTable(tableInfo.GetSchemaName(), tableInfo.GetTableName())) {
+	if matchesTxnOrder(p.txnOrderMatcher, p.filter, tableInfo) {
 		if tableInfo.IsPartitionTable() {
 			return errors.ErrInvalidReplicaConfig.GenWithStackByArgs(
 				"sink.mysql-config.txn-order-tables does not support partitioned table " + tableInfo.TableName.String())
+		}
+		if p.dispatcherStat != nil && p.dispatcherStat.isSplitSpan {
+			return txnOrderSplitSpanError(tableInfo)
 		}
 		shouldSplitTxn = false
 	}

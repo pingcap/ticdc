@@ -9,8 +9,8 @@ CDC_BINARY=cdc.test
 SINK_TYPE=$1
 
 function check_partition_error() {
-	cdc_cli_changefeed query -c "$1" >"$WORK_DIR/$1-status.json"
-	grep -q 'txn-order-tables does not support partitioned table' "$WORK_DIR/$1-status.json"
+	cdc_cli_changefeed query -c "$1" >"$WORK_DIR/$1-status.json" &&
+		jq -e '.state == "failed" and (.error.message | contains("txn-order-tables does not support partitioned table"))' "$WORK_DIR/$1-status.json"
 }
 
 function check_stopped() {
@@ -48,6 +48,8 @@ INSERT INTO mysql_txn_order.t VALUES (1,0),(2,0);' 127.0.0.1 "$port"
 	check_table_exists mysql_txn_order.unordered_p "$DOWN_TIDB_HOST" "$DOWN_TIDB_PORT"
 	run_sql 'RENAME TABLE mysql_txn_order.unordered_p TO mysql_txn_order.ordered_p;' "$UP_TIDB_HOST" "$UP_TIDB_PORT"
 	ensure 30 check_partition_error ordered
+	check_table_not_exists mysql_txn_order.ordered_p "$DOWN_TIDB_HOST" "$DOWN_TIDB_PORT"
+	check_table_exists mysql_txn_order.unordered_p "$DOWN_TIDB_HOST" "$DOWN_TIDB_PORT"
 
 	if cdc_cli_changefeed create -c invalid-partition --sink-uri="$SINK_URI" --config="$CUR/conf/changefeed.toml" >"$WORK_DIR/create.log" 2>&1; then
 		echo 'ordered partitioned table was accepted at creation'

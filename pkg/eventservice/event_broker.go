@@ -297,7 +297,9 @@ func (c *eventBroker) sendDML(remoteID node.ID, batchEvent *event.BatchDMLEvent,
 }
 
 func (c *eventBroker) sendDDL(ctx context.Context, remoteID node.ID, e *event.DDLEvent, d *dispatcherStat) {
-	c.emitSyncPointEventIfNeeded(e.FinishedTs, d, remoteID)
+	if e.Err == "" {
+		c.emitSyncPointEventIfNeeded(e.FinishedTs, d, remoteID)
+	}
 	e.DispatcherID = d.id
 	e.Seq = d.seq.Add(1)
 	e.Epoch = d.epoch
@@ -846,6 +848,16 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask) {
 	if err != nil {
 		releaseQuota(available, uint64(sl.maxDMLBytes))
 		if task.isRemoved.Load() {
+			return
+		}
+		if errors.ErrInvalidReplicaConfig.Equal(err) {
+			// Use the dispatcher error path with this scan's upper bound as the
+			// event timestamp. No DML or resolved timestamp from this scan is sent.
+			c.sendDDL(ctx, remoteID, &event.DDLEvent{
+				Version:    event.DDLEventVersion1,
+				FinishedTs: request.Range.CommitTsEnd,
+				Err:        errors.WrapChangefeedUnretryableErr(err).Error(),
+			}, task)
 			return
 		}
 		log.Error("scan events failed",

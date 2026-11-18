@@ -379,9 +379,6 @@ func (ra *RedoApplier) applyDDL(
 func (ra *RedoApplier) applyRow(
 	row *commonEvent.RedoDMLEvent, checkpointTs uint64,
 ) error {
-	if err := ra.verifyRedoTable(row.Row.SourceTable, row.Row.Table); err != nil {
-		return err
-	}
 	tableID := row.Row.Table.TableID
 	if _, ok := ra.eventsGroup[tableID]; !ok {
 		ra.eventsGroup[tableID] = cmdutil.NewEventsGroup(0, tableID, ra.spillStore)
@@ -409,6 +406,9 @@ func (ra *RedoApplier) applyRow(
 	if tableDDLTs.skipDML && int64(row.Row.CommitTs)-1 == tableDDLTs.ts {
 		log.Warn("ignore the dml event since the ddl is not finished", zap.Int64("ts", tableDDLTs.ts), zap.String("row", util.RedactAny(row)))
 		return nil
+	}
+	if err := ra.verifyRedoTable(row.Row.SourceTable, row.Row.Table); err != nil {
+		return err
 	}
 
 	data, err := row.MarshalMsg(nil)

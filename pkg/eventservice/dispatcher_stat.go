@@ -74,6 +74,7 @@ type dispatcherStat struct {
 	info               DispatcherInfo
 	filter             filter.Filter
 	txnOrderMatcher    *ordering.TxnOrderMatcher
+	isSplitSpan        bool
 	// the start ts of the dispatcher
 	startTs uint64
 	// startTableInfo is the table info at the `startTs` of the dispatcher
@@ -188,6 +189,7 @@ func newDispatcherStat(
 		info:               info,
 		filter:             changefeedStatus.filter,
 		txnOrderMatcher:    changefeedStatus.txnOrderMatcher,
+		isSplitSpan:        changefeedStatus.txnOrderMatcher != nil && !common.IsCompleteSpan(info.GetTableSpan()),
 		startTs:            info.GetStartTs(),
 		epoch:              info.GetEpoch(),
 		startTableInfo:     startTableInfo,
