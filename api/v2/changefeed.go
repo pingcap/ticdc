@@ -42,6 +42,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/filter"
 	"github.com/pingcap/ticdc/pkg/keyspace"
 	"github.com/pingcap/ticdc/pkg/node"
+	"github.com/pingcap/ticdc/pkg/ordering"
 	"github.com/pingcap/ticdc/pkg/routing"
 	"github.com/pingcap/ticdc/pkg/txnutil/gc"
 	"github.com/pingcap/ticdc/pkg/util"
@@ -1819,7 +1820,7 @@ func getVerifiedTables(
 	storage kv.Storage, startTs uint64,
 	scheme string, topic string, protocol config.Protocol,
 ) ([]common.TableName, []common.TableName, []common.TableName, error) {
-	f, err := filter.NewFilterWithTxnOrderTables(replicaConfig.Filter, "", util.GetOrZero(replicaConfig.CaseSensitive), util.GetOrZero(replicaConfig.ForceReplicate), replicaConfig.Sink.GetTxnOrderTables(scheme))
+	f, err := filter.NewFilter(replicaConfig.Filter, "", util.GetOrZero(replicaConfig.CaseSensitive), util.GetOrZero(replicaConfig.ForceReplicate))
 	if err != nil {
 		return nil, nil, nil, err
 	}
@@ -1855,6 +1856,20 @@ func verifyTablesForSink(
 	protocol config.Protocol,
 	tableInfos []*common.TableInfo,
 ) error {
+	if config.IsMySQLCompatibleScheme(scheme) {
+		matcher, err := ordering.NewTxnOrderMatcher(replicaConfig.Sink.GetTxnOrderTables(scheme), util.GetOrZero(replicaConfig.CaseSensitive))
+		if err != nil {
+			return err
+		}
+		for _, tableInfo := range tableInfos {
+			if tableInfo.IsEligible(util.GetOrZero(replicaConfig.ForceReplicate)) && tableInfo.IsPartitionTable() &&
+				matcher.Match(tableInfo.GetSchemaName(), tableInfo.GetTableName()) {
+				return errors.ErrInvalidReplicaConfig.GenWithStackByArgs(
+					"sink.mysql-config.txn-order-tables does not support partitioned table " + tableInfo.TableName.String())
+			}
+		}
+		return nil
+	}
 	if config.IsStorageScheme(scheme) {
 		selectors, err := columnselector.New(replicaConfig.Sink, util.GetOrZero(replicaConfig.CaseSensitive))
 		if err != nil {
