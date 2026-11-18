@@ -95,11 +95,11 @@ func (c *consumer) start(ctx context.Context) error {
 
 func (c *consumer) readSource(ctx context.Context) error {
 	for {
-		inputs, err := c.reader.Read(ctx)
+		payloads, err := c.reader.Read(ctx)
 		if err != nil {
 			return err
 		}
-		if err := c.decoder.AddPayload(ctx, inputs); err != nil {
+		if err := c.decoder.Add(ctx, payloads); err != nil {
 			return err
 		}
 	}

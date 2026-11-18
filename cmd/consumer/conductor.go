@@ -79,7 +79,7 @@ const (
 
 // One loop owns dependency selection, decoded work and writer queues.
 // Protocol decoding and sink execution run independently of that state.
-func (c *conductor) Start(ctx context.Context, tasks <-chan []decodedEvent, w *writer) error {
+func (c *conductor) Start(ctx context.Context, tasks <-chan *future, w *writer) error {
 	g, ctx := errgroup.WithContext(ctx)
 	g.Go(func() error {
 		return c.run(ctx, tasks, w)
@@ -90,17 +90,16 @@ func (c *conductor) Start(ctx context.Context, tasks <-chan []decodedEvent, w *w
 	return g.Wait()
 }
 
-func (c *conductor) run(ctx context.Context, tasks <-chan []decodedEvent, w *writer) error {
+func (c *conductor) run(ctx context.Context, tasks <-chan *future, w *writer) error {
 	for {
 		select {
 		case <-ctx.Done():
 			return context.Cause(ctx)
-		case batch, ok := <-tasks:
-			if !ok {
-				tasks = nil
-				continue
+		case future := <-tasks:
+			if err := future.Ready(ctx); err != nil {
+				return err
 			}
-			if err := c.acceptBatch(batch); err != nil {
+			if err := c.acceptBatch(future.events, future.payload); err != nil {
 				if ctx.Err() == nil {
 					log.Error("consumer task handling failed", zap.Error(err))
 				}
@@ -121,9 +120,9 @@ func (c *conductor) run(ctx context.Context, tasks <-chan []decodedEvent, w *wri
 	}
 }
 
-func (c *conductor) acceptBatch(batch []decodedEvent) error {
+func (c *conductor) acceptBatch(batch []event.Event, origin *sourcePayload) error {
 	for _, work := range batch {
-		if err := c.accept(work); err != nil {
+		if err := c.accept(work, origin); err != nil {
 			return err
 		}
 	}
@@ -704,9 +703,8 @@ type streamReadState struct {
 	hasWatermark bool
 }
 
-func (c *conductor) accept(work decodedEvent) error {
-	origin := work.Origin
-	switch value := work.Event.(type) {
+func (c *conductor) accept(work event.Event, origin *sourcePayload) error {
+	switch value := work.(type) {
 	case *event.DMLEvent:
 		result := &dmlTask{dml: value, stream: origin.Stream, offset: origin.Offset}
 		c.readThrough = max(c.readThrough, result.dml.CommitTs)
@@ -823,16 +821,14 @@ func (c *conductor) advanceBoundary(retarget bool, target uint64) {
 	for id, stream := range c.streams {
 		watermarks = append(watermarks, streamWatermark{Stream: id, Timestamp: stream.watermark})
 	}
-	var tables []event.SchemaTableName
-	if c.boundary != nil {
-		tables = c.boundary.tables
-	}
 	progress := sourceProgress{
 		Watermarks: watermarks,
-		Scope:      tables,
 		Target:     target,
 		Retarget:   retarget,
 		Proven:     c.proven,
+	}
+	if c.boundary != nil {
+		progress.Scope = c.boundary.tables
 	}
 	c.proven = nil
 	reached := c.reader.Advance(progress)

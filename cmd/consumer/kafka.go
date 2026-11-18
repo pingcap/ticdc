@@ -273,12 +273,12 @@ func (c *kafkaReader) Close() {
 
 // CheckMessage validates an input after decoding has revealed its DML count.
 // A single oversized row is allowed by the Kafka encoder.
-func (c *kafkaReader) CheckInput(origin origin, rows int) {
+func (c *kafkaReader) CheckInput(input *sourcePayload, rows int) {
 	if rows > c.maxBatchSize {
-		log.Panic("Kafka message batch size limit exceeded", zap.String("topic", c.topic), zap.Int32("partition", origin.Stream), zap.Int64("offset", origin.Offset), zap.Int("maxBatchSize", c.maxBatchSize), zap.Int("actualBatchSize", rows))
+		log.Panic("Kafka message batch size limit exceeded", zap.String("topic", c.topic), zap.Int32("partition", input.Stream), zap.Int64("offset", input.Offset), zap.Int("maxBatchSize", c.maxBatchSize), zap.Int("actualBatchSize", rows))
 	}
-	if rows > 1 && origin.Bytes > int64(c.maxMessageBytes) {
-		log.Panic("Kafka message byte size limit exceeded", zap.String("topic", c.topic), zap.Int32("partition", origin.Stream), zap.Int64("offset", origin.Offset), zap.Int("maxMessageBytes", c.maxMessageBytes), zap.Int64("receivedBytes", origin.Bytes))
+	if rows > 1 && input.Bytes > int64(c.maxMessageBytes) {
+		log.Panic("Kafka message byte size limit exceeded", zap.String("topic", c.topic), zap.Int32("partition", input.Stream), zap.Int64("offset", input.Offset), zap.Int("maxMessageBytes", c.maxMessageBytes), zap.Int64("receivedBytes", input.Bytes))
 	}
 }
 

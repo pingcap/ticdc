@@ -54,25 +54,6 @@ type sourcePayload struct {
 	Ack func(context.Context) error
 }
 
-// origin identifies an input after its encoded payload has been released. The
-// scheduler uses it to validate delivery and to acknowledge transport progress.
-type origin struct {
-	Stream int32
-	Offset int64
-	Bytes  int64
-	Ack    func(context.Context) error
-}
-
-// Origin returns the transport identity of this input.
-func (i *sourcePayload) Origin() origin {
-	return origin{
-		Stream: i.Stream,
-		Offset: i.Offset,
-		Bytes:  i.Bytes,
-		Ack:    i.Ack,
-	}
-}
-
 // file is the storage file context needed to decode its rows.
 type file struct {
 	Schema  *cloudstorage.SchemaFile
@@ -143,7 +124,7 @@ type sourceReader interface {
 // their own routing and size limits.
 type validator interface {
 	// CheckInput validates the decoded row count of one input.
-	CheckInput(origin origin, rows int)
+	CheckInput(input *sourcePayload, rows int)
 	// CheckDML validates that a dispatched row batch was read from the stream
 	// its routing selects.
 	CheckDML(dml *event.DMLEvent, stream int32, offset int64)

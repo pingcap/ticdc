@@ -41,26 +41,18 @@ import (
 	"golang.org/x/sync/errgroup"
 )
 
-// decodedEvent carries a fully decoded event and its source position. A nil event
-// marks the end of an input, including inputs that produce no events.
-type decodedEvent struct {
-	Origin origin
-	Event  event.Event
-}
-
 const (
 	decoderConcurrency = 8
 	decoderQueueSize   = 128
-	eventBatchSize     = 1024
 )
 
-// future keeps one input's output in submission order. Large inputs stream
-// bounded batches; the conductor only receives completed events.
+// future carries one input and the events decoded from it. The decoder pool
+// appends the events and closes done; the conductor reads them after Ready. A
+// nil event marks the end of an input, including inputs that produce no events.
 type future struct {
 	payload *sourcePayload
-	origin  origin
-	output  chan []decodedEvent
-	events  []decodedEvent
+	events  []event.Event
+	done    chan struct{}
 }
 
 // decoder pairs a generic codec decoder with the simple-protocol decoder when
@@ -77,9 +69,11 @@ type decoderGroup struct {
 	selectors   *columnselector.ColumnSelectors
 	decoders    []decoder
 	schemas     *simple.TableInfoCache
-	input       chan *future
-	ordered     chan *future
-	output      chan []decodedEvent
+	// input dispatches an undecoded input to the pool.
+	input chan *future
+	// output queues inputs for the conductor in submission order. A future may
+	// still be decoding when it enters.
+	output chan *future
 }
 
 // decodeOptions configures a decode group.
@@ -93,23 +87,20 @@ type decodeOptions struct {
 // newDecodeGroup builds a decode group for the source streams.
 func newDecodeGroup(ctx context.Context, opts decodeOptions) *decoderGroup {
 	codecConfig := opts.CodecConfig
-	var selectors *columnselector.ColumnSelectors
-	if codecConfig.Protocol == config.ProtocolCsv {
-		var err error
-		selectors, err = columnselector.New(opts.ReplicaConfig.Sink, util.GetOrZero(opts.ReplicaConfig.CaseSensitive))
-		if err != nil {
-			log.Panic("consumer column selection configuration is invalid", zap.Error(err))
-		}
-	}
 	upstreamDB := newUpstreamDB(ctx, opts.UpstreamURI)
 	group := &decoderGroup{
 		codecConfig: codecConfig,
 		upstreamDB:  upstreamDB,
-		selectors:   selectors,
 		decoders:    make([]decoder, decoderConcurrency),
 		input:       make(chan *future, decoderQueueSize),
-		ordered:     make(chan *future, decoderQueueSize),
-		output:      make(chan []decodedEvent, 1),
+		output:      make(chan *future, decoderQueueSize),
+	}
+	if codecConfig.Protocol == config.ProtocolCsv {
+		selectors, err := columnselector.New(opts.ReplicaConfig.Sink, util.GetOrZero(opts.ReplicaConfig.CaseSensitive))
+		if err != nil {
+			log.Panic("consumer column selection configuration is invalid", zap.Error(err))
+		}
+		group.selectors = selectors
 	}
 	// Storage constructs a decoder for each file using that file's schema.
 	if len(opts.Streams) == 0 {
@@ -163,14 +154,14 @@ func (d *decoderGroup) Close() {
 	}
 }
 
-// AddPayload transfers ownership of the source to the group. The reader calls
-// it serially, so the ordered queue has exactly the source's submission order.
-func (d *decoderGroup) AddPayload(ctx context.Context, payloads []*sourcePayload) error {
-	for idx, item := range payloads {
+// Add transfers ownership of the source to the group. The reader calls it
+// serially, so output receives futures in the source's submission order even
+// though the pool finishes them in any order.
+func (d *decoderGroup) Add(ctx context.Context, payloads []*sourcePayload) error {
+	for _, item := range payloads {
 		future := &future{
 			payload: item,
-			origin:  item.Origin(),
-			output:  make(chan []decodedEvent, 1),
+			done:    make(chan struct{}),
 		}
 
 		select {
@@ -182,23 +173,18 @@ func (d *decoderGroup) AddPayload(ctx context.Context, payloads []*sourcePayload
 		select {
 		case <-ctx.Done():
 			return context.Cause(ctx)
-		case d.ordered <- future:
+		case d.output <- future:
 		}
-
-		payloads[idx] = nil
 	}
 	return nil
 }
 
-func (d *decoderGroup) Output() <-chan []decodedEvent {
+func (d *decoderGroup) Output() <-chan *future {
 	return d.output
 }
 
 func (d *decoderGroup) Run(ctx context.Context) error {
 	g, ctx := errgroup.WithContext(ctx)
-	g.Go(func() error {
-		return d.emit(ctx)
-	})
 	for _, decoder := range d.decoders {
 		g.Go(func() error {
 			return d.runDecoder(ctx, decoder)
@@ -207,48 +193,13 @@ func (d *decoderGroup) Run(ctx context.Context) error {
 	return g.Wait()
 }
 
-func (d *decoderGroup) emit(ctx context.Context) error {
-	defer close(d.output)
-	for {
-		select {
-		case <-ctx.Done():
-			return context.Cause(ctx)
-		case future := <-d.ordered:
-			if err := d.emitInput(ctx, future); err != nil {
-				return err
-			}
-		}
-	}
-}
-
-func (d *decoderGroup) emitInput(ctx context.Context, future *future) error {
-	for {
-		select {
-		case <-ctx.Done():
-			return context.Cause(ctx)
-		case results, ok := <-future.output:
-			if !ok {
-				return nil
-			}
-			select {
-			case <-ctx.Done():
-				return context.Cause(ctx)
-			case d.output <- results:
-			}
-		}
-	}
-}
-
 func (d *decoderGroup) runDecoder(ctx context.Context, decoder decoder) error {
 	var pending map[*common.DMLMessage]*future
 	if decoder.schema != nil {
 		pending = make(map[*common.DMLMessage]*future)
 	}
 	for {
-		changed, err := d.drainCached(ctx, decoder, pending)
-		if err != nil {
-			return err
-		}
+		changed := d.drainCached(decoder, pending)
 		select {
 		case <-ctx.Done():
 			return context.Cause(ctx)
@@ -259,9 +210,7 @@ func (d *decoderGroup) runDecoder(ctx context.Context, decoder decoder) error {
 				return err
 			}
 			if message == nil {
-				if err := future.finish(ctx); err != nil {
-					return err
-				}
+				future.finish()
 				continue
 			}
 			pending[message] = future
@@ -269,38 +218,26 @@ func (d *decoderGroup) runDecoder(ctx context.Context, decoder decoder) error {
 	}
 }
 
-func (f *future) addEvent(ctx context.Context, value event.Event) error {
-	f.events = append(f.events, decodedEvent{Origin: f.origin, Event: value})
-	if len(f.events) == eventBatchSize {
-		return f.flush(ctx)
-	}
-	return nil
+func (f *future) addEvent(value event.Event) {
+	f.events = append(f.events, value)
 }
 
-func (f *future) flush(ctx context.Context) error {
+// Ready blocks until the pool decoded every event of the input.
+func (f *future) Ready(ctx context.Context) error {
 	select {
 	case <-ctx.Done():
 		return context.Cause(ctx)
-	case f.output <- f.events:
-		f.events = nil
-		return nil
+	case <-f.done:
 	}
-}
-
-func (f *future) finish(ctx context.Context) error {
-	if err := f.addEvent(ctx, nil); err != nil {
-		return err
-	}
-	if len(f.events) != 0 {
-		if err := f.flush(ctx); err != nil {
-			return err
-		}
-	}
-	close(f.output)
 	return nil
 }
 
-func (d *decoderGroup) addRow(ctx context.Context, future *future, message *common.DMLMessage) error {
+func (f *future) finish() {
+	f.addEvent(nil)
+	close(f.done)
+}
+
+func (d *decoderGroup) addRow(future *future, message *common.DMLMessage) {
 	dml := message.ToDMLEvent()
 	if dml == nil {
 		log.Panic("consumer DML decoding failed", zap.String("schema", message.Schema), zap.String("table", message.Table), zap.Uint64("commitTs", message.GetCommitTs()))
@@ -312,28 +249,24 @@ func (d *decoderGroup) addRow(ctx context.Context, future *future, message *comm
 			dml.TableInfo.UpdateTS = input.File.Schema.TableVersion
 		}
 	}
-	return future.addEvent(ctx, dml)
+	future.addEvent(dml)
 }
 
 // drainCached emits rows that were decoded before their schema arrived. The
 // schema change channel is read before the pending rows to avoid missing a
 // write between that check and the select below.
-func (d *decoderGroup) drainCached(ctx context.Context, decoder decoder, pending map[*common.DMLMessage]*future) (<-chan struct{}, error) {
+func (d *decoderGroup) drainCached(decoder decoder, pending map[*common.DMLMessage]*future) <-chan struct{} {
 	if decoder.schema == nil {
-		return nil, nil
+		return nil
 	}
 	changed := d.schemas.Changes()
 	for _, message := range decoder.schema.GetCachedMessages() {
 		future := pending[message]
-		if err := d.addRow(ctx, future, message); err != nil {
-			return nil, err
-		}
-		if err := future.finish(ctx); err != nil {
-			return nil, err
-		}
+		d.addRow(future, message)
+		future.finish()
 		delete(pending, message)
 	}
-	return changed, nil
+	return changed
 }
 
 func (d *decoderGroup) decodeInput(ctx context.Context, decoder decoder, future *future) (*common.DMLMessage, error) {
@@ -342,7 +275,8 @@ func (d *decoderGroup) decodeInput(ctx context.Context, decoder decoder, future 
 		return nil, d.decodeStorage(ctx, future)
 	}
 	if input.Watermark != 0 {
-		return nil, future.addEvent(ctx, &event.ResolvedEvent{ResolvedTs: input.Watermark})
+		future.addEvent(&event.ResolvedEvent{ResolvedTs: input.Watermark})
+		return nil, nil
 	}
 	decoder.AddKeyValue(input.Key, input.Value)
 	for {
@@ -362,21 +296,15 @@ func (d *decoderGroup) decodeInput(ctx context.Context, decoder decoder, future 
 				message = decoder.schema.PendingDMLMessage
 				return message, nil
 			}
-			if err := d.addRow(ctx, future, message); err != nil {
-				return nil, err
-			}
+			d.addRow(future, message)
 		case common.MessageTypeDDL:
 			ddl := decoder.NextDDLEvent()
 			if d.schemas != nil && ddl.Query == "" {
 				continue
 			}
-			if err := future.addEvent(ctx, ddl); err != nil {
-				return nil, err
-			}
+			future.addEvent(ddl)
 		case common.MessageTypeResolved:
-			if err := future.addEvent(ctx, &event.ResolvedEvent{ResolvedTs: decoder.NextResolvedEvent()}); err != nil {
-				return nil, err
-			}
+			future.addEvent(&event.ResolvedEvent{ResolvedTs: decoder.NextResolvedEvent()})
 		}
 	}
 }
@@ -394,7 +322,7 @@ func (d *decoderGroup) decodeStorage(ctx context.Context, future *future) error 
 		case schema.Table == "":
 			scope = event.InfluenceTypeDB
 		}
-		return future.addEvent(ctx, &event.DDLEvent{
+		future.addEvent(&event.DDLEvent{
 			FinishedTs:    schema.TableVersion,
 			Type:          schema.Type,
 			Query:         schema.Query,
@@ -403,6 +331,7 @@ func (d *decoderGroup) decodeStorage(ctx context.Context, future *future) error 
 			TableInfo:     table,
 			BlockedTables: &event.InfluencedTables{InfluenceType: scope},
 		})
+		return nil
 	}
 	var decoder common.Decoder
 	switch d.codecConfig.Protocol {
@@ -430,9 +359,7 @@ func (d *decoderGroup) decodeStorage(ctx context.Context, future *future) error 
 			continue
 		}
 		message := decoder.NextDMLMessage()
-		if err := d.addRow(ctx, future, message); err != nil {
-			return err
-		}
+		d.addRow(future, message)
 	}
 }
 
