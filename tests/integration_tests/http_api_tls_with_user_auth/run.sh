@@ -130,6 +130,7 @@ function run() {
 		"resume_changefeed"
 		"move_table"
 		"set_log_level"
+		"log_redact"
 		"remove_changefeed"
 		"resign_owner"
 		"get_tso"
