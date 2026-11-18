@@ -33,6 +33,62 @@ func TestSinkConfigDateSeparator(t *testing.T) {
 	require.ErrorContains(t, err, "CDC:ErrStorageSinkInvalidConfig")
 }
 
+<<<<<<< HEAD
+=======
+func TestSinkDispatchRulesUpdate(t *testing.T) {
+	storedRules := []*DispatchRule{{Matcher: []string{"src.*"}, TargetSchema: "dst"}}
+	for _, tc := range []struct {
+		name  string
+		rules []*DispatchRule
+	}{
+		{name: "omitted"},
+		{name: "clear", rules: []*DispatchRule{}},
+		{name: "replace", rules: []*DispatchRule{{Matcher: []string{"new_src.*"}, TargetSchema: "new_dst"}}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := &ReplicaConfig{Sink: &SinkConfig{DispatchRules: tc.rules}}
+			converted := ToAPIReplicaConfig(cfg.ToInternalReplicaConfig())
+			require.Equal(t, tc.rules, converted.Sink.DispatchRules)
+
+			info, err := (&ChangeFeedInfo{Config: converted}).Clone()
+			require.NoError(t, err)
+			require.Equal(t, tc.rules, info.Config.Sink.DispatchRules)
+
+			body, err := json.Marshal(info.Config)
+			require.NoError(t, err)
+			stored := &ReplicaConfig{Sink: &SinkConfig{DispatchRules: storedRules}}
+			require.NoError(t, json.Unmarshal(body, stored))
+			want := tc.rules
+			if tc.rules == nil {
+				want = storedRules
+			}
+			require.Equal(t, want, stored.Sink.DispatchRules)
+		})
+	}
+}
+
+func TestMySQLTxnOrderTablesUpdate(t *testing.T) {
+	storedRules := []string{"app.orders"}
+	for _, rules := range [][]string{nil, {}, {"app.ledger"}} {
+		cfg := &ReplicaConfig{Sink: &SinkConfig{MySQLConfig: &MySQLConfig{TxnOrderTables: rules}}}
+		converted := ToAPIReplicaConfig(cfg.ToInternalReplicaConfig())
+		require.Equal(t, rules, converted.Sink.MySQLConfig.TxnOrderTables)
+		info, err := (&ChangeFeedInfo{Config: converted}).Clone()
+		require.NoError(t, err)
+		require.Equal(t, rules, info.Config.Sink.MySQLConfig.TxnOrderTables)
+		body, err := json.Marshal(info.Config)
+		require.NoError(t, err)
+		stored := &ReplicaConfig{Sink: &SinkConfig{MySQLConfig: &MySQLConfig{TxnOrderTables: storedRules}}}
+		require.NoError(t, json.Unmarshal(body, stored))
+		want := rules
+		if rules == nil {
+			want = storedRules
+		}
+		require.Equal(t, want, stored.Sink.MySQLConfig.TxnOrderTables)
+	}
+}
+
+>>>>>>> c68c69d88 (sink: support per-table transaction ordering for MySQL sinks (#6860))
 func TestChangeFeedInfoCloneWithMaskedSensitiveData(t *testing.T) {
 	info := &ChangeFeedInfo{
 		ID:      "test",
@@ -343,6 +399,7 @@ func TestReplicaConfigConversionMySQLAsyncDDLTimeout(t *testing.T) {
 		Sink: &SinkConfig{
 			MySQLConfig: &MySQLConfig{
 				AsyncDDLTimeout: util.AddressOf("45m"),
+				TxnOrderTables:  []string{"app.orders", "app.ledger_*"},
 			},
 		},
 	}
@@ -350,10 +407,12 @@ func TestReplicaConfigConversionMySQLAsyncDDLTimeout(t *testing.T) {
 	internalCfg := apiCfg.ToInternalReplicaConfig()
 	require.NotNil(t, internalCfg.Sink.MySQLConfig)
 	require.Equal(t, "45m", util.GetOrZero(internalCfg.Sink.MySQLConfig.AsyncDDLTimeout))
+	require.Equal(t, apiCfg.Sink.MySQLConfig.TxnOrderTables, internalCfg.Sink.MySQLConfig.TxnOrderTables)
 
 	apiCfgBack := ToAPIReplicaConfig(internalCfg)
 	require.NotNil(t, apiCfgBack.Sink.MySQLConfig)
 	require.Equal(t, "45m", util.GetOrZero(apiCfgBack.Sink.MySQLConfig.AsyncDDLTimeout))
+	require.Equal(t, apiCfg.Sink.MySQLConfig.TxnOrderTables, apiCfgBack.Sink.MySQLConfig.TxnOrderTables)
 }
 
 func TestReplicaConfigCodecConfigConversion(t *testing.T) {

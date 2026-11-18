@@ -31,6 +31,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/node"
+	"github.com/pingcap/ticdc/pkg/ordering"
 	"github.com/pingcap/ticdc/pkg/pdutil"
 	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/ticdc/utils/notifyqueue"
@@ -296,7 +297,9 @@ func (c *eventBroker) sendDML(remoteID node.ID, batchEvent *event.BatchDMLEvent,
 }
 
 func (c *eventBroker) sendDDL(ctx context.Context, remoteID node.ID, e *event.DDLEvent, d *dispatcherStat) {
-	c.emitSyncPointEventIfNeeded(e.FinishedTs, d, remoteID)
+	if e.Err == "" {
+		c.emitSyncPointEventIfNeeded(e.FinishedTs, d, remoteID)
+	}
 	e.DispatcherID = d.id
 	e.Seq = d.seq.Add(1)
 	e.Epoch = d.epoch
@@ -418,7 +421,7 @@ func (c *eventBroker) tickTableTriggerDispatchers(ctx context.Context) error {
 					ID:   stat.info.GetTableSpan().KeyspaceID,
 					Name: stat.info.GetChangefeedID().Keyspace(),
 				}
-				ddlEvents, endTs, err := c.schemaStore.FetchTableTriggerDDLEvents(keyspaceMeta, key.(common.DispatcherID), stat.filter, startTs, 100)
+				ddlEvents, endTs, err := c.schemaStore.FetchTableTriggerDDLEvents(keyspaceMeta, key.(common.DispatcherID), stat.filter, stat.txnOrderMatcher, startTs, 100)
 				if err != nil {
 					log.Error("table trigger ddl events fetch failed", zap.Uint32("keyspaceID", stat.info.GetTableSpan().KeyspaceID), zap.Stringer("dispatcherID", stat.id), zap.Error(err))
 					return true
@@ -819,6 +822,16 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask) {
 	if err != nil {
 		releaseQuota(available, uint64(sl.maxDMLBytes))
 		if task.isRemoved.Load() {
+			return
+		}
+		if errors.ErrInvalidReplicaConfig.Equal(err) {
+			// Use the dispatcher error path with this scan's upper bound as the
+			// event timestamp. No DML or resolved timestamp from this scan is sent.
+			c.sendDDL(ctx, remoteID, &event.DDLEvent{
+				Version:    event.DDLEventVersion1,
+				FinishedTs: request.Range.CommitTsEnd,
+				Err:        errors.WrapChangefeedUnretryableErr(err).Error(),
+			}, task)
 			return
 		}
 		log.Error("scan events failed",
@@ -1652,6 +1665,11 @@ func (c *eventBroker) getOrSetChangefeedStatus(info DispatcherInfo) *changefeedS
 	// changefeed first, which closes all related dispatchers and removes the old
 	// changefeedStatus before a new one is created. So within one changefeedStatus
 	// lifecycle we expect filter config and timezone to stay stable.
+	txnOrderMatcher, err := ordering.NewTxnOrderMatcher(filterConfig.TxnOrderTables, filterConfig.CaseSensitive)
+	if err != nil {
+		return nil, err
+	}
+
 	changefeedFilter, err := filter.GetSharedFilterStorage().GetOrSetFilter(
 		changefeedID, info.GetFilterConfig(), c.timezone)
 	if err != nil {
@@ -1664,6 +1682,7 @@ func (c *eventBroker) getOrSetChangefeedStatus(info DispatcherInfo) *changefeedS
 	status := newChangefeedStatus(changefeedID, info.GetSyncPointInterval())
 	status.lowLatencyMode = info.IsLowLatencyMode()
 	status.filter = changefeedFilter
+	status.txnOrderMatcher = txnOrderMatcher
 	status.mounter = event.NewMounter(c.tz, info.GetIntegrity())
 	actual, loaded := c.changefeedMap.LoadOrStore(changefeedID, status)
 	if loaded {

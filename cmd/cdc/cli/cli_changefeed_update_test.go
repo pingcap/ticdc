@@ -191,6 +191,127 @@ func TestChangefeedUpdateCli(t *testing.T) {
 	require.NotNil(t, o.run(cmd))
 }
 
+<<<<<<< HEAD
+=======
+func TestTxnOrderUpdateConfigs(t *testing.T) {
+	for _, tc := range []struct {
+		name, content string
+		want          []string
+	}{
+		{"omitted", "memory-quota = 2097152\n", []string{"test.ordered"}},
+		{"clear", "[sink.mysql-config]\ntxn-order-tables = []\n", []string{}},
+		{"replace", "[sink.mysql-config]\ntxn-order-tables = ['test.other']\n", []string{"test.other"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			replica := config.GetDefaultReplicaConfig()
+			replica.Sink.MySQLConfig = &config.MySQLConfig{TxnOrderTables: []string{"test.ordered"}}
+			oldInfo := &v2.ChangeFeedInfo{Config: v2.ToAPIReplicaConfig(replica)}
+			path := filepath.Join(t.TempDir(), "cf.toml")
+			require.NoError(t, os.WriteFile(path, []byte(tc.content), 0o600))
+			cmd := NewCmdCli()
+			o := newUpdateChangefeedOptions(newChangefeedCommonOptions())
+			o.addFlags(cmd)
+			require.NoError(t, cmd.ParseFlags([]string{"--config=" + path}))
+			updated, err := o.applyChanges(oldInfo, cmd)
+			require.NoError(t, err)
+			require.Equal(t, tc.want, updated.Config.Sink.MySQLConfig.TxnOrderTables)
+			body, err := json.Marshal(o.getChangefeedConfig(cmd, updated))
+			require.NoError(t, err)
+			request := &v2.ChangefeedConfig{ReplicaConfig: v2.ToAPIReplicaConfig(replica)}
+			require.NoError(t, json.Unmarshal(body, request))
+			require.Equal(t, tc.want, request.ReplicaConfig.Sink.MySQLConfig.TxnOrderTables)
+			require.Equal(t, []string{"test.ordered"}, oldInfo.Config.Sink.MySQLConfig.TxnOrderTables)
+		})
+	}
+}
+
+func TestSameClusterUpdateConfigs(t *testing.T) {
+	replica := config.GetDefaultReplicaConfig()
+	replica.AllowSameCluster = new(true)
+	replica.Filter.Rules = []string{"src.*"}
+	replica.Sink.DispatchRules = []*config.DispatchRule{
+		{Matcher: []string{"src.*"}, TargetSchema: "dst", TargetTable: "{table}_copy"},
+	}
+	original := v2.ToAPIReplicaConfig(replica)
+
+	for _, tc := range []struct {
+		name                 string
+		config               string
+		wantAllowSameCluster bool
+		wantFilterRules      []string
+		wantDispatchRules    []*v2.DispatchRule
+	}{
+		{
+			name: "replace filter and routing",
+			config: `allow-same-cluster = true
+[filter]
+rules = ['new_src.*']
+[[sink.dispatchers]]
+matcher = ['new_src.*']
+target-schema = 'new_dst'
+target-table = '{table}_routed'
+`,
+			wantAllowSameCluster: true,
+			wantFilterRules:      []string{"new_src.*"},
+			wantDispatchRules: []*v2.DispatchRule{
+				{Matcher: []string{"new_src.*"}, TargetSchema: "new_dst", TargetTable: "{table}_routed"},
+			},
+		},
+		{
+			name:                 "preserve omitted same-cluster configuration",
+			config:               "memory-quota = 2097152\n",
+			wantAllowSameCluster: true,
+			wantFilterRules:      original.Filter.Rules,
+			wantDispatchRules:    original.Sink.DispatchRules,
+		},
+		{
+			name:                 "disable same-cluster replication",
+			config:               "allow-same-cluster = false\n",
+			wantAllowSameCluster: false,
+			wantFilterRules:      original.Filter.Rules,
+			wantDispatchRules:    original.Sink.DispatchRules,
+		},
+		{
+			name:                 "clear routing",
+			config:               "[sink]\ndispatchers = []\n",
+			wantAllowSameCluster: true,
+			wantFilterRules:      original.Filter.Rules,
+			wantDispatchRules:    []*v2.DispatchRule{},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			oldInfo := &v2.ChangeFeedInfo{Config: v2.ToAPIReplicaConfig(replica)}
+			configPath := filepath.Join(t.TempDir(), "cf.toml")
+			require.NoError(t, os.WriteFile(configPath, []byte(tc.config), 0o644))
+			cmd := NewCmdCli()
+			o := newUpdateChangefeedOptions(newChangefeedCommonOptions())
+			o.addFlags(cmd)
+			require.NoError(t, cmd.ParseFlags([]string{"--config=" + configPath}))
+			updated, err := o.applyChanges(oldInfo, cmd)
+			require.NoError(t, err)
+			require.Equal(t, new(tc.wantAllowSameCluster), updated.Config.AllowSameCluster)
+			require.Equal(t, tc.wantFilterRules, updated.Config.Filter.Rules)
+			require.Equal(t, tc.wantDispatchRules, updated.Config.Sink.DispatchRules)
+			require.Equal(t, original, oldInfo.Config)
+
+			body, err := json.Marshal(o.getChangefeedConfig(cmd, updated))
+			require.NoError(t, err)
+			// The API applies the serialized request to the stored configuration.
+			request := &v2.ChangefeedConfig{ReplicaConfig: v2.ToAPIReplicaConfig(replica)}
+			require.NoError(t, json.Unmarshal(body, request))
+			require.Equal(t, tc.wantDispatchRules, request.ReplicaConfig.Sink.DispatchRules)
+			info := &config.ChangeFeedInfo{Config: request.ReplicaConfig.ToInternalReplicaConfig()}
+			err = check.ValidateSameClusterRouting(info.ToChangefeedConfig())
+			if tc.wantAllowSameCluster && len(tc.wantDispatchRules) == 0 {
+				require.True(t, errors.ErrInvalidReplicaConfig.Equal(err), "%v", err)
+			} else {
+				require.NoError(t, err)
+			}
+		})
+	}
+}
+
+>>>>>>> c68c69d88 (sink: support per-table transaction ordering for MySQL sinks (#6860))
 func TestChangefeedUpdateReplicaCredentials(t *testing.T) {
 	for _, tc := range []struct {
 		name     string
