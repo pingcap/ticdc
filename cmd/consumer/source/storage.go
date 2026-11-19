@@ -18,12 +18,21 @@ import (
 	"context"
 	"encoding/json"
 	"maps"
+	"net/url"
+	"os"
+	"path"
+	"path/filepath"
 	"slices"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/aws/aws-sdk-go-v2/aws"
+	awsconfig "github.com/aws/aws-sdk-go-v2/config"
+	"github.com/aws/aws-sdk-go-v2/credentials"
+	"github.com/aws/aws-sdk-go-v2/feature/s3/manager"
+	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/downstreamadapter/sink/helper"
 	"github.com/pingcap/ticdc/pkg/cloudstorage"
@@ -36,7 +45,12 @@ import (
 	"go.uber.org/zap"
 )
 
-const storageScanInterval = 2 * time.Second
+const (
+	storageScanInterval = 2 * time.Second
+	// The deepest data directory is <schema>/<table>/<version>/<partition>/<date>.
+	storageDiscoveryDepth = 5
+	defaultS3Region       = "us-east-1"
+)
 
 type storageMetadata struct {
 	CheckpointTs uint64 `json:"checkpoint-ts"`
@@ -74,6 +88,12 @@ type storageReader struct {
 	mu               sync.Mutex
 	inputs           []storageInput
 	scanned          bool
+	// Listing a directory needs a client that returns common prefixes.
+	scheme     string
+	bucket     string
+	bucketPath string
+	localPath  string
+	s3Client   *s3.Client
 }
 
 // newStorageReader opens the storage described by the upstream URI.
@@ -83,16 +103,28 @@ func newStorageReader(ctx context.Context, opts Options) *storageReader {
 	if err != nil {
 		log.Panic("Storage client initialization failed", zap.Error(err))
 	}
-	return &storageReader{
+	reader := &storageReader{
 		storage:        storage,
 		dateSeparator:  util.GetOrZero(replicaConfig.Sink.DateSeparator),
 		fileExtension:  helper.GetFileExtension(opts.CodecConfig.Protocol),
 		fileIndexWidth: util.GetOrZero(replicaConfig.Sink.FileIndexWidth),
+		scheme:         opts.UpstreamURI.Scheme,
 		schemas:        make(map[cloudstorage.SchemaPathKey]*cloudstorage.SchemaFile),
 		fileIndices:    make(map[cloudstorage.DMLPathKey]map[cloudstorage.FileIndexKey]uint64),
 		ddlWatermarks:  make(map[string]uint64),
 		tableIDs:       make(map[storageTableKey]int64),
 	}
+	switch reader.scheme {
+	case "file", "local":
+		reader.localPath = opts.UpstreamURI.Path
+	case "s3", "ks3", "oss":
+		reader.bucket = opts.UpstreamURI.Host
+		reader.bucketPath = opts.UpstreamURI.Path
+		reader.s3Client = newS3Client(ctx, opts.UpstreamURI)
+	default:
+		log.Panic("Storage consumer does not support the storage schema", zap.String("scheme", reader.scheme))
+	}
+	return reader
 }
 
 func (c *storageReader) ddlWatermark(table string) uint64 {
@@ -115,50 +147,170 @@ func (c *storageReader) scanFiles(ctx context.Context) (map[cloudstorage.DMLPath
 		}
 	}
 	files := make(map[cloudstorage.DMLPathKey]map[cloudstorage.FileIndexKey]storageIndexRange)
-	err := c.storage.WalkDir(ctx, &storeapi.WalkOption{}, func(path string, _ int64) error {
-		if cloudstorage.IsSchemaFile(path) {
-			key, added, err := c.readSchema(ctx, path)
-			if err != nil {
-				return err
-			}
-			if added {
-				files[cloudstorage.NewSchemaFileDMLPathKey(key)] = nil
-			}
-			return nil
-		}
-		if !strings.HasSuffix(path, ".index") {
-			return nil
-		}
-		var key cloudstorage.DMLPathKey
-		if err := key.ParseIndexFilePath(c.dateSeparator, path); err != nil {
-			return nil // Ignore unsupported index paths in a shared Storage directory.
-		}
-		if (c.sourceCheckpoint > 0 && key.TableVersion > c.sourceCheckpoint) || key.TableVersion < c.ddlWatermark(key.GetKey()) {
-			return nil
-		}
-		index, err := c.readIndex(ctx, path)
+	if err := c.discoverDir(ctx, "", 0, files); err != nil {
+		return nil, err
+	}
+	return files, nil
+}
+
+// discoverDir finds data directories and schema files below dir. Only
+// directories are listed; the data files themselves are read from the index.
+func (c *storageReader) discoverDir(
+	ctx context.Context, dir string, depth int,
+	files map[cloudstorage.DMLPathKey]map[cloudstorage.FileIndexKey]storageIndexRange,
+) error {
+	dirs, _, err := c.listEntries(ctx, dir)
+	if err != nil {
+		return err
+	}
+	meta := path.Join(dir, "meta")
+	if slices.Contains(dirs, "meta") {
+		_, names, err := c.listEntries(ctx, meta)
 		if err != nil {
 			return err
 		}
-		indices := c.fileIndices[key]
-		if indices == nil {
-			indices = make(map[cloudstorage.FileIndexKey]uint64)
-			c.fileIndices[key] = indices
-		}
-		previous := indices[index.FileIndexKey]
-		indices[index.FileIndexKey] = max(previous, index.Idx)
-		if index.Idx > previous {
-			if files[key] == nil {
-				files[key] = make(map[cloudstorage.FileIndexKey]storageIndexRange)
+		indices := make([]string, 0, len(names))
+		for _, name := range names {
+			switch {
+			case strings.HasSuffix(name, ".index"):
+				indices = append(indices, name)
+			case cloudstorage.IsSchemaFile(name):
+				key, added, err := c.readSchema(ctx, path.Join(meta, name))
+				if err != nil {
+					return err
+				}
+				if added {
+					files[cloudstorage.NewSchemaFileDMLPathKey(key)] = nil
+				}
 			}
-			files[key][index.FileIndexKey] = storageIndexRange{
-				start: previous + 1,
-				end:   index.Idx,
-			}
 		}
+		if len(indices) > 0 {
+			return c.readIndices(ctx, dir, indices, files)
+		}
+	}
+	if depth == storageDiscoveryDepth {
 		return nil
-	})
-	return files, errors.WrapError(errors.ErrExternalStorageAPI, err, "scan Storage metadata")
+	}
+	for _, child := range dirs {
+		if child == "meta" {
+			continue
+		}
+		if err := c.discoverDir(ctx, path.Join(dir, child), depth+1, files); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (c *storageReader) readIndices(
+	ctx context.Context, dir string, names []string,
+	files map[cloudstorage.DMLPathKey]map[cloudstorage.FileIndexKey]storageIndexRange,
+) error {
+	for _, name := range names {
+		if err := c.addIndex(ctx, path.Join(dir, "meta", name), files); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (c *storageReader) addIndex(
+	ctx context.Context, indexPath string,
+	files map[cloudstorage.DMLPathKey]map[cloudstorage.FileIndexKey]storageIndexRange,
+) error {
+	var key cloudstorage.DMLPathKey
+	if err := key.ParseIndexFilePath(c.dateSeparator, indexPath); err != nil {
+		return errors.WrapError(errors.ErrStorageSinkInvalidFileName, err, "parse Storage index path")
+	}
+	if (c.sourceCheckpoint > 0 && key.TableVersion > c.sourceCheckpoint) || key.TableVersion < c.ddlWatermark(key.GetKey()) {
+		return nil
+	}
+	index, err := c.readIndex(ctx, indexPath)
+	if err != nil {
+		return err
+	}
+	indices := c.fileIndices[key]
+	if indices == nil {
+		indices = make(map[cloudstorage.FileIndexKey]uint64)
+		c.fileIndices[key] = indices
+	}
+	previous := indices[index.FileIndexKey]
+	indices[index.FileIndexKey] = max(previous, index.Idx)
+	if index.Idx > previous {
+		if files[key] == nil {
+			files[key] = make(map[cloudstorage.FileIndexKey]storageIndexRange)
+		}
+		files[key][index.FileIndexKey] = storageIndexRange{
+			start: previous + 1,
+			end:   index.Idx,
+		}
+	}
+	return nil
+}
+
+// listEntries returns the immediate child directories and files of dir.
+func (c *storageReader) listEntries(ctx context.Context, dir string) ([]string, []string, error) {
+	if c.localPath != "" {
+		entries, err := os.ReadDir(filepath.Join(c.localPath, filepath.FromSlash(dir)))
+		if os.IsNotExist(err) {
+			return nil, nil, nil
+		}
+		if err != nil {
+			return nil, nil, errors.WrapError(errors.ErrExternalStorageAPI, err, "list Storage directory")
+		}
+		dirs := make([]string, 0, len(entries))
+		files := make([]string, 0, len(entries))
+		for _, entry := range entries {
+			if entry.IsDir() {
+				dirs = append(dirs, entry.Name())
+			} else {
+				files = append(files, entry.Name())
+			}
+		}
+		slices.Sort(dirs)
+		slices.Sort(files)
+		return dirs, files, nil
+	}
+	prefix := c.s3Prefix(dir)
+	input := &s3.ListObjectsV2Input{
+		Bucket:    aws.String(c.bucket),
+		Prefix:    aws.String(prefix),
+		Delimiter: aws.String("/"),
+	}
+	var dirs, files []string
+	for {
+		output, err := c.s3Client.ListObjectsV2(ctx, input)
+		if err != nil {
+			return nil, nil, errors.WrapError(errors.ErrExternalStorageAPI, err, "list Storage directory")
+		}
+		for _, commonPrefix := range output.CommonPrefixes {
+			name := strings.Trim(strings.TrimPrefix(aws.ToString(commonPrefix.Prefix), prefix), "/")
+			if name != "" {
+				dirs = append(dirs, name)
+			}
+		}
+		for _, object := range output.Contents {
+			name := strings.TrimPrefix(aws.ToString(object.Key), prefix)
+			if name != "" && !strings.Contains(name, "/") {
+				files = append(files, name)
+			}
+		}
+		if !aws.ToBool(output.IsTruncated) {
+			break
+		}
+		input.ContinuationToken = output.NextContinuationToken
+	}
+	slices.Sort(dirs)
+	slices.Sort(files)
+	return dirs, files, nil
+}
+
+func (c *storageReader) s3Prefix(dir string) string {
+	prefix := path.Join(strings.Trim(c.bucketPath, "/"), strings.Trim(dir, "/"))
+	if prefix != "" {
+		prefix += "/"
+	}
+	return prefix
 }
 
 func (c *storageReader) readIndex(ctx context.Context, path string) (cloudstorage.FileIndex, error) {
@@ -354,4 +506,87 @@ func (c *storageReader) MarkProcessed(tables []event.SchemaTableName, timestamp 
 
 func (c *storageReader) Close() {
 	c.storage.Close()
+}
+
+func newS3Client(ctx context.Context, uri *url.URL) *s3.Client {
+	values := uri.Query()
+	cfg, err := awsconfig.LoadDefaultConfig(ctx,
+		awsconfig.WithRegion(s3Region(values)),
+		awsconfig.WithCredentialsProvider(credentials.NewStaticCredentialsProvider(
+			values.Get("access-key"),
+			values.Get("secret-access-key"),
+			values.Get("session-token"),
+		)),
+	)
+	if err != nil {
+		log.Panic("Storage client initialization failed", zap.Error(err))
+	}
+	options := s3ClientOptions(values)
+	client := s3.NewFromConfig(cfg, options...)
+	if configuredS3Region(values) != "" || !shouldDetectS3BucketRegion(values) {
+		return client
+	}
+
+	region, err := manager.GetBucketRegion(ctx, client, uri.Host, func(o *s3.Options) {
+		if client.Options().Credentials != nil {
+			o.Credentials = client.Options().Credentials
+		}
+		if s3Endpoint(values) != "" {
+			o.UsePathStyle = client.Options().UsePathStyle
+		}
+	})
+	if err != nil {
+		log.Panic("detect Storage bucket region failed", zap.String("bucket", uri.Host), zap.Error(err))
+	}
+	if region == "" {
+		region = defaultS3Region
+	}
+	if region != cfg.Region {
+		cfg.Region = region
+		client = s3.NewFromConfig(cfg, options...)
+	}
+	return client
+}
+
+func s3ClientOptions(values url.Values) []func(*s3.Options) {
+	var options []func(*s3.Options)
+	if endpoint := s3Endpoint(values); endpoint != "" {
+		options = append(options, func(o *s3.Options) {
+			o.BaseEndpoint = aws.String(endpoint)
+			o.UsePathStyle = true
+		})
+	}
+	return options
+}
+
+func configuredS3Region(values url.Values) string {
+	if region := values.Get("s3.region"); region != "" {
+		return region
+	}
+	return values.Get("region")
+}
+
+func s3Region(values url.Values) string {
+	if region := configuredS3Region(values); region != "" {
+		return region
+	}
+	return defaultS3Region
+}
+
+func shouldDetectS3BucketRegion(values url.Values) bool {
+	provider := values.Get("s3.provider")
+	if provider == "" {
+		provider = values.Get("provider")
+	}
+	if provider != "" && provider != "aws" {
+		return false
+	}
+	return s3Endpoint(values) == "" || provider == "aws"
+}
+
+func s3Endpoint(values url.Values) string {
+	if endpoint := values.Get("s3.endpoint"); endpoint != "" {
+		return endpoint
+	}
+	return values.Get("endpoint")
 }
