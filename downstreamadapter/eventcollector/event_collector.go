@@ -581,9 +581,10 @@ func (c *EventCollector) MessageCenterHandler(ctx context.Context, targetMessage
 		return nil
 	}
 
-	for range targetMessage.Message {
+	if len(targetMessage.Message) > 0 {
 		log.Warn("unknown message type, ignore it",
-			zap.String("type", targetMessage.Type.String()))
+			zap.String("type", targetMessage.Type.String()),
+			zap.Int("payloadCount", len(targetMessage.Message)))
 	}
 	return nil
 }
