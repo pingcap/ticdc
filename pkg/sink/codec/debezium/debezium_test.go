@@ -120,7 +120,7 @@ func TestEncodeRoutedDMLEventUsesTargetNames(t *testing.T) {
 	messages := encoder.Build()
 	require.Len(t, messages, 1)
 
-	decoder := NewDecoder(cfg, 0, nil)
+	decoder := NewDecoder(cfg, nil, common.NewTableIDAllocator())
 	decoder.AddKeyValue(messages[0].Key, messages[0].Value)
 
 	messageType, hasNext := decoder.HasNext()
@@ -214,7 +214,7 @@ func TestDebeziumNumericStringHandling(t *testing.T) {
 			require.Equal(t, "int64", signedField["type"])
 			require.Equal(t, json.Number("9223372036854775807"), signedField["default"])
 
-			decoder := NewDecoder(cfg, 0, nil)
+			decoder := NewDecoder(cfg, nil, common.NewTableIDAllocator())
 			decoder.AddKeyValue(messages[0].Key, messages[0].Value)
 			decoded := decoder.NextDMLEvent()
 			change, ok := decoded.GetNextRow()
@@ -236,7 +236,7 @@ func TestEncodeRoutedDDLEventUsesTargetNames(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, message)
 
-	decoder := NewDecoder(cfg, 0, nil)
+	decoder := NewDecoder(cfg, nil, common.NewTableIDAllocator())
 	decoder.AddKeyValue(message.Key, message.Value)
 
 	messageType, hasNext := decoder.HasNext()
@@ -350,7 +350,7 @@ func TestEncodeStartTsInSource(t *testing.T) {
 	messages2 := encoder2.Build()
 	require.Len(t, messages2, 1)
 
-	decoder := NewDecoder(cfg2, 0, nil)
+	decoder := NewDecoder(cfg2, nil, common.NewTableIDAllocator())
 	decoder.AddKeyValue(messages2[0].Key, messages2[0].Value)
 	messageType, hasNext := decoder.HasNext()
 	require.True(t, hasNext)
@@ -387,7 +387,7 @@ func TestDecodeStartTsFallbackToCommitTs(t *testing.T) {
 	require.NotNil(t, sourceSchema)
 	require.Nil(t, schemaFieldsByName(t, sourceSchema, "start_ts"))
 
-	decoder := NewDecoder(cfg, 0, nil)
+	decoder := NewDecoder(cfg, nil, common.NewTableIDAllocator())
 	decoder.AddKeyValue(messages[0].Key, messages[0].Value)
 	messageType, hasNext := decoder.HasNext()
 	require.True(t, hasNext)
@@ -429,7 +429,7 @@ func TestDecodeNonPositiveStartTsFallbackToCommitTs(t *testing.T) {
 			valueBytes, err := json.Marshal(value)
 			require.NoError(t, err)
 
-			decoder := NewDecoder(cfg, 0, nil)
+			decoder := NewDecoder(cfg, nil, common.NewTableIDAllocator())
 			decoder.AddKeyValue(messages[0].Key, valueBytes)
 			messageType, hasNext := decoder.HasNext()
 			require.True(t, hasNext)
@@ -467,7 +467,7 @@ func TestDecodedTableInfoLocatesRowByPrimaryKey(t *testing.T) {
 	messages := encoder.Build()
 	require.Len(t, messages, 1)
 
-	decoder := NewDecoder(cfg, 0, nil)
+	decoder := NewDecoder(cfg, nil, common.NewTableIDAllocator())
 	decoder.AddKeyValue(messages[0].Key, messages[0].Value)
 	messageType, hasNext := decoder.HasNext()
 	require.True(t, hasNext)

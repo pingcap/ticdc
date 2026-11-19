@@ -102,7 +102,7 @@ func newStorageReader(ctx context.Context, opts Options) *storageReader {
 	replicaConfig := opts.ReplicaConfig
 	storage, err := util.GetExternalStorageWithDefaultTimeout(ctx, opts.UpstreamURI.String())
 	if err != nil {
-		log.Panic("Storage client initialization failed", zap.Error(err))
+		log.Panic("storage client initialization failed", zap.Error(err))
 	}
 	reader := &storageReader{
 		storage:        storage,
@@ -123,7 +123,7 @@ func newStorageReader(ctx context.Context, opts Options) *storageReader {
 		reader.bucketPath = opts.UpstreamURI.Path
 		reader.s3Client = newS3Client(ctx, opts.UpstreamURI)
 	default:
-		log.Panic("Storage consumer does not support the storage schema", zap.String("scheme", reader.scheme))
+		log.Panic("storage consumer does not support the storage schema", zap.String("scheme", reader.scheme))
 	}
 	return reader
 }
@@ -383,7 +383,7 @@ func (c *storageReader) Read(ctx context.Context) ([]*Payload, error) {
 	}
 	schema := c.schemas[key.SchemaPathKey]
 	if schema == nil {
-		log.Panic("Storage DML file has no matching schema", zap.String("schema", key.Schema), zap.String("table", key.Table), zap.Uint64("tableVersion", key.TableVersion))
+		log.Panic("storage DML file has no matching schema", zap.String("schema", key.Schema), zap.String("table", key.Table), zap.Uint64("tableVersion", key.TableVersion))
 	}
 	if key.IsSchemaFileDMLPathKey() && (schema.Query == "" || key.TableVersion <= ddlWatermark) {
 		return nil, nil
@@ -484,6 +484,10 @@ func (*storageReader) Partitions() int32 {
 	return 0
 }
 
+func (*storageReader) DDLPartition() int32 {
+	return 0
+}
+
 func (c *storageReader) MarkProcessed(tables []event.SchemaTableName, timestamp uint64) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -514,7 +518,7 @@ func newS3Client(ctx context.Context, uri *url.URL) *s3.Client {
 		)),
 	)
 	if err != nil {
-		log.Panic("Storage client initialization failed", zap.Error(err))
+		log.Panic("storage client initialization failed", zap.Error(err))
 	}
 	var options []func(*s3.Options)
 	endpoint := cmp.Or(values.Get("s3.endpoint"), values.Get("endpoint"))

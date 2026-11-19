@@ -92,13 +92,12 @@ type decoder struct {
 	storage        storeapi.Storage
 	upstreamTiDB   *sql.DB
 	tableInfoCache map[tableKey]*commonType.TableInfo
+	allocator      *common.TableIDAllocator
 }
-
-var tableIDAllocator = common.NewTableIDAllocator()
 
 // NewDecoder return a decoder for canal-json
 func NewDecoder(
-	ctx context.Context, codecConfig *common.Config, db *sql.DB,
+	ctx context.Context, codecConfig *common.Config, db *sql.DB, allocator *common.TableIDAllocator,
 ) (common.Decoder, error) {
 	var (
 		externalStorage storeapi.Storage
@@ -118,9 +117,9 @@ func NewDecoder(
 		}
 	}
 
-	tableIDAllocator.Clean()
 	return &decoder{
 		config:         codecConfig,
+		allocator:      allocator,
 		decoder:        newBufferedJSONDecoder(),
 		storage:        externalStorage,
 		upstreamTiDB:   db,
@@ -375,9 +374,9 @@ func (d *decoder) NextDDLEvent() *commonEvent.DDLEvent {
 	result.Query = d.msg.getQuery()
 	actionType := common.GetDDLActionType(result.Query)
 	result.Type = byte(actionType)
-	tableIDAllocator.AddBlockTableID(result.SchemaName, result.TableName, tableIDAllocator.Allocate(result.SchemaName, result.TableName))
+	d.allocator.AddBlockTableID(result.SchemaName, result.TableName, d.allocator.Allocate(result.SchemaName, result.TableName))
 
-	result.BlockedTables = common.GetBlockedTables(tableIDAllocator, result)
+	result.BlockedTables = common.GetBlockedTables(d.allocator, result)
 	// if receive a table level DDL, just remove the table info to trigger create a new one.
 	delete(d.tableInfoCache, tableKey{schema: result.SchemaName, table: result.TableName})
 	delete(d.tableInfoCache, tableKey{schema: result.SchemaName, table: result.TableName})
@@ -543,8 +542,8 @@ func (d *decoder) queryTableInfo(msg canalJSONMessageInterface) *commonType.Tabl
 	tableInfo, ok := d.tableInfoCache[cacheKey]
 	if !ok {
 		tidbTableInfo := new(timodel.TableInfo)
-		tidbTableInfo.ID = tableIDAllocator.Allocate(schemaName, tableName)
-		tableIDAllocator.AddBlockTableID(schemaName, tableName, tidbTableInfo.ID)
+		tidbTableInfo.ID = d.allocator.Allocate(schemaName, tableName)
+		d.allocator.AddBlockTableID(schemaName, tableName, tidbTableInfo.ID)
 		tidbTableInfo.Name = ast.NewCIStr(tableName)
 
 		columns := newTiColumns(msg)

@@ -41,12 +41,10 @@ import (
 	"go.uber.org/zap"
 )
 
-var tableIDAllocator = common.NewTableIDAllocator()
-
 // decoder implement the Decoder interface
 type decoder struct {
-	idx    int
-	config *common.Config
+	allocator *common.TableIDAllocator
+	config    *common.Config
 
 	upstreamTiDB *sql.DB
 
@@ -59,12 +57,11 @@ type decoder struct {
 // NewDecoder return an debezium decoder
 func NewDecoder(
 	config *common.Config,
-	idx int,
 	db *sql.DB,
+	allocator *common.TableIDAllocator,
 ) common.Decoder {
-	tableIDAllocator.Clean()
 	return &decoder{
-		idx:          idx,
+		allocator:    allocator,
 		config:       config,
 		upstreamTiDB: db,
 	}
@@ -141,14 +138,13 @@ func (d *decoder) NextDDLEvent() *commonEvent.DDLEvent {
 	actionType := common.GetDDLActionType(event.Query)
 	event.Type = byte(actionType)
 
-	if d.idx == 0 {
-		tableIDAllocator.AddBlockTableID(event.SchemaName, event.TableName, tableIDAllocator.Allocate(event.SchemaName, event.TableName))
-		event.BlockedTables = common.GetBlockedTables(tableIDAllocator, event)
-		if event.Type == byte(timodel.ActionRenameTable) {
-			schemaName = event.ExtraSchemaName
-			tableName = event.ExtraTableName
-		}
+	d.allocator.AddBlockTableID(event.SchemaName, event.TableName, d.allocator.Allocate(event.SchemaName, event.TableName))
+	event.BlockedTables = common.GetBlockedTables(d.allocator, event)
+	if event.Type == byte(timodel.ActionRenameTable) {
+		schemaName = event.ExtraSchemaName
+		tableName = event.ExtraTableName
 	}
+
 	return event
 }
 
@@ -194,7 +190,7 @@ func (d *decoder) assembleDMLEventFromPayload(
 	valuePayload map[string]any,
 	valueSchema map[string]any,
 ) *commonEvent.DMLEvent {
-	tableInfo := queryTableInfoFromPayload(keyPayload, valuePayload, valueSchema)
+	tableInfo := queryTableInfoFromPayload(d.allocator, keyPayload, valuePayload, valueSchema)
 	commitTs := getCommitTsFromPayload(valuePayload)
 	startTs, hasStartTs := getStartTsFromPayload(valuePayload)
 	if !hasStartTs {
@@ -308,6 +304,7 @@ func (d *decoder) clear() {
 }
 
 func queryTableInfoFromPayload(
+	allocator *common.TableIDAllocator,
 	keyPayload map[string]any,
 	valuePayload map[string]any,
 	valueSchema map[string]any,
@@ -315,8 +312,8 @@ func queryTableInfoFromPayload(
 	schemaName := getSchemaNameFromPayload(valuePayload)
 	tableName := getTableNameFromPayload(valuePayload)
 	tidbTableInfo := new(timodel.TableInfo)
-	tidbTableInfo.ID = tableIDAllocator.Allocate(schemaName, tableName)
-	tableIDAllocator.AddBlockTableID(schemaName, tableName, tidbTableInfo.ID)
+	tidbTableInfo.ID = allocator.Allocate(schemaName, tableName)
+	allocator.AddBlockTableID(schemaName, tableName, tidbTableInfo.ID)
 	tidbTableInfo.Name = ast.NewCIStr(tableName)
 
 	fields := valueSchema["fields"].([]any)

@@ -213,7 +213,7 @@ func TestRowChanged2MsgOnlyHandleKeyColumns(t *testing.T) {
 // builds from a message: a composite primary key must stay the handle key, with
 // the real column offsets, because that is what the MySQL sink locates rows by.
 func TestDecodedTableInfoLocatesRowByPrimaryKey(t *testing.T) {
-	decoder := &decoder{}
+	decoder := &decoder{allocator: common.NewTableIDAllocator()}
 	key := &messageKey{Schema: "test", Table: "t"}
 	value := &messageRow{Update: map[string]column{
 		"a": {Type: mysql.TypeLong, Flag: primaryKeyFlag | handleKeyFlag, Value: int64(1)},

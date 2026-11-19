@@ -56,7 +56,7 @@ func newKafkaReader(ctx context.Context, opts Options) *kafkaReader {
 	}
 	router, err := eventrouter.NewEventRouter(replicaConfig.Sink, util.GetOrZero(replicaConfig.CaseSensitive), topic, false, codecConfig.Protocol == config.ProtocolAvro)
 	if err != nil {
-		log.Panic("Kafka event routing configuration is invalid", zap.Error(err))
+		log.Panic("kafka event routing configuration is invalid", zap.Error(err))
 	}
 	kafkaOptions := []kgo.Opt{
 		kgo.SeedBrokers(strings.Split(upstreamURI.Host, ",")...),
@@ -86,18 +86,18 @@ func newKafkaReader(ctx context.Context, opts Options) *kafkaReader {
 		if ca != "" {
 			pem, err := os.ReadFile(ca)
 			if err != nil {
-				log.Panic("Kafka CA certificate loading failed", zap.Error(errors.WrapError(errors.ErrKafkaInvalidConfig, err)))
+				log.Panic("kafka CA certificate loading failed", zap.Error(errors.WrapError(errors.ErrKafkaInvalidConfig, err)))
 			}
 			pool := x509.NewCertPool()
 			if !pool.AppendCertsFromPEM(pem) {
-				log.Panic("Kafka CA certificate is invalid", zap.Error(errors.ErrKafkaInvalidConfig.GenWithStack("no certificate found in %s", ca)))
+				log.Panic("kafka CA certificate is invalid", zap.Error(errors.ErrKafkaInvalidConfig.GenWithStack("no certificate found in %s", ca)))
 			}
 			tlsConfig.RootCAs = pool
 		}
 		if cert != "" || key != "" {
 			certificate, err := tls.LoadX509KeyPair(cert, key)
 			if err != nil {
-				log.Panic("Kafka client certificate loading failed", zap.Error(errors.WrapError(errors.ErrKafkaInvalidConfig, err)))
+				log.Panic("kafka client certificate loading failed", zap.Error(errors.WrapError(errors.ErrKafkaInvalidConfig, err)))
 			}
 			tlsConfig.Certificates = []tls.Certificate{
 				certificate,
@@ -107,15 +107,15 @@ func newKafkaReader(ctx context.Context, opts Options) *kafkaReader {
 	}
 	client, err := kgo.NewClient(kafkaOptions...)
 	if err != nil {
-		log.Panic("Kafka client initialization failed", zap.Error(err))
+		log.Panic("kafka client initialization failed", zap.Error(err))
 	}
 	metadata, err := kadm.NewClient(client).Metadata(ctx, topic)
 	if err != nil {
-		log.Panic("Kafka topic metadata lookup failed", zap.String("topic", topic), zap.Error(err))
+		log.Panic("kafka topic metadata lookup failed", zap.String("topic", topic), zap.Error(err))
 	}
 	topicMetadata, ok := metadata.Topics[topic]
 	if !ok || topicMetadata.Err != nil || len(topicMetadata.Partitions) == 0 {
-		log.Panic("Kafka topic metadata is unavailable", zap.String("topic", topic), zap.Error(topicMetadata.Err), zap.Int("partitionCount", len(topicMetadata.Partitions)))
+		log.Panic("kafka topic metadata is unavailable", zap.String("topic", topic), zap.Error(topicMetadata.Err), zap.Int("partitionCount", len(topicMetadata.Partitions)))
 	}
 
 	partitions := int32(len(topicMetadata.Partitions))
@@ -132,6 +132,10 @@ func newKafkaReader(ctx context.Context, opts Options) *kafkaReader {
 
 func (c *kafkaReader) Partitions() int32 {
 	return c.partitions
+}
+
+func (*kafkaReader) DDLPartition() int32 {
+	return 0
 }
 
 func (c *kafkaReader) Read(ctx context.Context) ([]*Payload, error) {
@@ -182,10 +186,10 @@ func (c *kafkaReader) Close() {
 // A single oversized row is allowed by the Kafka encoder.
 func (c *kafkaReader) CheckInput(input *Payload, rows int) {
 	if rows > c.maxBatchSize {
-		log.Panic("Kafka message batch size limit exceeded", zap.String("topic", c.topic), zap.Int32("partition", input.Partition), zap.Int64("offset", input.Offset), zap.Int("maxBatchSize", c.maxBatchSize), zap.Int("actualBatchSize", rows))
+		log.Panic("kafka message batch size limit exceeded", zap.String("topic", c.topic), zap.Int32("partition", input.Partition), zap.Int64("offset", input.Offset), zap.Int("maxBatchSize", c.maxBatchSize), zap.Int("actualBatchSize", rows))
 	}
 	if rows > 1 && input.Bytes > int64(c.maxMessageBytes) {
-		log.Panic("Kafka message byte size limit exceeded", zap.String("topic", c.topic), zap.Int32("partition", input.Partition), zap.Int64("offset", input.Offset), zap.Int("maxMessageBytes", c.maxMessageBytes), zap.Int64("receivedBytes", input.Bytes))
+		log.Panic("kafka message byte size limit exceeded", zap.String("topic", c.topic), zap.Int32("partition", input.Partition), zap.Int64("offset", input.Offset), zap.Int("maxMessageBytes", c.maxMessageBytes), zap.Int64("receivedBytes", input.Bytes))
 	}
 }
 
@@ -203,10 +207,10 @@ func (c *kafkaReader) CheckDML(dml *event.DMLEvent, part int32, offset int64) {
 		}
 		expected, _, err := generator.GeneratePartitionIndexAndKey(&row, partitionCount, dml.TableInfo, dml.CommitTs)
 		if err != nil {
-			log.Panic("Kafka DML partition calculation failed", zap.String("topic", c.topic), zap.Int32("partition", part), zap.Int64("offset", offset), zap.String("schema", dml.TableInfo.GetSchemaName()), zap.String("table", dml.TableInfo.GetTableName()), zap.Error(err))
+			log.Panic("kafka DML partition calculation failed", zap.String("topic", c.topic), zap.Int32("partition", part), zap.Int64("offset", offset), zap.String("schema", dml.TableInfo.GetSchemaName()), zap.String("table", dml.TableInfo.GetTableName()), zap.Error(err))
 		}
 		if expected != part {
-			log.Panic("Kafka DML was dispatched to the wrong partition", zap.String("topic", c.topic), zap.Int32("partition", part), zap.Int32("expectedPartition", expected), zap.Int32("partitionCount", partitionCount), zap.Int64("offset", offset), zap.String("schema", dml.TableInfo.GetSchemaName()), zap.String("table", dml.TableInfo.GetTableName()), zap.Uint64("commitTs", dml.CommitTs))
+			log.Panic("kafka DML was dispatched to the wrong partition", zap.String("topic", c.topic), zap.Int32("partition", part), zap.Int32("expectedPartition", expected), zap.Int32("partitionCount", partitionCount), zap.Int64("offset", offset), zap.String("schema", dml.TableInfo.GetSchemaName()), zap.String("table", dml.TableInfo.GetTableName()), zap.Uint64("commitTs", dml.CommitTs))
 		}
 	}
 }

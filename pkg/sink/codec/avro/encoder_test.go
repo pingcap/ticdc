@@ -66,7 +66,7 @@ func TestDMLEventE2E(t *testing.T) {
 			schemaM, err := schemamanager.NewConfluentSchemaManager(ctx, "http://127.0.0.1:8081", nil)
 			require.NoError(t, err)
 
-			decoder := NewDecoder(codecConfig, 0, schemaM, topic, nil)
+			decoder := NewDecoder(codecConfig, schemaM, topic, nil, common.NewTableIDAllocator())
 			decoder.AddKeyValue(message.Key, message.Value)
 
 			messageType, exist := decoder.HasNext()
@@ -94,7 +94,7 @@ func TestDDLEventE2E(t *testing.T) {
 	require.NotNil(t, message)
 
 	topic := "test-topic"
-	decoder := NewDecoder(codecConfig, 0, nil, topic, nil)
+	decoder := NewDecoder(codecConfig, nil, topic, nil, common.NewTableIDAllocator())
 	decoder.AddKeyValue(message.Key, message.Value)
 
 	messageType, exist := decoder.HasNext()
@@ -128,7 +128,7 @@ func TestEncodeRoutedDMLEventUsesTargetNames(t *testing.T) {
 
 	schemaM, err := schemamanager.NewConfluentSchemaManager(ctx, "http://127.0.0.1:8081", nil)
 	require.NoError(t, err)
-	decoder := NewDecoder(codecConfig, 0, schemaM, topic, nil)
+	decoder := NewDecoder(codecConfig, schemaM, topic, nil, common.NewTableIDAllocator())
 	decoder.AddKeyValue(messages[0].Key, messages[0].Value)
 
 	messageType, exists := decoder.HasNext()
@@ -151,7 +151,7 @@ func TestEncodeRoutedDDLEventUsesTargetNames(t *testing.T) {
 	require.NoError(t, err)
 
 	topic := "avro-routed-ddl-test-topic"
-	decoder := NewDecoder(codecConfig, 0, nil, topic, nil)
+	decoder := NewDecoder(codecConfig, nil, topic, nil, common.NewTableIDAllocator())
 	decoder.AddKeyValue(message.Key, message.Value)
 
 	messageType, exists := decoder.HasNext()
@@ -179,7 +179,7 @@ func TestResolvedE2E(t *testing.T) {
 	require.NotNil(t, message)
 
 	topic := "test-topic"
-	decoder := NewDecoder(codecConfig, 0, nil, topic, nil)
+	decoder := NewDecoder(codecConfig, nil, topic, nil, common.NewTableIDAllocator())
 	decoder.AddKeyValue(message.Key, message.Value)
 
 	messageType, exist := decoder.HasNext()

@@ -41,8 +41,6 @@ import (
 	"go.uber.org/zap"
 )
 
-var tableIDAllocator = common.NewTableIDAllocator()
-
 type tableCacheKey struct {
 	schema      string
 	table       string
@@ -70,12 +68,12 @@ type decoder struct {
 
 	upstreamTiDB *sql.DB
 
-	idx int
+	allocator *common.TableIDAllocator
 }
 
 // NewDecoder creates a new decoder.
 func NewDecoder(
-	ctx context.Context, idx int, config *common.Config, db *sql.DB,
+	ctx context.Context, config *common.Config, db *sql.DB, allocator *common.TableIDAllocator,
 ) (common.Decoder, error) {
 	var (
 		externalStorage storeapi.Storage
@@ -95,9 +93,8 @@ func NewDecoder(
 		}
 	}
 
-	tableIDAllocator.Clean()
 	return &decoder{
-		idx:          idx,
+		allocator:    allocator,
 		config:       config,
 		storage:      externalStorage,
 		upstreamTiDB: db,
@@ -207,11 +204,8 @@ func (b *decoder) NextDDLEvent() *commonEvent.DDLEvent {
 	}
 	b.addDDLCommitTs(schema, table, result.FinishedTs)
 
-	// only the DDL comes from the first partition will be processed.
-	if b.idx == 0 {
-		tableIDAllocator.AddBlockTableID(result.SchemaName, result.TableName, tableIDAllocator.Allocate(result.SchemaName, result.TableName))
-		result.BlockedTables = common.GetBlockedTables(tableIDAllocator, result)
-	}
+	b.allocator.AddBlockTableID(result.SchemaName, result.TableName, b.allocator.Allocate(result.SchemaName, result.TableName))
+	result.BlockedTables = common.GetBlockedTables(b.allocator, result)
 
 	b.nextKey = nil
 	b.valueBytes = nil
@@ -475,8 +469,8 @@ func (b *decoder) queryTableInfo(key *messageKey, value *messageRow) *commonType
 }
 
 func (b *decoder) newTableInfo(key *messageKey, value *messageRow) *commonType.TableInfo {
-	physicalTableID := tableIDAllocator.Allocate(key.Schema, key.Table)
-	tableIDAllocator.AddBlockTableID(key.Schema, key.Table, physicalTableID)
+	physicalTableID := b.allocator.Allocate(key.Schema, key.Table)
+	b.allocator.AddBlockTableID(key.Schema, key.Table, physicalTableID)
 	key.Partition = &physicalTableID
 	tableInfo := new(timodel.TableInfo)
 	tableInfo.ID = *key.Partition

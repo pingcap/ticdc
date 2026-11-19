@@ -354,7 +354,7 @@ func TestAvroEncodeIncludeBeforeValue(t *testing.T) {
 			require.NoError(t, err)
 			decoderConfig := *codecConfig
 			decoderConfig.AvroIncludeBeforeValue = false
-			decoder := NewDecoder(&decoderConfig, 0, encoder.schemaM, topic, nil)
+			decoder := NewDecoder(&decoderConfig, encoder.schemaM, topic, nil, common.NewTableIDAllocator())
 			decoder.AddKeyValue(key, bin)
 
 			messageType, exist := decoder.HasNext()
@@ -503,7 +503,7 @@ func TestAvroEncodeDeleteEventWithWatermarkCarriesCommitTs(t *testing.T) {
 	require.NotEmpty(t, messages[0].Value)
 	require.Equal(t, deleteByte, messages[0].Value[0])
 
-	decoder := NewDecoder(codecConfig, 0, encoder.schemaM, topic, nil)
+	decoder := NewDecoder(codecConfig, encoder.schemaM, topic, nil, common.NewTableIDAllocator())
 	decoder.AddKeyValue(messages[0].Key, messages[0].Value)
 
 	messageType, exists := decoder.HasNext()
@@ -541,7 +541,7 @@ func TestAvroLegacyDeleteUsesCachedValueSchema(t *testing.T) {
 
 	for _, withWatermark := range []bool{false, true} {
 		t.Run("watermark="+strconv.FormatBool(withWatermark), func(t *testing.T) {
-			decoder := NewDecoder(codecConfig, 0, encoder.schemaM, topic, nil)
+			decoder := NewDecoder(codecConfig, encoder.schemaM, topic, nil, common.NewTableIDAllocator())
 			decoder.AddKeyValue(insert.Key, insert.Value)
 			insertEvent := decoder.NextDMLEvent()
 			t.Cleanup(insertEvent.PostFlush)

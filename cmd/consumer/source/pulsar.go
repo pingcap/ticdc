@@ -69,7 +69,7 @@ func newPulsarReader(opts Options) *pulsarReader {
 		MemoryLimitBytes:      64 << 20,
 	}
 	if (clientOptions.TLSCertificateFile == "") != (clientOptions.TLSKeyFilePath == "") {
-		log.Panic("Pulsar TLS certificate and key must be configured together")
+		log.Panic("pulsar TLS certificate and key must be configured together")
 	}
 	oauth2 := config.OAuth2{}
 	if pulsarConfig.OAuth2 != nil {
@@ -88,7 +88,7 @@ func newPulsarReader(opts Options) *pulsarReader {
 	certificate := cmp.Or(query.Get("auth-tls-certificate-path"), util.GetOrZero(pulsarConfig.AuthTLSCertificatePath))
 	key := cmp.Or(query.Get("auth-tls-private-key-path"), util.GetOrZero(pulsarConfig.AuthTLSPrivateKeyPath))
 	if (certificate == "") != (key == "") {
-		log.Panic("Pulsar authentication certificate and key must be configured together")
+		log.Panic("pulsar authentication certificate and key must be configured together")
 	}
 	useOAuth2 := oauth2.OAuth2IssuerURL != "" || oauth2.OAuth2ClientID != "" || oauth2.OAuth2PrivateKey != "" || oauth2.OAuth2Audience != "" || oauth2.OAuth2Scope != ""
 	var authCount int
@@ -109,7 +109,7 @@ func newPulsarReader(opts Options) *pulsarReader {
 		clientOptions.Authentication = pulsar.NewAuthenticationTLS(certificate, key)
 	case useOAuth2:
 		if oauth2.OAuth2IssuerURL == "" || oauth2.OAuth2ClientID == "" || oauth2.OAuth2PrivateKey == "" || oauth2.OAuth2Audience == "" {
-			log.Panic("Pulsar OAuth2 requires issuer, client ID, private key and audience")
+			log.Panic("pulsar OAuth2 requires issuer, client ID, private key and audience")
 		}
 		authentication, err := auth.NewAuthenticationOAuth2WithParams(map[string]string{
 			auth.ConfigParamType: auth.ConfigParamTypeClientCredentials, auth.ConfigParamIssuerURL: oauth2.OAuth2IssuerURL,
@@ -117,17 +117,17 @@ func newPulsarReader(opts Options) *pulsarReader {
 			auth.ConfigParamAudience: oauth2.OAuth2Audience, auth.ConfigParamScope: oauth2.OAuth2Scope,
 		})
 		if err != nil {
-			log.Panic("Pulsar OAuth2 authentication initialization failed", zap.Error(err))
+			log.Panic("pulsar OAuth2 authentication initialization failed", zap.Error(err))
 		}
 		clientOptions.Authentication = authentication
 	}
 	client, err := pulsar.NewClient(clientOptions)
 	if err != nil {
-		log.Panic("Pulsar client initialization failed", zap.Error(err))
+		log.Panic("pulsar client initialization failed", zap.Error(err))
 	}
 	topics, err := client.TopicPartitions(topic)
 	if err != nil {
-		log.Panic("Pulsar partition discovery failed", zap.String("topic", topic), zap.Error(err))
+		log.Panic("pulsar partition discovery failed", zap.String("topic", topic), zap.Error(err))
 	}
 	consumer, err := client.Subscribe(pulsar.ConsumerOptions{
 		Topic:                             topic,
@@ -141,7 +141,7 @@ func newPulsarReader(opts Options) *pulsarReader {
 		MaxPendingChunkedMessage:          1,
 	})
 	if err != nil {
-		log.Panic("Pulsar topic subscription failed", zap.String("topic", topic), zap.String("consumerID", consumerID), zap.Error(err))
+		log.Panic("pulsar topic subscription failed", zap.String("topic", topic), zap.String("consumerID", consumerID), zap.Error(err))
 	}
 	partitions := make(map[string]int32, len(topics))
 	for id, partitionTopic := range topics {
@@ -157,6 +157,10 @@ func newPulsarReader(opts Options) *pulsarReader {
 
 func (c *pulsarReader) Partitions() int32 {
 	return int32(len(c.partitions))
+}
+
+func (*pulsarReader) DDLPartition() int32 {
+	return 0
 }
 
 func (c *pulsarReader) Read(ctx context.Context) ([]*Payload, error) {

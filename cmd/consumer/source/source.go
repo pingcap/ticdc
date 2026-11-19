@@ -67,6 +67,10 @@ type Reader interface {
 	// Partitions returns the number of independently read partitions. A source
 	// without partitions publishes a global watermark instead.
 	Partitions() int32
+
+	// DDLPartition is the partition whose DDL messages are applied downstream.
+	DDLPartition() int32
+
 	Close()
 }
 

@@ -334,7 +334,6 @@ type Conductor struct {
 
 	confirmable  chan struct{}
 	checkpoint   *atomic.Uint64
-	onCheckpoint func(uint64)
 
 	partitionWatermarks []uint64
 	watermark           uint64
@@ -400,11 +399,6 @@ func (c *Conductor) advanceWriter(w *writer.Writer) {
 	w.Advance(writer.Progress{Watermark: c.watermark, Pending: pending})
 }
 
-// OnCheckpoint registers a callback for durable checkpoint advances.
-func (c *Conductor) OnCheckpoint(fn func(uint64)) {
-	c.onCheckpoint = fn
-}
-
 // observeCheckpoint publishes a durable checkpoint and wakes the confirm loop.
 func (c *Conductor) observeCheckpoint(checkpoint uint64) {
 	previous := c.checkpoint.Swap(checkpoint)
@@ -412,9 +406,6 @@ func (c *Conductor) observeCheckpoint(checkpoint uint64) {
 		return
 	}
 	notifyConfirmation(c.confirmable)
-	if checkpoint > previous && c.onCheckpoint != nil {
-		c.onCheckpoint(checkpoint)
-	}
 }
 
 func (c *Conductor) confirm(ctx context.Context) error {

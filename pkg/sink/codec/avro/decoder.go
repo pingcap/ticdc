@@ -41,16 +41,14 @@ import (
 	"go.uber.org/zap"
 )
 
-var tableIDAllocator = common.NewTableIDAllocator()
-
 // decoderCodecCacheSize bounds the compiled codecs retained by each partition decoder.
 // It keeps recently active routed-table schemas without retaining every historical version.
 const decoderCodecCacheSize = 128
 
 type decoder struct {
-	idx    int
-	config *common.Config
-	topic  string
+	allocator *common.TableIDAllocator
+	config    *common.Config
+	topic     string
 
 	upstreamTiDB *sql.DB
 
@@ -67,15 +65,14 @@ type decoder struct {
 // NewDecoder return an avro decoder
 func NewDecoder(
 	config *common.Config,
-	idx int,
 	schemaM schemamanager.SchemaManager,
 	topic string,
 	db *sql.DB,
+	allocator *common.TableIDAllocator,
 ) common.Decoder {
-	tableIDAllocator.Clean()
 	codecs, _ := lru.New(decoderCodecCacheSize)
 	return &decoder{
-		idx:          idx,
+		allocator:    allocator,
 		config:       config,
 		topic:        topic,
 		schemaM:      schemaM,
@@ -201,7 +198,7 @@ func (d *decoder) assembleDMLEventFromDecoded(
 	hasValue bool,
 	deleteCommitTs uint64,
 ) *commonEvent.DMLEvent {
-	event, err := assembleEvent(keyMap, valueMap, valueSchema, isDelete, hasValue)
+	event, err := assembleEvent(d.allocator, keyMap, valueMap, valueSchema, isDelete, hasValue)
 	if err != nil {
 		log.Panic("assemble event failed", zap.Error(err))
 	}
@@ -279,7 +276,7 @@ func (d *decoder) decodeDeleteCommitTs() uint64 {
 // Legacy deletes use key values with NULLs for non-key columns from the cached schema.
 // schema is corresponding to the valueMap, it can be used to decode the valueMap to construct columns.
 func assembleEvent(
-	keyMap, valueMap, schema map[string]any, isDelete bool, hasValue bool,
+	allocator *common.TableIDAllocator, keyMap, valueMap, schema map[string]any, isDelete bool, hasValue bool,
 ) (*commonEvent.DMLEvent, error) {
 	fields, ok := schema["fields"].([]any)
 	if !ok {
@@ -341,7 +338,7 @@ func assembleEvent(
 	}
 
 	event := new(commonEvent.DMLEvent)
-	event.TableInfo = queryTableInfo(schemaName, tableName, columns, keyMap)
+	event.TableInfo = queryTableInfo(allocator, schemaName, tableName, columns, keyMap)
 	event.StartTs = uint64(commitTs)
 	event.CommitTs = uint64(commitTs)
 	event.PhysicalTableID = event.TableInfo.TableName.TableID
@@ -483,15 +480,21 @@ func schemaAndTableName(schema map[string]any) (string, string) {
 	return parts[1], schema["name"].(string)
 }
 
-func queryTableInfo(schemaName, tableName string, columns []*timodel.ColumnInfo, keyMap map[string]any) *commonType.TableInfo {
-	tableInfo := newTableInfo(schemaName, tableName, columns, keyMap)
+func queryTableInfo(
+	allocator *common.TableIDAllocator, schemaName, tableName string,
+	columns []*timodel.ColumnInfo, keyMap map[string]any,
+) *commonType.TableInfo {
+	tableInfo := newTableInfo(allocator, schemaName, tableName, columns, keyMap)
 	return tableInfo
 }
 
-func newTableInfo(schemaName, tableName string, columns []*timodel.ColumnInfo, keyMap map[string]any) *commonType.TableInfo {
+func newTableInfo(
+	allocator *common.TableIDAllocator, schemaName, tableName string,
+	columns []*timodel.ColumnInfo, keyMap map[string]any,
+) *commonType.TableInfo {
 	tidbTableInfo := new(timodel.TableInfo)
-	tidbTableInfo.ID = tableIDAllocator.Allocate(schemaName, tableName)
-	tableIDAllocator.AddBlockTableID(schemaName, tableName, tidbTableInfo.ID)
+	tidbTableInfo.ID = allocator.Allocate(schemaName, tableName)
+	allocator.AddBlockTableID(schemaName, tableName, tidbTableInfo.ID)
 	tidbTableInfo.Name = ast.NewCIStr(tableName)
 	tidbTableInfo.Columns = columns
 	indexColumns := make([]*timodel.IndexColumn, 0)
@@ -674,10 +677,8 @@ func (d *decoder) NextDDLEvent() *commonEvent.DDLEvent {
 	actionType := common.GetDDLActionType(result.Query)
 	result.Type = byte(actionType)
 
-	if d.idx == 0 {
-		tableIDAllocator.AddBlockTableID(result.SchemaName, result.TableName, tableIDAllocator.Allocate(result.SchemaName, result.TableName))
-		result.BlockedTables = common.GetBlockedTables(tableIDAllocator, result)
-	}
+	d.allocator.AddBlockTableID(result.SchemaName, result.TableName, d.allocator.Allocate(result.SchemaName, result.TableName))
+	result.BlockedTables = common.GetBlockedTables(d.allocator, result)
 	return result
 }
 

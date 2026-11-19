@@ -65,11 +65,13 @@ type decoder struct {
 // submission order. Decoder state describes one partition's schema history, so
 // a decoder never handles another partition's input.
 type Group struct {
-	codecConfig *common.Config
-	upstreamDB  *sql.DB
-	selectors   *columnselector.ColumnSelectors
-	decoders    []decoder
-	schemas     *simple.TableInfoCache
+	codecConfig  *common.Config
+	upstreamDB   *sql.DB
+	selectors    *columnselector.ColumnSelectors
+	decoders     []decoder
+	schemas      *common.TableInfoCache
+	allocator    *common.TableIDAllocator
+	ddlPartition int32
 	// inputs dispatches an undecoded input to the decoder owning its partition.
 	inputs []chan *Future
 	// output queues inputs for the conductor in submission order. A Future may
@@ -84,16 +86,23 @@ type Options struct {
 	Partitions    int32
 	Topic         string
 	UpstreamURI   *url.URL
+	// DDLPartition is the partition whose DDL messages are delivered
+	// downstream. The other partitions decode them only to update their own
+	// state.
+	DDLPartition int32
 }
 
 // NewOptions builds decode options for a source.
-func NewOptions(codecConfig *common.Config, replicaConfig *config.ReplicaConfig, partitions int32, upstreamURI *url.URL) Options {
+func NewOptions(
+	codecConfig *common.Config, replicaConfig *config.ReplicaConfig, reader source.Reader, upstreamURI *url.URL,
+) Options {
 	return Options{
 		CodecConfig:   codecConfig,
 		ReplicaConfig: replicaConfig,
-		Partitions:    partitions,
+		Partitions:    reader.Partitions(),
 		Topic:         strings.Trim(upstreamURI.Path, "/"),
 		UpstreamURI:   upstreamURI,
+		DDLPartition:  reader.DDLPartition(),
 	}
 }
 
@@ -103,11 +112,13 @@ func NewGroup(ctx context.Context, opts Options) *Group {
 	upstreamDB := newUpstreamDB(ctx, opts.UpstreamURI)
 	partitions := max(1, int(opts.Partitions))
 	group := &Group{
-		codecConfig: codecConfig,
-		upstreamDB:  upstreamDB,
-		decoders:    make([]decoder, partitions),
-		inputs:      make([]chan *Future, partitions),
-		output:      make(chan *Future, decoderQueueSize),
+		codecConfig:  codecConfig,
+		upstreamDB:   upstreamDB,
+		allocator:    common.NewTableIDAllocator(),
+		ddlPartition: opts.DDLPartition,
+		decoders:     make([]decoder, partitions),
+		inputs:       make([]chan *Future, partitions),
+		output:       make(chan *Future, decoderQueueSize),
 	}
 	for i := range group.inputs {
 		group.inputs[i] = make(chan *Future, decoderQueueSize)
@@ -124,20 +135,18 @@ func NewGroup(ctx context.Context, opts Options) *Group {
 		return group
 	}
 	if codecConfig.Protocol == config.ProtocolSimple {
-		group.schemas = simple.NewTableInfoCache()
+		group.schemas = common.NewTableInfoCache()
 	}
 	for i := range group.decoders {
 		if group.schemas == nil {
-			// The conductor decides which partition's DDL to execute. Every
-			// decoder must produce complete DDL metadata, regardless of its index.
-			item, err := codec.NewEventDecoder(ctx, 0, codecConfig, opts.Topic, upstreamDB)
+			item, err := codec.NewEventDecoder(ctx, codecConfig, opts.Topic, upstreamDB, group.allocator)
 			if err != nil {
 				log.Panic("consumer event decoder initialization failed", zap.String("protocol", codecConfig.Protocol.String()), zap.Error(err))
 			}
 			group.decoders[i] = decoder{Decoder: item}
 			continue
 		}
-		decoded, err := simple.NewDecoder(ctx, codecConfig, upstreamDB, group.schemas)
+		decoded, err := simple.NewDecoder(ctx, codecConfig, upstreamDB, group.schemas, group.allocator)
 		if err != nil {
 			log.Panic("consumer event decoder initialization failed", zap.String("protocol", codecConfig.Protocol.String()), zap.Error(err))
 		}
@@ -150,13 +159,6 @@ func NewGroup(ctx context.Context, opts Options) *Group {
 	return group
 }
 
-// ReleaseSchemas drops schema history that is no longer reachable from the
-// durable checkpoint.
-func (d *Group) ReleaseSchemas(checkpoint uint64) {
-	if d.schemas != nil && checkpoint != 0 {
-		d.schemas.ReleaseBefore(checkpoint)
-	}
-}
 
 // Close releases the upstream metadata connection.
 func (d *Group) Close() {
@@ -314,6 +316,11 @@ func (d *Group) decodeInput(ctx context.Context, decoder decoder, future *Future
 			d.addRow(future, dml)
 		case common.MessageTypeDDL:
 			ddl := decoder.NextDDLEvent()
+			if input.Partition != d.ddlPartition {
+				// Every partition receives the broadcast DDL and decodes it to
+				// update its own state, but only one copy is applied downstream.
+				continue
+			}
 			if d.schemas != nil && ddl.Query == "" {
 				continue
 			}
