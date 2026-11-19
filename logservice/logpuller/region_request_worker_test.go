@@ -876,8 +876,6 @@ func TestReceiveAndDispatchChangeEventsEOFIsRetriable(t *testing.T) {
 		})
 	}
 }
-<<<<<<< HEAD
-=======
 
 func TestReceiveAndDispatchChangeEventsDoesNotLogAfterCancellation(t *testing.T) {
 	core, observedLogs := observer.New(zapcore.WarnLevel)
@@ -901,4 +899,3 @@ func TestReceiveAndDispatchChangeEventsDoesNotLogAfterCancellation(t *testing.T)
 func (m *recordingRegionEventDynamicStream) CheckMemoryPressure() {}
 
 func (m *mockRegionEventDynamicStream) CheckMemoryPressure() {}
->>>>>>> a2503eb41 (logpuller: bound span cleanup and quiet expected drops (#6810))

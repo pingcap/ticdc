@@ -520,12 +520,12 @@ func TestAdmissionScanWaitDurationObservedOnceAfterNotifications(t *testing.T) {
 	controller := newRegionAdmissionController(1, 1, quota, clock)
 
 	require.True(t, quota.AcquireEvent(context.Background(), span, 20))
-	region := newTestQuotaRegionWithPriority(span, ScanPriorityLow)
+	region := newTestQuotaRegionWithPriority(span, cdcpb.ScanPriority_SCAN_PRIORITY_LOW)
 	require.True(t, controller.submit(newRegionPriorityTask(region, 1)))
 
 	countObservations := func() uint64 {
 		metric := &dto.Metric{}
-		require.NoError(t, logPullerMemoryQuotaScanWaitDuration.Write(metric))
+		require.NoError(t, metrics.LogPullerMemoryQuotaScanWaitDuration.Write(metric))
 		return metric.GetHistogram().GetSampleCount()
 	}
 	initialCount := countObservations()
