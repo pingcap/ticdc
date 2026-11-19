@@ -87,11 +87,11 @@ type Options struct {
 }
 
 // NewOptions builds decode options for a source.
-func NewOptions(codecConfig *common.Config, replicaConfig *config.ReplicaConfig, reader source.Reader, upstreamURI *url.URL) Options {
+func NewOptions(codecConfig *common.Config, replicaConfig *config.ReplicaConfig, partitions int32, upstreamURI *url.URL) Options {
 	return Options{
 		CodecConfig:   codecConfig,
 		ReplicaConfig: replicaConfig,
-		Partitions:    reader.Partitions(),
+		Partitions:    partitions,
 		Topic:         strings.Trim(upstreamURI.Path, "/"),
 		UpstreamURI:   upstreamURI,
 	}
@@ -140,9 +140,6 @@ func NewGroup(ctx context.Context, opts Options) *Group {
 		decoded, err := simple.NewDecoder(ctx, codecConfig, upstreamDB, group.schemas)
 		if err != nil {
 			log.Panic("consumer event decoder initialization failed", zap.String("protocol", codecConfig.Protocol.String()), zap.Error(err))
-		}
-		if decoded == nil {
-			continue
 		}
 		schema, ok := decoded.(*simple.Decoder)
 		if !ok {

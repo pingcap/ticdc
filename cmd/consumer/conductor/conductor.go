@@ -46,11 +46,6 @@ type dmlTask struct {
 	offset    int64
 }
 
-// ddlTask holds a decoded DDL waiting for every earlier change.
-type ddlTask struct {
-	ddl *event.DDLEvent
-}
-
 // sourcePosition is one confirmable input position.
 type sourcePosition struct {
 	through uint64
@@ -159,16 +154,9 @@ func (c *Conductor) accept(work event.Event, input *source.Payload) error {
 
 // queueDML records a decoded row until the writer can accept it.
 func (c *Conductor) queueDML(item *dmlTask) {
-	rows := append(c.pendingDML[item.dml.PhysicalTableID], item)
+	rows := c.pendingDML[item.dml.PhysicalTableID]
 	// A source may deliver an earlier timestamp before resolution.
-	if len(rows) > 1 && item.dml.CommitTs < rows[len(rows)-2].dml.CommitTs {
-		rows = rows[:len(rows)-1]
-		index := sort.Search(len(rows), func(i int) bool {
-			return rows[i].dml.CommitTs > item.dml.CommitTs
-		})
-		rows = slices.Insert(rows, index, item)
-	}
-	c.pendingDML[item.dml.PhysicalTableID] = rows
+	c.pendingDML[item.dml.PhysicalTableID] = insertSorted(rows, item.dml.CommitTs, item, commitTsOfDML)
 }
 
 // queueDDL records a DDL once. Replicas of the same DDL are dropped.
@@ -178,23 +166,33 @@ func (c *Conductor) queueDDL(block *event.DDLEvent) {
 		return
 	}
 	c.queuedDDLs[key] = struct{}{}
-	task := &ddlTask{ddl: block}
-	c.pendingDDL = append(c.pendingDDL, task)
-	if len(c.pendingDDL) > 1 && task.ddl.GetCommitTs() < c.pendingDDL[len(c.pendingDDL)-2].ddl.GetCommitTs() {
-		c.pendingDDL = c.pendingDDL[:len(c.pendingDDL)-1]
-		index := sort.Search(len(c.pendingDDL), func(i int) bool {
-			return c.pendingDDL[i].ddl.GetCommitTs() > task.ddl.GetCommitTs()
-		})
-		c.pendingDDL = slices.Insert(c.pendingDDL, index, task)
+	c.pendingDDL = insertSorted(c.pendingDDL, block.GetCommitTs(), block, func(block *event.DDLEvent) uint64 {
+		return block.GetCommitTs()
+	})
+}
+
+func commitTsOfDML(item *dmlTask) uint64 {
+	return item.dml.CommitTs
+}
+
+// insertSorted appends item unless it precedes the last element, in which case
+// it is inserted after every element with an earlier timestamp.
+func insertSorted[T any](items []T, ts uint64, item T, timestamp func(T) uint64) []T {
+	if len(items) == 0 || ts >= timestamp(items[len(items)-1]) {
+		return append(items, item)
 	}
+	index := sort.Search(len(items), func(i int) bool {
+		return timestamp(items[i]) > ts
+	})
+	return slices.Insert(items, index, item)
 }
 
 // nextReady returns the DDL at the head of the pending order and the next row
 // that can be written. The DDL wins whenever it is not blocked by rows.
-func (c *Conductor) nextReady() (*ddlTask, *dmlTask) {
+func (c *Conductor) nextReady() (*event.DDLEvent, *dmlTask) {
 	if len(c.pendingDDL) != 0 {
 		head := c.pendingDDL[0]
-		if c.ddlReady(head) && !c.rowsBefore(head.ddl) {
+		if c.ddlReady(head) && !c.rowsBefore(head) {
 			return head, nil
 		}
 	}
@@ -202,12 +200,12 @@ func (c *Conductor) nextReady() (*ddlTask, *dmlTask) {
 }
 
 // ddlReady reports whether every row before the DDL has been read.
-func (c *Conductor) ddlReady(task *ddlTask) bool {
-	if len(c.partitionWatermarks) == 0 || task.ddl.GetCommitTs() <= c.watermark {
+func (c *Conductor) ddlReady(ddl *event.DDLEvent) bool {
+	if len(c.partitionWatermarks) == 0 || ddl.GetCommitTs() <= c.watermark {
 		return true
 	}
 	// Creating a schema or a table cannot depend on earlier rows.
-	switch model.ActionType(task.ddl.Type) {
+	switch model.ActionType(ddl.Type) {
 	case model.ActionCreateSchema, model.ActionCreateTable:
 		return true
 	}
@@ -238,7 +236,7 @@ func (c *Conductor) rowReady(item *dmlTask) bool {
 		return false
 	}
 	for _, block := range c.pendingDDL {
-		if item.dml.CommitTs > block.ddl.GetCommitTs() && ddl.BlocksTable(block.ddl, item.dml) {
+		if item.dml.CommitTs > block.GetCommitTs() && ddl.BlocksTable(block, item.dml) {
 			return false
 		}
 	}
@@ -275,12 +273,12 @@ func (c *Conductor) popDML(row *dmlTask) {
 	delete(c.pendingDML, table)
 }
 
-func (c *Conductor) popDDL() *ddlTask {
-	task := c.pendingDDL[0]
-	delete(c.queuedDDLs, ddl.KeyOf(task.ddl))
+func (c *Conductor) popDDL() *event.DDLEvent {
+	head := c.pendingDDL[0]
+	delete(c.queuedDDLs, ddl.KeyOf(head))
 	c.pendingDDL[0] = nil
 	c.pendingDDL = c.pendingDDL[1:]
-	return task
+	return head
 }
 
 // flush hands every ready task to the writer and lets it write.
@@ -301,7 +299,7 @@ func (c *Conductor) flush(ctx context.Context, w *writer.Writer) error {
 			ddl, row := c.nextReady()
 			if ddl != nil {
 				c.popDDL()
-				w.AddDDL(ddl.ddl)
+				w.AddDDL(ddl)
 				break
 			}
 			if row == nil {
@@ -342,7 +340,7 @@ type Conductor struct {
 	watermark           uint64
 
 	pendingDML map[int64][]*dmlTask
-	pendingDDL []*ddlTask
+	pendingDDL []*event.DDLEvent
 	queuedDDLs map[ddl.Key]struct{}
 }
 
@@ -392,17 +390,12 @@ func (c *Conductor) advanceWatermark(ts uint64, partition int32) {
 func (c *Conductor) advanceWriter(w *writer.Writer) {
 	var pending uint64
 	for _, rows := range c.pendingDML {
-		if len(rows) == 0 {
-			continue
-		}
-		if ts := rows[0].dml.CommitTs; pending == 0 || ts < pending {
-			pending = ts
+		if len(rows) != 0 {
+			pending = earliest(pending, rows[0].dml.CommitTs)
 		}
 	}
-	for _, task := range c.pendingDDL {
-		if ts := task.ddl.GetCommitTs(); pending == 0 || ts < pending {
-			pending = ts
-		}
+	for _, block := range c.pendingDDL {
+		pending = earliest(pending, block.GetCommitTs())
 	}
 	w.Advance(writer.Progress{Watermark: c.watermark, Pending: pending})
 }
@@ -459,22 +452,22 @@ func (c *Conductor) confirmPositions(ctx context.Context, checkpoint uint64) {
 }
 
 func confirmablePrefix(pending []sourcePosition, checkpoint uint64) int {
-	count := 0
-	for _, position := range pending {
-		if position.through > checkpoint {
-			break
-		}
-		count++
-	}
-	return count
+	return sort.Search(len(pending), func(i int) bool {
+		return pending[i].through > checkpoint
+	})
 }
 
 func (c *Conductor) dropPositions(partition int32, count int) {
 	c.positionsMu.Lock()
-	current := c.positions[partition]
-	clear(current[:count])
-	c.positions[partition] = current[count:]
+	c.positions[partition] = c.positions[partition][count:]
 	c.positionsMu.Unlock()
+}
+
+func earliest(current, ts uint64) uint64 {
+	if current == 0 || ts < current {
+		return ts
+	}
+	return current
 }
 
 func setDDLTableNames(ddl *event.DDLEvent) error {

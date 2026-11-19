@@ -102,7 +102,7 @@ type Writer struct {
 	target     sink.Sink
 	merger     rowMerger
 	pendingDML []*dmlWrite
-	pendingDDL []*ddlWrite
+	pendingDDL []*event.DDLEvent
 	mutations  map[mutationKey]bool
 	ddlWrites  map[ddl.Key]bool
 	// written is the newest commit timestamp already written per table. Rows
@@ -123,13 +123,8 @@ type mutationKey struct {
 }
 
 type dmlWrite struct {
-	dml        *event.DMLEvent
-	bytes      int64
-	sequential bool
-}
-
-type ddlWrite struct {
-	ddl *event.DDLEvent
+	dml   *event.DMLEvent
+	bytes int64
 }
 
 // Progress reports the input watermark and the earliest decoded work the
@@ -158,32 +153,30 @@ func (w *Writer) HasPendingDML() bool {
 // AddDML queues one decoded row.
 func (w *Writer) AddDML(dml *event.DMLEvent) {
 	w.pendingDML = append(w.pendingDML, &dmlWrite{
-		dml:        dml,
-		bytes:      dml.Rows.MemoryUsage(),
-		sequential: w.merger.sequential(),
+		dml:   dml,
+		bytes: dml.Rows.MemoryUsage(),
 	})
 	w.pendingPrepared = false
 }
 
 // AddDDL queues a block event.
 func (w *Writer) AddDDL(block *event.DDLEvent) {
-	w.pendingDDL = append(w.pendingDDL, &ddlWrite{ddl: block})
+	w.pendingDDL = append(w.pendingDDL, block)
 }
 
-func (w *Writer) writeDDL(ctx context.Context, result *ddlWrite) error {
+func (w *Writer) writeDDL(ctx context.Context, block *event.DDLEvent) error {
 	if err := context.Cause(ctx); err != nil {
 		return err
 	}
-	if err := w.target.FlushDMLBeforeBlock(result.ddl); err != nil {
+	if err := w.target.FlushDMLBeforeBlock(block); err != nil {
 		return err
 	}
-	return w.target.WriteBlockEvent(result.ddl)
+	return w.target.WriteBlockEvent(block)
 }
 
 func (w *Writer) flushDDL(ctx context.Context) error {
 	for len(w.pendingDDL) != 0 {
-		result := w.pendingDDL[0]
-		block := result.ddl
+		block := w.pendingDDL[0]
 		// Failover can resend an old DDL after a newer one. Query is part of
 		// its identity because split DDLs can share the timestamp and table.
 		// The global checkpoint covers rows, not DDL visibility: a schema file
@@ -204,7 +197,7 @@ func (w *Writer) flushDDL(ctx context.Context) error {
 			w.ddlWrites = make(map[ddl.Key]bool)
 		}
 		w.ddlWrites[key] = true
-		if err := w.writeDDL(ctx, result); err != nil {
+		if err := w.writeDDL(ctx, block); err != nil {
 			if ctx.Err() == nil {
 				log.Error("consumer DDL write failed", zap.String("schema", block.SchemaName), zap.String("table", block.TableName), zap.Uint64("commitTs", block.GetCommitTs()), zap.Error(err))
 			}
@@ -278,7 +271,7 @@ func (w *Writer) selectBatch() []*dmlWrite {
 			continue
 		}
 		if previous := tables[id]; previous != nil &&
-			(!sameTableSchema(previous.dml.TableInfo, item.dml.TableInfo) || ((previous.sequential || item.sequential) && previous.dml.CommitTs != item.dml.CommitTs)) {
+			(!sameTableSchema(previous.dml.TableInfo, item.dml.TableInfo) || (w.merger.sequential() && previous.dml.CommitTs != item.dml.CommitTs)) {
 			blocked[id] = true
 			continue
 		}
@@ -296,7 +289,7 @@ func (w *Writer) selectBatch() []*dmlWrite {
 // blockedByDDL reports whether a pending DDL must be written before the row.
 func (w *Writer) blockedByDDL(dml *event.DMLEvent) bool {
 	for _, control := range w.pendingDDL {
-		if dml.CommitTs > control.ddl.GetCommitTs() && ddl.BlocksTable(control.ddl, dml) {
+		if dml.CommitTs > control.GetCommitTs() && ddl.BlocksTable(control, dml) {
 			return true
 		}
 	}
@@ -304,13 +297,11 @@ func (w *Writer) blockedByDDL(dml *event.DMLEvent) bool {
 }
 
 func (w *Writer) removeDML(items []*dmlWrite) {
-	selected := make(map[*dmlWrite]bool, len(items))
-	for _, item := range items {
-		selected[item] = true
-	}
 	remaining := w.pendingDML[:0]
+	dropped := 0
 	for _, item := range w.pendingDML {
-		if selected[item] {
+		if dropped < len(items) && item == items[dropped] {
+			dropped++
 			continue
 		}
 		remaining = append(remaining, item)
@@ -377,16 +368,16 @@ func (w *Writer) advanceCheckpoint() {
 	if w.pending != 0 {
 		through = min(w.watermark, w.pending-1)
 	}
-	for _, item := range w.pendingDML {
-		if item.dml.CommitTs == 0 {
-			continue
-		}
-		through = min(through, item.dml.CommitTs-1)
-	}
-	for _, item := range w.pendingDDL {
-		if ts := item.ddl.GetCommitTs(); ts != 0 {
+	lower := func(ts uint64) {
+		if ts != 0 {
 			through = min(through, ts-1)
 		}
+	}
+	for _, item := range w.pendingDML {
+		lower(item.dml.CommitTs)
+	}
+	for _, block := range w.pendingDDL {
+		lower(block.GetCommitTs())
 	}
 	w.checkpoint = max(w.checkpoint, through)
 	for key := range w.mutations {

@@ -15,6 +15,7 @@
 package source
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"maps"
@@ -185,7 +186,12 @@ func (c *storageReader) discoverDir(
 			}
 		}
 		if len(indices) > 0 {
-			return c.readIndices(ctx, dir, indices, files)
+			for _, name := range indices {
+				if err := c.addIndex(ctx, path.Join(meta, name), files); err != nil {
+					return err
+				}
+			}
+			return nil
 		}
 	}
 	if depth == storageDiscoveryDepth {
@@ -196,18 +202,6 @@ func (c *storageReader) discoverDir(
 			continue
 		}
 		if err := c.discoverDir(ctx, path.Join(dir, child), depth+1, files); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func (c *storageReader) readIndices(
-	ctx context.Context, dir string, names []string,
-	files map[cloudstorage.DMLPathKey]map[cloudstorage.FileIndexKey]storageIndexRange,
-) error {
-	for _, name := range names {
-		if err := c.addIndex(ctx, path.Join(dir, "meta", name), files); err != nil {
 			return err
 		}
 	}
@@ -510,8 +504,9 @@ func (c *storageReader) Close() {
 
 func newS3Client(ctx context.Context, uri *url.URL) *s3.Client {
 	values := uri.Query()
+	region := cmp.Or(values.Get("s3.region"), values.Get("region"))
 	cfg, err := awsconfig.LoadDefaultConfig(ctx,
-		awsconfig.WithRegion(s3Region(values)),
+		awsconfig.WithRegion(cmp.Or(region, defaultS3Region)),
 		awsconfig.WithCredentialsProvider(credentials.NewStaticCredentialsProvider(
 			values.Get("access-key"),
 			values.Get("secret-access-key"),
@@ -521,72 +516,27 @@ func newS3Client(ctx context.Context, uri *url.URL) *s3.Client {
 	if err != nil {
 		log.Panic("Storage client initialization failed", zap.Error(err))
 	}
-	options := s3ClientOptions(values)
-	client := s3.NewFromConfig(cfg, options...)
-	if configuredS3Region(values) != "" || !shouldDetectS3BucketRegion(values) {
-		return client
-	}
-
-	region, err := manager.GetBucketRegion(ctx, client, uri.Host, func(o *s3.Options) {
-		if client.Options().Credentials != nil {
-			o.Credentials = client.Options().Credentials
-		}
-		if s3Endpoint(values) != "" {
-			o.UsePathStyle = client.Options().UsePathStyle
-		}
-	})
-	if err != nil {
-		log.Panic("detect Storage bucket region failed", zap.String("bucket", uri.Host), zap.Error(err))
-	}
-	if region == "" {
-		region = defaultS3Region
-	}
-	if region != cfg.Region {
-		cfg.Region = region
-		client = s3.NewFromConfig(cfg, options...)
-	}
-	return client
-}
-
-func s3ClientOptions(values url.Values) []func(*s3.Options) {
 	var options []func(*s3.Options)
-	if endpoint := s3Endpoint(values); endpoint != "" {
+	endpoint := cmp.Or(values.Get("s3.endpoint"), values.Get("endpoint"))
+	if endpoint != "" {
 		options = append(options, func(o *s3.Options) {
 			o.BaseEndpoint = aws.String(endpoint)
 			o.UsePathStyle = true
 		})
 	}
-	return options
-}
-
-func configuredS3Region(values url.Values) string {
-	if region := values.Get("s3.region"); region != "" {
-		return region
+	client := s3.NewFromConfig(cfg, options...)
+	// Only an AWS bucket served without an endpoint needs region detection.
+	provider := cmp.Or(values.Get("s3.provider"), values.Get("provider"))
+	if region != "" || (provider != "aws" && (provider != "" || endpoint != "")) {
+		return client
 	}
-	return values.Get("region")
-}
-
-func s3Region(values url.Values) string {
-	if region := configuredS3Region(values); region != "" {
-		return region
+	detected, err := manager.GetBucketRegion(ctx, client, uri.Host)
+	if err != nil {
+		log.Panic("detect Storage bucket region failed", zap.String("bucket", uri.Host), zap.Error(err))
 	}
-	return defaultS3Region
-}
-
-func shouldDetectS3BucketRegion(values url.Values) bool {
-	provider := values.Get("s3.provider")
-	if provider == "" {
-		provider = values.Get("provider")
+	if detected == "" || detected == cfg.Region {
+		return client
 	}
-	if provider != "" && provider != "aws" {
-		return false
-	}
-	return s3Endpoint(values) == "" || provider == "aws"
-}
-
-func s3Endpoint(values url.Values) string {
-	if endpoint := values.Get("s3.endpoint"); endpoint != "" {
-		return endpoint
-	}
-	return values.Get("endpoint")
+	cfg.Region = detected
+	return s3.NewFromConfig(cfg, options...)
 }

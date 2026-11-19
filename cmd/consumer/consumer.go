@@ -60,7 +60,7 @@ func newConsumer(ctx context.Context, options *options) *consumer {
 	reader := source.Open(ctx, source.NewOptions(upstreamURI, consumerID, replicaConfig, codecConfig))
 	c := &consumer{
 		reader:    reader,
-		decoder:   decode.NewGroup(ctx, decode.NewOptions(codecConfig, replicaConfig, reader, upstreamURI)),
+		decoder:   decode.NewGroup(ctx, decode.NewOptions(codecConfig, replicaConfig, reader.Partitions(), upstreamURI)),
 		conductor: conductor.New(reader),
 		writer:    writer.New(ctx, writer.NewOptions(options.downstreamURI, replicaConfig, codecConfig)),
 	}

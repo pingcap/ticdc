@@ -55,9 +55,6 @@ func (m *csvMerger) merge(items []*dmlWrite) []*dmlWrite {
 	if m.sort {
 		slices.SortStableFunc(items, compareCSVRows)
 	}
-	for _, item := range items {
-		item.sequential = true
-	}
 	prepared := items[:0]
 	remaining := items
 	for len(remaining) != 0 {
@@ -127,9 +124,8 @@ func (m *csvMerger) merge(items []*dmlWrite) []*dmlWrite {
 		}
 		bytes := dml.Rows.MemoryUsage()
 		prepared = append(prepared, &dmlWrite{
-			dml:        dml,
-			bytes:      bytes,
-			sequential: true,
+			dml:   dml,
+			bytes: bytes,
 		})
 		remaining = remaining[end:]
 	}
