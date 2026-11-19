@@ -8,22 +8,23 @@ WORK_DIR=$OUT_DIR/$TEST_NAME
 CDC_BINARY=cdc.test
 SINK_TYPE=$1
 
-# Because we want the lossy DDL to not cause any data updates, so we can check the
-# data in the blackhole sink to see if any row is updated.
+# Check that every inserted row reached the sink and that no lossy DDL
+# generated an extra row event.
 function check_lossy_ddl() {
-	# Check finish_mark is written to the log.
-	is_finish_mark_exist=$(grep "BlackHoleSink: DDL Event" "$1/cdc.log" | grep -c "finish_mark")
-	if [[ "$is_finish_mark_exist" -ne 1 ]]; then
-		echo "can't found finish mark"
-		exit 1
+	rows=$(curl -s http://127.0.0.1:8300/metrics |
+		awk '/^ticdc_sink_batch_row_count_sum\{/ {sum += $2} END {printf "%d", sum}')
+	if [[ "$rows" -ne 23 ]]; then
+		echo "expect 23 rows in blackhole sink, got $rows"
+		return 1
 	fi
 
-	row_logs=$(grep "BlackHoleSink: WriteEvents" "$1/cdc.log")
-	echo $row_logs
-	row_logs_count=$(grep "BlackHoleSink: WriteEvents" -c "$1/cdc.log")
-	if [[ "$row_logs_count" -ne 23 ]]; then
-		echo "can't found 23 row logs, got $row_logs_count"
-		exit 1
+	# The checkpoint advances only after the sink flushes an event, so reaching
+	# the TSO taken after prepare.sql also proves the DDLs were replicated.
+	checkpoint=$(cdc_cli_changefeed query -c lossy_ddl 2>&1 |
+		grep -v "Command to ticdc" | jq -r '.checkpoint_tso // 0')
+	if [[ "$checkpoint" -lt "$finish_ts" ]]; then
+		echo "checkpoint $checkpoint has not reached $finish_ts"
+		return 1
 	fi
 }
 
@@ -47,11 +48,13 @@ function run() {
 	SINK_URI="blackhole://"
 
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --addr "127.0.0.1:8300" --pd $pd_addr
-	cdc_cli_changefeed create --pd=$pd_addr --sink-uri="$SINK_URI"
+	cdc_cli_changefeed create --pd=$pd_addr --sink-uri="$SINK_URI" -c lossy_ddl
 
 	run_sql_file $CUR/data/prepare.sql ${UP_TIDB_HOST} ${UP_TIDB_PORT}
+	finish_ts=$(run_cdc_cli_tso_query $UP_PD_HOST_1 $UP_PD_PORT_1)
+	export finish_ts
 
-	ensure 50 check_lossy_ddl $WORK_DIR
+	ensure 50 check_lossy_ddl
 	cleanup_process $CDC_BINARY
 }
 
