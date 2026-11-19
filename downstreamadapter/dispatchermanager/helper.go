@@ -663,10 +663,6 @@ func NewRedoResolvedTsForwardMessage(from node.ID, msg *heartbeatpb.RedoResolved
 
 type RedoResolvedTsForwardMessageHandler struct{}
 
-func NewRedoResolvedTsForwardMessageHandler() RedoResolvedTsForwardMessageHandler {
-	return RedoResolvedTsForwardMessageHandler{}
-}
-
 func (h *RedoResolvedTsForwardMessageHandler) Path(RedoResolvedTsForwardMessage RedoResolvedTsForwardMessage) common.GID {
 	return common.NewChangefeedGIDFromPB(RedoResolvedTsForwardMessage.ChangefeedID)
 }
@@ -755,10 +751,6 @@ func NewRedoMetaMessage(from node.ID, msg *heartbeatpb.RedoMetaMessage) RedoMeta
 }
 
 type RedoMetaMessageHandler struct{}
-
-func NewRedoMetaMessageHandler() RedoMetaMessageHandler {
-	return RedoMetaMessageHandler{}
-}
 
 func (h *RedoMetaMessageHandler) Path(redoMetaMessage RedoMetaMessage) common.GID {
 	return common.NewChangefeedGIDFromPB(redoMetaMessage.ChangefeedID)

@@ -95,10 +95,6 @@ func GetHeartBeatTaskScheduler() threadpool.ThreadPool {
 	return heartBeatTaskScheduler
 }
 
-func SetHeartBeatTaskScheduler(taskScheduler threadpool.ThreadPool) {
-	heartBeatTaskScheduler = taskScheduler
-}
-
 var (
 	mergeCheckTaskSchedulerOnce sync.Once
 	mergeCheckTaskScheduler     threadpool.ThreadPool
@@ -109,10 +105,6 @@ func GetMergeCheckTaskScheduler() threadpool.ThreadPool {
 		mergeCheckTaskScheduler = threadpool.NewThreadPoolDefault()
 	})
 	return mergeCheckTaskScheduler
-}
-
-func SetMergeCheckTaskScheduler(taskScheduler threadpool.ThreadPool) {
-	mergeCheckTaskScheduler = taskScheduler
 }
 
 // MergeCheckTask is a task to check the status of the merged dispatcher.
