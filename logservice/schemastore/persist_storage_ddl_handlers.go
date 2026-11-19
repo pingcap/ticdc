@@ -369,7 +369,7 @@ var allDDLHandlers = map[model.ActionType]*persistStorageDDLHandler{
 		prepareJobFunc:             prepareRecoverSchemaJob,
 		buildPersistedDDLEventFunc: buildPersistedDDLEventForRecoverSchema,
 		updateDDLHistoryFunc:       updateDDLHistoryForCreateTables,
-		updateFullTableInfoFunc:    updateFullTableInfoForMultiTablesDDL,
+		updateFullTableInfoFunc:    updateFullTableInfoForRecoverSchema,
 		updateSchemaMetadataFunc:   updateSchemaMetadataForRecoverSchema,
 		iterateEventTablesFunc:     iterateEventTablesForCreateTables,
 		extractTableInfoFunc:       extractTableInfoFuncForCreateTables,
@@ -1094,19 +1094,32 @@ func buildPersistedDDLEventForExchangePartition(args buildPersistedDDLEventFuncA
 	// Note: event.ExtraTableInfo is set somewhere else,
 	// because it is hard to get the table info of the normal table in this func.
 	if event.Query != "" {
-		upperQuery := strings.ToUpper(event.Query)
-		idx1 := strings.Index(upperQuery, "EXCHANGE PARTITION") + len("EXCHANGE PARTITION")
-		idx2 := strings.Index(upperQuery, "WITH TABLE")
+		stmt, err := parser.New().ParseOneStmt(event.Query, "", "")
+		if err != nil {
+			return PersistedDDLEvent{}, cerror.WrapError(cerror.ErrDDLEventError, err)
+		}
+		alterTable, ok := stmt.(*ast.AlterTableStmt)
+		if !ok {
+			return PersistedDDLEvent{}, cerror.ErrDDLEventError.GenWithStackByArgs()
+		}
 
-		// Note that partition name should be parsed from original query, not the upperQuery.
-		partName := strings.TrimSpace(event.Query[idx1:idx2])
-		partName = common.UnquoteName(partName)
+		var exchangeSpec *ast.AlterTableSpec
+		for _, spec := range alterTable.Specs {
+			if spec.Tp == ast.AlterTableExchangePartition && len(spec.PartitionNames) == 1 {
+				exchangeSpec = spec
+				break
+			}
+		}
+		if exchangeSpec == nil {
+			return PersistedDDLEvent{}, cerror.ErrDDLEventError.GenWithStackByArgs()
+		}
+
 		event.Query = fmt.Sprintf("ALTER TABLE %s EXCHANGE PARTITION %s WITH TABLE %s",
 			common.QuoteSchema(event.ExtraSchemaName, event.ExtraTableName),
-			common.QuoteName(partName),
+			common.QuoteName(exchangeSpec.PartitionNames[0].O),
 			common.QuoteSchema(event.SchemaName, event.TableName))
 
-		if strings.HasSuffix(upperQuery, "WITHOUT VALIDATION") {
+		if !exchangeSpec.WithValidation {
 			event.Query += " WITHOUT VALIDATION"
 		}
 	} else {
@@ -1626,6 +1639,13 @@ func updateFullTableInfoForMultiTablesDDL(args updateFullTableInfoFuncArgs) {
 	}
 }
 
+func updateFullTableInfoForRecoverSchema(args updateFullTableInfoFuncArgs) {
+	if len(args.event.MultipleTableInfos) == 0 {
+		return
+	}
+	updateFullTableInfoForMultiTablesDDL(args)
+}
+
 // =======
 // updateDatabaseInfoAndTableInfoFunc begin
 // =======
@@ -1821,6 +1841,9 @@ func updateSchemaMetadataForRecoverSchema(args updateSchemaMetadataFuncArgs) {
 	args.databaseMap[schemaID] = &BasicDatabaseInfo{
 		Name:   args.event.SchemaName,
 		Tables: make(map[int64]bool),
+	}
+	if len(args.event.MultipleTableInfos) == 0 {
+		return
 	}
 	updateSchemaMetadataForCreateTables(args)
 }

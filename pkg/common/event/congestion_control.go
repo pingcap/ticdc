@@ -20,6 +20,7 @@ import (
 	"math"
 
 	"github.com/pingcap/ticdc/pkg/common"
+	"github.com/pingcap/ticdc/pkg/errors"
 )
 
 const (
@@ -310,9 +311,16 @@ func (c *CongestionControl) Unmarshal(data []byte) error {
 }
 
 func (c *CongestionControl) decodeV1(data []byte) error {
+	if len(data) < 12 {
+		return errors.ErrDecodeFailed.FastGenByArgs("incomplete congestion control payload")
+	}
 	buf := bytes.NewBuffer(data)
 	c.clusterID = binary.BigEndian.Uint64(buf.Next(8))
 	c.changefeedCount = binary.BigEndian.Uint32(buf.Next(4))
+	minItemSize := (&common.GID{}).GetSize() + 8 + 4
+	if uint64(c.changefeedCount)*uint64(minItemSize) > uint64(buf.Len()) {
+		return errors.ErrDecodeFailed.FastGenByArgs("congestion control count exceeds the payload size")
+	}
 	c.availables = make([]AvailableMemory, 0, c.changefeedCount)
 	for i := uint32(0); i < c.changefeedCount; i++ {
 		var item AvailableMemory
@@ -325,9 +333,16 @@ func (c *CongestionControl) decodeV1(data []byte) error {
 }
 
 func (c *CongestionControl) decodeV2(data []byte) error {
+	if len(data) < 12 {
+		return errors.ErrDecodeFailed.FastGenByArgs("incomplete congestion control payload")
+	}
 	buf := bytes.NewBuffer(data)
 	c.clusterID = binary.BigEndian.Uint64(buf.Next(8))
 	c.changefeedCount = binary.BigEndian.Uint32(buf.Next(4))
+	minItemSize := (&common.GID{}).GetSize() + 8 + 8 + 4
+	if uint64(c.changefeedCount)*uint64(minItemSize) > uint64(buf.Len()) {
+		return errors.ErrDecodeFailed.FastGenByArgs("congestion control count exceeds the payload size")
+	}
 	c.availables = make([]AvailableMemory, 0, c.changefeedCount)
 	for i := uint32(0); i < c.changefeedCount; i++ {
 		var item AvailableMemory
@@ -354,9 +369,9 @@ func (c *CongestionControl) decodeV2(data []byte) error {
 	}
 
 	gidSize := (&common.GID{}).GetSize()
-	expectedBytes := int(releaseEntryCount) * (gidSize + 4)
-	if buf.Len() != expectedBytes {
-		return fmt.Errorf("invalid CongestionControl payload: inconsistent memory release section length, expected %d, got %d", expectedBytes, buf.Len())
+	releaseEntrySize := gidSize + 4
+	if uint64(releaseEntryCount)*uint64(releaseEntrySize) != uint64(buf.Len()) {
+		return fmt.Errorf("invalid CongestionControl payload: inconsistent memory release section length for %d entries, got %d bytes", releaseEntryCount, buf.Len())
 	}
 
 	releaseByGid := make(map[common.GID]uint32, releaseEntryCount)

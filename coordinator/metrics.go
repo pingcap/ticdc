@@ -15,7 +15,7 @@
 package coordinator
 
 import (
-	"github.com/pingcap/ticdc/coordinator/operator"
+	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/prometheus/client_golang/prometheus"
 )
 
@@ -36,6 +36,16 @@ var (
 			Help:      "The total number of changefeed in different replication states",
 		}, []string{"state"})
 
+	// changefeedErrorInfoGauge records the current warning or failed reason and its occurrence time
+	// for each changefeed.
+	changefeedErrorInfoGauge = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Namespace: "ticdc",
+			Subsystem: "owner",
+			Name:      "changefeed_error_info",
+			Help:      "The current warning or failed reason and occurrence time of changefeeds",
+		}, []string{metrics.GetKeyspaceLabel(), "changefeed", "state", "error_time", "code", "message"})
+
 	captureLeaseHeartbeatCounter = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
 			Namespace: "ticdc",
@@ -53,11 +63,11 @@ var (
 		})
 )
 
-// RegisterMetrics registers metrics for the coordinator and its operators.
+// RegisterMetrics registers the metrics owned by this package.
 func RegisterMetrics(registry *prometheus.Registry) {
 	registry.MustRegister(coordinatorCounter)
 	registry.MustRegister(changefeedStateGauge)
 	registry.MustRegister(captureLeaseHeartbeatCounter)
 	registry.MustRegister(captureP2PWitnessAvailable)
-	operator.RegisterMetrics(registry)
+	registry.MustRegister(changefeedErrorInfoGauge)
 }

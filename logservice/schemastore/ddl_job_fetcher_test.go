@@ -19,7 +19,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/pingcap/kvproto/pkg/cdcpb"
 	"github.com/pingcap/ticdc/logservice/logpuller"
 	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
@@ -46,7 +45,7 @@ func TestDDLJobFetcherSubscribesWithHighPriority(t *testing.T) {
 
 	require.NoError(t, fetcher.run(1))
 	require.Equal(t,
-		[]cdcpb.ScanPriority{cdcpb.ScanPriority_SCAN_PRIORITY_HIGH},
+		[]logpuller.ScanPriorityLevel{logpuller.ScanPriorityHigh},
 		subClient.subscriptionPriorities())
 }
 

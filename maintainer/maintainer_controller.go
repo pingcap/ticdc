@@ -213,9 +213,23 @@ func (c *Controller) handleStatus(from node.ID, statusList []*heartbeatpb.TableS
 	// states, but we must disable the self-healing branches. Otherwise a late Stopped/Working heartbeat
 	// can recreate dispatchers for a changefeed that is already shutting down.
 	for _, status := range statusList {
+		if status == nil || status.ID == nil ||
+			(!common.IsDefaultMode(status.Mode) && !common.IsRedoMode(status.Mode)) {
+			log.Warn("ignore invalid dispatcher status",
+				zap.Stringer("changefeedID", c.changefeedID),
+				zap.Any("status", status))
+			continue
+		}
 		dispatcherID := common.NewDispatcherIDFromPB(status.ID)
 		operatorController := c.getOperatorController(status.Mode)
 		spanController := c.getSpanController(status.Mode)
+		if operatorController == nil || spanController == nil {
+			log.Warn("ignore dispatcher status for disabled mode",
+				zap.Stringer("changefeedID", c.changefeedID),
+				zap.Stringer("dispatcherID", dispatcherID),
+				zap.Int64("mode", status.Mode))
+			continue
+		}
 
 		operatorController.UpdateOperatorStatus(dispatcherID, from, status)
 		stm := spanController.GetTaskByID(dispatcherID)
@@ -326,9 +340,7 @@ func (c *Controller) removeTerminalSpanCoveredByMergedSpan(
 			log.Info("remove terminal span covered by merged span",
 				zap.String("changefeed", c.changefeedID.Name()),
 				zap.String("dispatcherID", stm.ID.String()),
-				zap.String("coveringDispatcherID", candidate.ID.String()),
-				zap.String("span", common.FormatTableSpan(stm.Span)),
-				zap.String("coveringSpan", common.FormatTableSpan(candidate.Span)))
+				zap.String("coveringDispatcherID", candidate.ID.String()))
 			spanController.RemoveReplicatingSpan(stm)
 			return true
 		}

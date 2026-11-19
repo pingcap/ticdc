@@ -21,7 +21,6 @@ import (
 	"time"
 
 	"github.com/cockroachdb/pebble"
-	"github.com/pingcap/kvproto/pkg/cdcpb"
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/logservice/logpuller"
@@ -41,13 +40,13 @@ type trackingSubscriptionClient struct {
 	nextID        atomic.Uint64
 	mu            sync.Mutex
 	subscriptions map[logpuller.SubscriptionID]struct{}
-	priorities    map[logpuller.SubscriptionID]cdcpb.ScanPriority
+	priorities    map[logpuller.SubscriptionID]logpuller.ScanPriorityLevel
 }
 
 func newTrackingSubscriptionClient() *trackingSubscriptionClient {
 	return &trackingSubscriptionClient{
 		subscriptions: make(map[logpuller.SubscriptionID]struct{}),
-		priorities:    make(map[logpuller.SubscriptionID]cdcpb.ScanPriority),
+		priorities:    make(map[logpuller.SubscriptionID]logpuller.ScanPriorityLevel),
 	}
 }
 
@@ -69,7 +68,7 @@ func (s *trackingSubscriptionClient) Subscribe(
 	_ func(uint64),
 	_ int64,
 	_ bool,
-	priority cdcpb.ScanPriority,
+	priority logpuller.ScanPriorityLevel,
 ) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -91,10 +90,10 @@ func (s *trackingSubscriptionClient) contains(subID logpuller.SubscriptionID) bo
 	return ok
 }
 
-func (s *trackingSubscriptionClient) subscriptionPriorities() []cdcpb.ScanPriority {
+func (s *trackingSubscriptionClient) subscriptionPriorities() []logpuller.ScanPriorityLevel {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	priorities := make([]cdcpb.ScanPriority, 0, len(s.priorities))
+	priorities := make([]logpuller.ScanPriorityLevel, 0, len(s.priorities))
 	for _, priority := range s.priorities {
 		priorities = append(priorities, priority)
 	}
@@ -176,7 +175,7 @@ func TestRemoveTombstoneKeyspace(t *testing.T) {
 		nil,
 		0,
 		false,
-		cdcpb.ScanPriority_SCAN_PRIORITY_LOW,
+		logpuller.ScanPriorityLow,
 	)
 	fetcher.resolvedTsTracker.resolvedTsItemMap[subID] = &resolvedTsItem{}
 
@@ -351,7 +350,7 @@ func TestIgnoreDDLByCommitTs(t *testing.T) {
 		return store.resolvedTs.Load() >= 1030
 	}, 5*time.Second, 10*time.Millisecond)
 
-	tables, err := pstorage.getAllPhysicalTables(1030, nil)
+	tables, err := pstorage.getAllPhysicalTables(1030, nil, nil)
 	require.NoError(t, err)
 
 	// Only table t1 and t3 should exist. t2 should be ignored.
@@ -459,17 +458,17 @@ func TestRenameTableFromSystemSchema(t *testing.T) {
 				buildTableFilterByNameForTest("test", "a"),
 				buildTableFilterByNameForTest("*", "*"),
 			} {
-				events, err := pstorage.fetchTableTriggerDDLEvents(tableFilter, 1000, 10)
+				events, err := pstorage.fetchTableTriggerDDLEvents(tableFilter, nil, 1000, 10)
 				require.NoError(t, err)
 				require.Len(t, events, 1)
 				require.Contains(t, events[0].Err, "ErrSyncRenameTableFailed")
 			}
-			events, err := pstorage.fetchTableTriggerDDLEvents(buildTableFilterByNameForTest("other", "*"), 1000, 10)
+			events, err := pstorage.fetchTableTriggerDDLEvents(buildTableFilterByNameForTest("other", "*"), nil, 1000, 10)
 			require.NoError(t, err)
 			require.Empty(t, events)
 
 			// Snapshot reconstruction and restart must also handle the missing old table.
-			tables, err := pstorage.getAllPhysicalTables(1010, buildTableFilterByNameForTest("test", "a"))
+			tables, err := pstorage.getAllPhysicalTables(1010, buildTableFilterByNameForTest("test", "a"), nil)
 			require.NoError(t, err)
 			var actualIDs []int64
 			for _, table := range tables {
@@ -542,7 +541,7 @@ func TestTryUpdateResolvedTsRetryAfterDDLHandleFailure(t *testing.T) {
 	require.Equal(t, uint64(1010), store.finishedDDLTs)
 	require.Equal(t, uint64(1010), store.resolvedTs.Load())
 
-	tables, err := pstorage.getAllPhysicalTables(1010, nil)
+	tables, err := pstorage.getAllPhysicalTables(1010, nil, nil)
 	require.NoError(t, err)
 	require.Len(t, tables, 1)
 	require.Equal(t, "t1", tables[0].TableName)
@@ -606,7 +605,7 @@ func TestGetAllPhysicalTablesDecryptsEncryptedDDLEvents(t *testing.T) {
 	err = pstorage.handleDDLJob(createTable)
 	require.NoError(t, err)
 
-	tables, err := pstorage.getAllPhysicalTables(1010, nil)
+	tables, err := pstorage.getAllPhysicalTables(1010, nil, nil)
 	require.NoError(t, err)
 	require.Len(t, tables, 1)
 	require.Equal(t, int64(200), tables[0].TableID)
@@ -653,7 +652,7 @@ func TestGetAllPhysicalTablesReturnsSnapshotLostByGCError(t *testing.T) {
 	pstorage.gcTs = 100
 	pstorage.mu.Unlock()
 
-	_, err := pstorage.getAllPhysicalTables(99, nil)
+	_, err := pstorage.getAllPhysicalTables(99, nil, nil)
 	require.Error(t, err)
 	require.True(t, cerror.ErrSnapshotLostByGC.Equal(err))
 	require.Contains(t, err.Error(), "checkpoint-ts 99 is earlier than or equal to GC safepoint at 100")

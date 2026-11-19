@@ -439,7 +439,6 @@ func RemoveFilesIf(
 		return errors.WrapError(errors.ErrExternalStorageAPI, err)
 	}
 
-	log.Debug("Removing files", zap.Any("toRemoveFiles", toRemoveFiles))
 	return DeleteFilesInExtStorage(ctx, extStorage, toRemoveFiles)
 }
 

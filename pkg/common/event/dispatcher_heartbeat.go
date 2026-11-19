@@ -19,6 +19,7 @@ import (
 	"fmt"
 
 	"github.com/pingcap/ticdc/pkg/common"
+	"github.com/pingcap/ticdc/pkg/errors"
 )
 
 const (
@@ -46,6 +47,9 @@ func (dp DispatcherProgressLegacy) Marshal() ([]byte, error) {
 }
 
 func (dp *DispatcherProgressLegacy) Unmarshal(data []byte) error {
+	if len(data) < dp.GetSize() {
+		return errors.ErrDecodeFailed.FastGenByArgs("incomplete legacy dispatcher progress")
+	}
 	buf := bytes.NewBuffer(data)
 	dp.DispatcherID.Unmarshal(buf.Next(dp.DispatcherID.GetSize()))
 	dp.CheckpointTs = binary.BigEndian.Uint64(buf.Next(8))
@@ -82,6 +86,9 @@ func (dp DispatcherProgress) encodeV1() ([]byte, error) {
 }
 
 func (dp *DispatcherProgress) decodeV1(data []byte) error {
+	if len(data) < dp.GetSize() {
+		return errors.ErrDecodeFailed.FastGenByArgs("incomplete dispatcher progress")
+	}
 	buf := bytes.NewBuffer(data)
 	version, err := buf.ReadByte()
 	if err != nil {
@@ -200,9 +207,16 @@ func (d *DispatcherHeartbeat) encodeV1() ([]byte, error) {
 }
 
 func (d *DispatcherHeartbeat) decodeV1(data []byte) error {
+	if len(data) < 12 {
+		return errors.ErrDecodeFailed.FastGenByArgs("incomplete dispatcher heartbeat")
+	}
 	buf := bytes.NewBuffer(data)
 	d.ClusterID = binary.BigEndian.Uint64(buf.Next(8))
 	d.DispatcherCount = binary.BigEndian.Uint32(buf.Next(4))
+	itemSize := (DispatcherProgressLegacy{}).GetSize()
+	if uint64(d.DispatcherCount)*uint64(itemSize) > uint64(buf.Len()) {
+		return errors.ErrDecodeFailed.FastGenByArgs("dispatcher heartbeat count exceeds the payload size")
+	}
 	d.DispatcherProgressesLegacy = make([]DispatcherProgressLegacy, 0, d.DispatcherCount)
 	d.DispatcherProgresses = nil
 	for range d.DispatcherCount {
@@ -231,9 +245,16 @@ func (d *DispatcherHeartbeat) encodeV2() ([]byte, error) {
 }
 
 func (d *DispatcherHeartbeat) decodeV2(data []byte) error {
+	if len(data) < 12 {
+		return errors.ErrDecodeFailed.FastGenByArgs("incomplete dispatcher heartbeat")
+	}
 	buf := bytes.NewBuffer(data)
 	d.ClusterID = binary.BigEndian.Uint64(buf.Next(8))
 	d.DispatcherCount = binary.BigEndian.Uint32(buf.Next(4))
+	itemSize := (DispatcherProgress{}).GetSize()
+	if uint64(d.DispatcherCount)*uint64(itemSize) > uint64(buf.Len()) {
+		return errors.ErrDecodeFailed.FastGenByArgs("dispatcher heartbeat count exceeds the payload size")
+	}
 	d.DispatcherProgressesLegacy = nil
 	d.DispatcherProgresses = make([]DispatcherProgress, 0, d.DispatcherCount)
 	for range d.DispatcherCount {
@@ -280,11 +301,10 @@ func (d *DispatcherState) Unmarshal(data []byte) error {
 }
 
 func (d *DispatcherState) decodeV1(data []byte) error {
-	buf := bytes.NewBuffer(data)
-	var err error
-	if err != nil {
-		return err
+	if len(data) < d.GetSize() {
+		return errors.ErrDecodeFailed.FastGenByArgs("incomplete dispatcher state")
 	}
+	buf := bytes.NewBuffer(data)
 	d.DispatcherID.Unmarshal(buf.Next(d.DispatcherID.GetSize()))
 	state, err := buf.ReadByte()
 	if err != nil {
@@ -351,33 +371,16 @@ func (d *DispatcherHeartbeatResponse) Marshal() ([]byte, error) {
 }
 
 func (d *DispatcherHeartbeatResponse) Unmarshal(data []byte) error {
-	// 1. Parse unified header
-	eventType, version, payloadLen, err := UnmarshalEventHeader(data)
+	// 1. Validate header and extract payload
+	payload, version, err := ValidateAndExtractPayload(data, TypeDispatcherHeartbeatResponse)
 	if err != nil {
 		return err
 	}
 
-	// 2. Validate event type
-	if eventType != TypeDispatcherHeartbeatResponse {
-		return fmt.Errorf("expected DispatcherHeartbeatResponse (type %d), got type %d (%s)",
-			TypeDispatcherHeartbeatResponse, eventType, TypeToString(eventType))
-	}
-
-	// 3. Validate total data length
-	headerSize := GetEventHeaderSize()
-	expectedLen := uint64(headerSize) + payloadLen
-	if uint64(len(data)) < expectedLen {
-		return fmt.Errorf("incomplete data: expected %d bytes (header %d + payload %d), got %d",
-			expectedLen, headerSize, payloadLen, len(data))
-	}
-
-	// 4. Extract payload
-	payload := data[headerSize:expectedLen]
-
-	// 5. Store version
+	// 2. Store version
 	d.Version = version
 
-	// 6. Decode based on version
+	// 3. Decode based on version
 	switch version {
 	case DispatcherHeartbeatResponseVersion1:
 		return d.decodeV1(payload)
@@ -401,9 +404,16 @@ func (d *DispatcherHeartbeatResponse) encodeV1() ([]byte, error) {
 }
 
 func (d *DispatcherHeartbeatResponse) decodeV1(data []byte) error {
+	if len(data) < 12 {
+		return errors.ErrDecodeFailed.FastGenByArgs("incomplete dispatcher heartbeat response")
+	}
 	buf := bytes.NewBuffer(data)
 	d.ClusterID = binary.BigEndian.Uint64(buf.Next(8))
 	d.DispatcherCount = binary.BigEndian.Uint32(buf.Next(4))
+	itemSize := (&DispatcherState{}).GetSize()
+	if uint64(d.DispatcherCount)*uint64(itemSize) > uint64(buf.Len()) {
+		return errors.ErrDecodeFailed.FastGenByArgs("dispatcher state count exceeds the payload size")
+	}
 	d.DispatcherStates = make([]DispatcherState, 0, d.DispatcherCount)
 	for range d.DispatcherCount {
 		var ds DispatcherState

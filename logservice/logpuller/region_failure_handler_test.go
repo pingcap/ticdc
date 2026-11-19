@@ -119,6 +119,40 @@ func TestErrCachePopBatch(t *testing.T) {
 	}
 }
 
+func TestErrCachePopDrainedSpansInBatches(t *testing.T) {
+	errCache := newErrCache()
+	spans := make([]*subscribedSpan, 5)
+	for i := range spans {
+		spans[i] = &subscribedSpan{subID: SubscriptionID(i + 1)}
+		errCache.addDrainedSpan(spans[i])
+	}
+
+	require.Equal(t, spans[:2], errCache.popDrainedSpans(2))
+	require.Equal(t, spans[2:], errCache.popDrainedSpans(10))
+	require.Empty(t, errCache.popDrainedSpans(2))
+}
+
+func TestRegionFailureHandlerInterleavesDrainedSpansAndErrors(t *testing.T) {
+	drained := 0
+	handler := newRegionFailureHandler(
+		nil,
+		func(*subscribedSpan) { drained++ },
+		func(context.Context, regionInfo) {},
+		func(context.Context, rangeTask) {},
+	)
+	for i := range drainedSpanBatchSize + 1 {
+		handler.cache.addDrainedSpan(&subscribedSpan{subID: SubscriptionID(i + 1)})
+	}
+	errInfo := newTestRegionErrorInfo(errors.New("unrecoverable"))
+	errInfo.subscribedSpan = &subscribedSpan{subID: 1}
+	handler.cache.add(errInfo)
+
+	err := handler.Run(t.Context())
+	require.EqualError(t, errors.Cause(err), "unrecoverable")
+	require.Equal(t, drainedSpanBatchSize, drained)
+	require.Len(t, handler.cache.drainedSpans, 1)
+}
+
 func TestRegionFailureHandlerRunDrainsErrCacheWithoutDispatcher(t *testing.T) {
 	handler := newRegionFailureHandler(nil, func(*subscribedSpan) {}, func(context.Context, regionInfo) {}, func(context.Context, rangeTask) {})
 	for i := 0; i < errCacheBatchSize+5; i++ {
@@ -265,7 +299,7 @@ func TestRegionFailureHandlerRoutesErrors(t *testing.T) {
 			region := createFailureRecoveryTestRegion(t, SubscriptionID(1), 1)
 			// Keep this test focused on error routing. High priority bypasses the
 			// scan-priority clock lookup when a range retry is constructed.
-			region.scanPriority = cdcpb.ScanPriority_SCAN_PRIORITY_HIGH
+			region.scanPriority = ScanPriorityHigh
 			err := handler.handleError(t.Context(), newRegionErrorInfo(region, testCase.err))
 			if testCase.expectedError {
 				require.Error(t, err)

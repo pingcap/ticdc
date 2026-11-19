@@ -28,7 +28,6 @@ import (
 	"github.com/cockroachdb/pebble"
 	"github.com/klauspost/compress/zstd"
 	"github.com/pingcap/errors"
-	"github.com/pingcap/kvproto/pkg/cdcpb"
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/logservice/logpuller"
@@ -39,7 +38,6 @@ import (
 	"github.com/pingcap/ticdc/pkg/encryption"
 	"github.com/pingcap/ticdc/pkg/logger"
 	"github.com/pingcap/ticdc/pkg/messaging"
-	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/ticdc/pkg/pdutil"
 	"github.com/pingcap/ticdc/pkg/util"
@@ -51,19 +49,19 @@ import (
 )
 
 var (
-	kvEventCount        = metrics.EventStoreReceivedEventCount.WithLabelValues("kv")
-	resolvedEventCount  = metrics.EventStoreReceivedEventCount.WithLabelValues("resolved")
-	insertKVEntryCount  = metrics.EventStoreKVEntryCount.WithLabelValues("insert")
-	updateKVEntryCount  = metrics.EventStoreKVEntryCount.WithLabelValues("update")
-	deleteKVEntryCount  = metrics.EventStoreKVEntryCount.WithLabelValues("delete")
-	scannedBytesMetrics = metrics.EventStoreScanBytes.WithLabelValues("scanned")
-	skippedBytesMetrics = metrics.EventStoreScanBytes.WithLabelValues("skipped")
+	kvEventCount        = eventStoreReceivedEventCount.WithLabelValues("kv")
+	resolvedEventCount  = eventStoreReceivedEventCount.WithLabelValues("resolved")
+	insertKVEntryCount  = eventStoreKVEntryCount.WithLabelValues("insert")
+	updateKVEntryCount  = eventStoreKVEntryCount.WithLabelValues("update")
+	deleteKVEntryCount  = eventStoreKVEntryCount.WithLabelValues("delete")
+	scannedBytesMetrics = eventStoreScanBytes.WithLabelValues("scanned")
+	skippedBytesMetrics = eventStoreScanBytes.WithLabelValues("skipped")
 )
 
 var (
-	metricEventStoreFirstReadDurationHistogram = metrics.EventStoreReadDurationHistogram.WithLabelValues("first")
-	metricEventStoreNextReadDurationHistogram  = metrics.EventStoreReadDurationHistogram.WithLabelValues("next")
-	metricEventStoreCloseReadDurationHistogram = metrics.EventStoreReadDurationHistogram.WithLabelValues("close")
+	metricEventStoreFirstReadDurationHistogram = eventStoreReadDurationHistogram.WithLabelValues("first")
+	metricEventStoreNextReadDurationHistogram  = eventStoreReadDurationHistogram.WithLabelValues("next")
+	metricEventStoreCloseReadDurationHistogram = eventStoreReadDurationHistogram.WithLabelValues("close")
 )
 
 const subscriptionIdleTTL = time.Minute
@@ -377,10 +375,10 @@ func (p *writeTaskPool) run(ctx context.Context) {
 			}
 			defer encoder.Close()
 			buffer := make([]eventWithCallback, 0, 128)
-			queueDuration := metrics.EventStoreWriteQueueDurationHistogram
+			queueDuration := eventStoreWriteQueueDurationHistogram
 
-			ioWriteDuration := metrics.EventStoreWriteWorkerIODuration.WithLabelValues(strconv.Itoa(p.dbIndex), strconv.Itoa(workerID))
-			totalDuration := metrics.EventStoreWriteWorkerTotalDuration.WithLabelValues(strconv.Itoa(p.dbIndex), strconv.Itoa(workerID))
+			ioWriteDuration := eventStoreWriteWorkerIODuration.WithLabelValues(strconv.Itoa(p.dbIndex), strconv.Itoa(workerID))
+			totalDuration := eventStoreWriteWorkerTotalDuration.WithLabelValues(strconv.Itoa(p.dbIndex), strconv.Itoa(workerID))
 			totalStart := time.Now()
 			for {
 				select {
@@ -506,17 +504,15 @@ func (e *eventStore) RegisterDispatcher(
 	enableDataSharing := config.GetGlobalServerConfig().Debug.EventStore.EnableDataSharing
 
 	lag := time.Since(oracle.GetTimeFromTS(startTs))
-	metrics.EventStoreRegisterDispatcherStartTsLagHist.Observe(lag.Seconds())
+	eventStoreRegisterDispatcherStartTsLagHist.Observe(lag.Seconds())
 	if lag >= 10*time.Second {
 		log.Warn("register dispatcher with large startTs lag",
 			zap.Stringer("dispatcherID", dispatcherID),
-			zap.String("span", common.FormatTableSpan(dispatcherSpan)),
 			zap.Uint64("startTs", startTs),
 			zap.Duration("lag", lag))
 	} else {
 		log.Info("register dispatcher",
 			zap.Stringer("dispatcherID", dispatcherID),
-			zap.String("span", common.FormatTableSpan(dispatcherSpan)),
 			zap.Uint64("startTs", startTs))
 	}
 
@@ -525,7 +521,6 @@ func (e *eventStore) RegisterDispatcher(
 		if success {
 			log.Info("register dispatcher success",
 				zap.Stringer("dispatcherID", dispatcherID),
-				zap.String("span", common.FormatTableSpan(dispatcherSpan)),
 				zap.Uint64("startTs", startTs),
 				zap.Bool("enableDataSharing", enableDataSharing),
 				zap.Bool("onlyReuse", onlyReuse),
@@ -533,7 +528,6 @@ func (e *eventStore) RegisterDispatcher(
 		} else {
 			log.Info("register dispatcher failed",
 				zap.Stringer("dispatcherID", dispatcherID),
-				zap.String("span", common.FormatTableSpan(dispatcherSpan)),
 				zap.Uint64("startTs", startTs),
 				zap.Bool("enableDataSharing", enableDataSharing),
 				zap.Bool("onlyReuse", onlyReuse),
@@ -589,10 +583,8 @@ func (e *eventStore) RegisterDispatcher(
 						e.dispatcherMeta.Unlock()
 						log.Info("reuse existing subscription with exact span match",
 							zap.Stringer("dispatcherID", dispatcherID),
-							zap.String("dispatcherSpan", common.FormatTableSpan(dispatcherSpan)),
 							zap.Uint64("startTs", startTs),
 							zap.Uint64("subscriptionID", uint64(subStat.subID)),
-							zap.String("subSpan", common.FormatTableSpan(subStat.tableSpan)),
 							zap.Uint64("checkpointTs", subStat.checkpointTs.Load()))
 						return true
 					}
@@ -615,10 +607,8 @@ func (e *eventStore) RegisterDispatcher(
 			e.addSubscriberToSubStat(bestMatch, dispatcherID, &Subscriber{notifyFunc: wrappedNotifier})
 			log.Info("reuse existing subscription with smallest containing span",
 				zap.Stringer("dispatcherID", dispatcherID),
-				zap.String("dispatcherSpan", common.FormatTableSpan(dispatcherSpan)),
 				zap.Uint64("startTs", startTs),
 				zap.Uint64("subscriptionID", uint64(bestMatch.subID)),
-				zap.String("subSpan", common.FormatTableSpan(bestMatch.tableSpan)),
 				zap.Uint64("resolvedTs", bestMatch.resolvedTs.Load()),
 				zap.Uint64("checkpointTs", bestMatch.checkpointTs.Load()),
 				zap.Bool("exactMatch", bestMatch.tableSpan.Equal(dispatcherSpan)))
@@ -711,8 +701,8 @@ func (e *eventStore) RegisterDispatcher(
 				}
 			}
 			resolvedEventCount.Inc()
-			metrics.EventStoreNotifyDispatcherCount.Add(float64(len(subscribersData.subscribers)))
-			metrics.EventStoreNotifyDispatcherDurationHist.Observe(float64(time.Since(start).Seconds()))
+			eventStoreNotifyDispatcherCount.Add(float64(len(subscribersData.subscribers)))
+			eventStoreNotifyDispatcherDurationHist.Observe(float64(time.Since(start).Seconds()))
 		}
 	}
 
@@ -730,13 +720,12 @@ func (e *eventStore) RegisterDispatcher(
 		advanceResolvedTs,
 		resolvedTsAdvanceInterval,
 		subStat.config.bdrMode,
-		cdcpb.ScanPriority_SCAN_PRIORITY_LOW,
+		logpuller.ScanPriorityLow,
 	)
 	log.Info("new subscription created",
 		zap.Stringer("dispatcherID", dispatcherID),
 		zap.Uint64("startTs", startTs),
-		zap.Uint64("subscriptionID", uint64(subStat.subID)),
-		zap.String("subSpan", common.FormatTableSpan(subStat.tableSpan)))
+		zap.Uint64("subscriptionID", uint64(subStat.subID)))
 	e.subscriptionChangeCh.In() <- SubscriptionChange{
 		ChangeType:   SubscriptionChangeTypeAdd,
 		SubID:        uint64(subStat.subID),
@@ -744,7 +733,7 @@ func (e *eventStore) RegisterDispatcher(
 		CheckpointTs: startTs,
 		ResolvedTs:   startTs,
 	}
-	metrics.EventStoreSubscriptionGauge.Inc()
+	eventStoreSubscriptionGauge.Inc()
 	return true
 }
 
@@ -1011,7 +1000,7 @@ func (e *eventStore) GetIterator(dispatcherID common.DispatcherID, request ScanR
 	startTime := time.Now()
 	hasFirstEvent := iter.First()
 	metricEventStoreFirstReadDurationHistogram.Observe(time.Since(startTime).Seconds())
-	metrics.EventStoreScanRequestsCount.Inc()
+	eventStoreScanRequestsCount.Inc()
 	if !hasFirstEvent {
 		// Empty range or first-read error. Close returns any accumulated
 		// iterator error while also releasing Pebble resources.
@@ -1029,6 +1018,7 @@ func (e *eventStore) GetIterator(dispatcherID common.DispatcherID, request ScanR
 	needCheckSpan := !stat.tableSpan.Equal(subStat.tableSpan)
 
 	return &eventStoreIter{
+		dispatcherID:      dispatcherID,
 		tableSpan:         stat.tableSpan,
 		needCheckSpan:     needCheckSpan,
 		innerIter:         iter,
@@ -1212,7 +1202,7 @@ func (e *eventStore) cleanObsoleteSubscriptionsOnce(deltaMs int64) {
 			SubID:      uint64(sub.subID),
 			Span:       sub.span,
 		}
-		metrics.EventStoreSubscriptionGauge.Dec()
+		eventStoreSubscriptionGauge.Dec()
 	}
 }
 
@@ -1254,7 +1244,6 @@ type slowSubscriptionLogEntry struct {
 	MaxEventCommitTs   uint64  `json:"maxEventCommitTs"`
 	LastAdvanceTime    string  `json:"lastAdvanceTime"`
 	LastReceiveDMLTime string  `json:"lastReceiveDMLTime"`
-	TableSpan          string  `json:"tableSpan"`
 	heapIndex          int     `json:"-"`
 }
 
@@ -1274,8 +1263,7 @@ func (e *slowSubscriptionLogEntry) LessThan(other *slowSubscriptionLogEntry) boo
 }
 
 type uninitializedSubscriptionLogEntry struct {
-	SubID     uint64 `json:"subID"`
-	TableSpan string `json:"tableSpan"`
+	SubID uint64 `json:"subID"`
 }
 
 func (e *eventStore) collectAndReportStoreMetrics() {
@@ -1283,25 +1271,25 @@ func (e *eventStore) collectAndReportStoreMetrics() {
 	for i, db := range e.dbs {
 		stats := db.Metrics()
 		id := strconv.Itoa(i + 1)
-		metrics.EventStoreOnDiskDataSizeGauge.WithLabelValues(id).Set(float64(diskSpaceUsage(stats)))
+		eventStoreOnDiskDataSizeGauge.WithLabelValues(id).Set(float64(diskSpaceUsage(stats)))
 		memorySize := stats.MemTable.Size
 		if stats.BlockCache.Size > 0 {
 			memorySize += uint64(stats.BlockCache.Size)
 		}
-		metrics.EventStoreInMemoryDataSizeGauge.WithLabelValues(id).Set(float64(memorySize))
+		eventStoreInMemoryDataSizeGauge.WithLabelValues(id).Set(float64(memorySize))
 
-		metrics.EventStorePebbleIteratorGauge.WithLabelValues(id).Set(float64(stats.TableIters))
-		metrics.EventStorePebbleCompactionDebtGauge.WithLabelValues(id).Set(float64(stats.Compact.EstimatedDebt))
-		metrics.EventStorePebbleCompactionInProgressGauge.WithLabelValues(id).Set(float64(stats.Compact.NumInProgress))
-		metrics.EventStorePebbleCompactionInProgressBytesGauge.WithLabelValues(id).Set(float64(stats.Compact.InProgressBytes))
-		metrics.EventStorePebbleFlushInProgressGauge.WithLabelValues(id).Set(float64(stats.Flush.NumInProgress))
-		metrics.EventStorePebbleReadAmpGauge.WithLabelValues(id).Set(float64(stats.ReadAmp()))
+		eventStorePebbleIteratorGauge.WithLabelValues(id).Set(float64(stats.TableIters))
+		eventStorePebbleCompactionDebtGauge.WithLabelValues(id).Set(float64(stats.Compact.EstimatedDebt))
+		eventStorePebbleCompactionInProgressGauge.WithLabelValues(id).Set(float64(stats.Compact.NumInProgress))
+		eventStorePebbleCompactionInProgressBytesGauge.WithLabelValues(id).Set(float64(stats.Compact.InProgressBytes))
+		eventStorePebbleFlushInProgressGauge.WithLabelValues(id).Set(float64(stats.Flush.NumInProgress))
+		eventStorePebbleReadAmpGauge.WithLabelValues(id).Set(float64(stats.ReadAmp()))
 
 		for level, metric := range stats.Levels {
-			metrics.EventStorePebbleLevelFilesGauge.WithLabelValues(id, strconv.Itoa(level)).Set(float64(metric.NumFiles))
+			eventStorePebbleLevelFilesGauge.WithLabelValues(id, strconv.Itoa(level)).Set(float64(metric.NumFiles))
 		}
-		metrics.EventStorePebbleBlockCacheAccess.WithLabelValues(id, "hit").Set(float64(stats.BlockCache.Hits))
-		metrics.EventStorePebbleBlockCacheAccess.WithLabelValues(id, "miss").Set(float64(stats.BlockCache.Misses))
+		eventStorePebbleBlockCacheAccess.WithLabelValues(id, "hit").Set(float64(stats.BlockCache.Hits))
+		eventStorePebbleBlockCacheAccess.WithLabelValues(id, "miss").Set(float64(stats.BlockCache.Misses))
 	}
 
 	pdCurrentTime := e.pdClock.CurrentTime()
@@ -1337,7 +1325,6 @@ func (e *eventStore) collectAndReportStoreMetrics() {
 							zap.Float64("resolvedLag(s)", subResolvedTsLagInSec),
 							zap.Stringer("lastAdvanceTime", lastAdvanceTime),
 							zap.String("lastReceiveDMLTime", lastReceiveDMLTimeRepr),
-							zap.String("tableSpan", common.FormatTableSpan(subStat.tableSpan)),
 							zap.Uint64("checkpointTs", subStat.checkpointTs.Load()),
 							zap.Uint64("maxEventCommitTs", subStat.maxEventCommitTs.Load()))
 						subStat.lastLogLagTime.Store(time.Now().UnixNano())
@@ -1350,7 +1337,6 @@ func (e *eventStore) collectAndReportStoreMetrics() {
 						MaxEventCommitTs:   subStat.maxEventCommitTs.Load(),
 						LastAdvanceTime:    lastAdvanceTime.String(),
 						LastReceiveDMLTime: lastReceiveDMLTimeRepr,
-						TableSpan:          common.FormatTableSpan(subStat.tableSpan),
 					}
 					slowestInitialized.AddOrUpdate(entry)
 					if slowestInitialized.Len() > logEntryLimit {
@@ -1361,12 +1347,11 @@ func (e *eventStore) collectAndReportStoreMetrics() {
 				uninitializedStatCount++
 				if len(uninitializedSamples) < logEntryLimit {
 					uninitializedSamples = append(uninitializedSamples, uninitializedSubscriptionLogEntry{
-						SubID:     uint64(subStat.subID),
-						TableSpan: common.FormatTableSpan(subStat.tableSpan),
+						SubID: uint64(subStat.subID),
 					})
 				}
 			}
-			metrics.EventStoreSubscriptionResolvedTsLagHist.Observe(subResolvedTsLagInSec)
+			eventStoreSubscriptionResolvedTsLagHist.Observe(subResolvedTsLagInSec)
 			if globalMinResolvedTs == 0 || subResolvedTs < globalMinResolvedTs {
 				globalMinResolvedTs = subResolvedTs
 			}
@@ -1374,7 +1359,7 @@ func (e *eventStore) collectAndReportStoreMetrics() {
 			subCheckpointTs := subStat.checkpointTs.Load()
 			subCheckpointPhysicalTime := oracle.ExtractPhysical(subCheckpointTs)
 			subCheckpointTsLagInSec := float64(pdPhysicalTime-subCheckpointPhysicalTime) / 1e3
-			metrics.EventStoreSubscriptionDataGCLagHist.Observe(subCheckpointTsLagInSec)
+			eventStoreSubscriptionDataGCLagHist.Observe(subCheckpointTsLagInSec)
 		}
 	}
 	e.dispatcherMeta.RUnlock()
@@ -1399,12 +1384,12 @@ func (e *eventStore) collectAndReportStoreMetrics() {
 			zap.Any("uninitializedSubscriptions", uninitializedSamples))
 	}
 	if globalMinResolvedTs == 0 {
-		metrics.EventStoreResolvedTsLagGauge.Set(0)
+		eventStoreResolvedTsLagGauge.Set(0)
 		return
 	}
 	globalMinResolvedPhysicalTime := oracle.ExtractPhysical(globalMinResolvedTs)
 	eventStoreResolvedTsLagInSec := float64(pdPhysicalTime-globalMinResolvedPhysicalTime) / 1e3
-	metrics.EventStoreResolvedTsLagGauge.Set(eventStoreResolvedTsLagInSec)
+	eventStoreResolvedTsLagGauge.Set(eventStoreResolvedTsLagInSec)
 }
 
 func (e *eventStore) writeEvents(
@@ -1414,7 +1399,7 @@ func (e *eventStore) writeEvents(
 	compressionBuf *[]byte,
 	rawValueBuf *[]byte,
 ) error {
-	metrics.EventStoreWriteRequestsCount.Inc()
+	eventStoreWriteRequestsCount.Inc()
 	prepareStart := time.Now()
 	batch := db.NewBatch()
 	defer batch.Close()
@@ -1534,16 +1519,16 @@ func (e *eventStore) writeEvents(
 	insertKVEntryCount.Add(float64(insertCount))
 	updateKVEntryCount.Add(float64(updateCount))
 	deleteKVEntryCount.Add(float64(deleteCount))
-	metrics.EventStoreWriteBatchEventsCountHist.Observe(float64(kvCount))
-	metrics.EventStoreWriteBatchSizeHist.Observe(float64(batch.Len()))
-	metrics.EventStoreWriteBytes.Add(float64(batch.Len()))
+	eventStoreWriteBatchEventsCountHist.Observe(float64(kvCount))
+	eventStoreWriteBatchSizeHist.Observe(float64(batch.Len()))
+	eventStoreWriteBytes.Add(float64(batch.Len()))
 	if totalValueBytesAfter > 0 {
-		metrics.EventStoreCompressionRatioHistogram.Observe(float64(totalValueBytesBefore) / float64(totalValueBytesAfter))
+		eventStoreCompressionRatioHistogram.Observe(float64(totalValueBytesBefore) / float64(totalValueBytesAfter))
 	}
-	metrics.EventStoreWritePrepareDurationHistogram.Observe(time.Since(prepareStart).Seconds())
+	eventStoreWritePrepareDurationHistogram.Observe(time.Since(prepareStart).Seconds())
 	start := time.Now()
 	err := batch.Commit(pebble.NoSync)
-	metrics.EventStoreWriteDurationHistogram.Observe(time.Since(start).Seconds())
+	eventStoreWriteDurationHistogram.Observe(time.Since(start).Seconds())
 	return err
 }
 
@@ -1569,7 +1554,7 @@ func encodeAndMaybeCompressValue(
 	value = encoder.EncodeAll(rawValue, value)
 	compressionType = CompressionZSTD
 	nextDstBuf = value[:0]
-	metrics.EventStoreCompressedRowsCount.Inc()
+	eventStoreCompressedRowsCount.Inc()
 	return value, compressionType, nextRawBuf, nextDstBuf
 }
 
@@ -1602,7 +1587,8 @@ func encodeDeferredEventKey(
 }
 
 type eventStoreIter struct {
-	tableSpan *heartbeatpb.TableSpan
+	dispatcherID common.DispatcherID
+	tableSpan    *heartbeatpb.TableSpan
 	// true when need check whether data from `innerIter` is in `tableSpan`
 	// (e.g. subscription span is not the same as dispatcher span)
 	needCheckSpan bool
@@ -1682,7 +1668,7 @@ func (iter *eventStoreIter) NextWithScanPosition() (*common.RawKVEntry, ScanPosi
 			break
 		}
 		log.Debug("event store iter skip kv not in table span",
-			zap.String("tableSpan", common.FormatTableSpan(iter.tableSpan)),
+			zap.Stringer("dispatcherID", iter.dispatcherID),
 			zap.String("key", util.RedactKey(rawKV.Key)),
 			zap.Uint64("startTs", rawKV.StartTs),
 			zap.Uint64("commitTs", rawKV.CRTs),

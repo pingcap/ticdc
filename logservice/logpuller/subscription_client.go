@@ -18,7 +18,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/pingcap/kvproto/pkg/cdcpb"
 	"github.com/pingcap/kvproto/pkg/metapb"
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/heartbeatpb"
@@ -27,11 +26,10 @@ import (
 	"github.com/pingcap/ticdc/pkg/common"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	"github.com/pingcap/ticdc/pkg/config"
-	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/pdutil"
 	"github.com/pingcap/ticdc/pkg/security"
-	"github.com/pingcap/ticdc/pkg/spanz"
 	"github.com/pingcap/ticdc/pkg/util"
+	"github.com/pingcap/ticdc/utils/dynstream"
 	"github.com/tikv/client-go/v2/tikv"
 	pd "github.com/tikv/pd/client"
 	"go.uber.org/zap"
@@ -54,11 +52,11 @@ const (
 )
 
 var (
-	metricResolveLockSuccessCounter = metrics.SubscriptionClientResolveLockCounter.WithLabelValues("success")
-	metricResolveLockFailureCounter = metrics.SubscriptionClientResolveLockCounter.WithLabelValues("failure")
+	metricResolveLockSuccessCounter = subscriptionClientResolveLockCounter.WithLabelValues("success")
+	metricResolveLockFailureCounter = subscriptionClientResolveLockCounter.WithLabelValues("failure")
 
-	metricSubscriptionClientDSChannelSize     = metrics.DynamicStreamEventChanSize.WithLabelValues("event-store")
-	metricSubscriptionClientDSPendingQueueLen = metrics.DynamicStreamPendingQueueLen.WithLabelValues("event-store")
+	metricSubscriptionClientDSChannelSize     = dynstream.DynamicStreamEventChanSize.WithLabelValues("event-store")
+	metricSubscriptionClientDSPendingQueueLen = dynstream.DynamicStreamPendingQueueLen.WithLabelValues("event-store")
 )
 
 // To generate an ID for a new subscription.
@@ -83,7 +81,7 @@ type rangeTask struct {
 	span           heartbeatpb.TableSpan
 	subscribedSpan *subscribedSpan
 	filterLoop     bool
-	priority       cdcpb.ScanPriority
+	priority       ScanPriorityLevel
 }
 
 // upstreamHandle contains the stable TiKV and PD dependencies shared by the
@@ -118,7 +116,7 @@ type SubscriptionClient interface {
 		advanceResolvedTs func(ts uint64),
 		advanceInterval int64,
 		bdrMode bool,
-		scanPriority cdcpb.ScanPriority,
+		scanPriority ScanPriorityLevel,
 	)
 	// unsubscribe a table span
 	Unsubscribe(subID SubscriptionID)
@@ -233,7 +231,7 @@ func (s *subscriptionClient) Subscribe(
 	advanceResolvedTs func(ts uint64),
 	advanceInterval int64,
 	bdrMode bool,
-	scanPriority cdcpb.ScanPriority,
+	scanPriority ScanPriorityLevel,
 ) {
 	if span.TableID == 0 {
 		log.Panic("subscription client subscribe with zero TableID")
@@ -268,8 +266,7 @@ func (s *subscriptionClient) Subscribe(
 		priority:       rt.baseScanPriority,
 	}:
 		log.Info("subscribes span done", zap.Uint64("subscriptionID", uint64(subID)),
-			zap.Int64("tableID", span.TableID), zap.Uint64("startTs", startTs),
-			zap.String("startKey", spanz.HexKey(span.StartKey)), zap.String("endKey", spanz.HexKey(span.EndKey)))
+			zap.Int64("tableID", span.TableID), zap.Uint64("startTs", startTs))
 	}
 }
 
@@ -386,7 +383,8 @@ func (s *subscriptionClient) divideSpanAndScheduleRegionRequests(
 		}
 		log.Debug("subscription client is going to load regions",
 			zap.Uint64("subscriptionID", uint64(subscribedSpan.subID)),
-			zap.Any("span", common.FormatTableSpan(&nextSpan)))
+			zap.String("startKey", util.RedactKey(nextSpan.StartKey)),
+			zap.String("endKey", util.RedactKey(nextSpan.EndKey)))
 
 		backoff := tikv.NewBackoffer(ctx, tikvRequestMaxBackoff)
 		regions, err := s.upstream.regionCache.BatchLoadRegionsWithKeyRange(
@@ -394,7 +392,8 @@ func (s *subscriptionClient) divideSpanAndScheduleRegionRequests(
 		if err != nil {
 			log.Warn("subscription client load regions failed",
 				zap.Uint64("subscriptionID", uint64(subscribedSpan.subID)),
-				zap.Any("span", common.FormatTableSpan(&nextSpan)),
+				zap.String("startKey", util.RedactKey(nextSpan.StartKey)),
+				zap.String("endKey", util.RedactKey(nextSpan.EndKey)),
 				zap.Error(err))
 			backoffBeforeLoad = true
 			continue
@@ -409,7 +408,8 @@ func (s *subscriptionClient) divideSpanAndScheduleRegionRequests(
 		if len(regionMetas) == 0 {
 			log.Warn("subscription client load regions with holes",
 				zap.Uint64("subscriptionID", uint64(subscribedSpan.subID)),
-				zap.Any("span", common.FormatTableSpan(&nextSpan)))
+				zap.String("startKey", util.RedactKey(nextSpan.StartKey)),
+				zap.String("endKey", util.RedactKey(nextSpan.EndKey)))
 			backoffBeforeLoad = true
 			continue
 		}
@@ -463,7 +463,7 @@ func (s *subscriptionClient) scheduleRegionRequest(ctx context.Context, region r
 	case regionlock.LockRangeStatusSuccess:
 		region.lockedRangeState = lockRangeResult.LockedRangeState
 		if isHighScanPriority(region.subscribedSpan.baseScanPriority) {
-			region.scanPriority = cdcpb.ScanPriority_SCAN_PRIORITY_HIGH
+			region.scanPriority = ScanPriorityHigh
 		}
 		region.scanPriority = region.subscribedSpan.priorityPolicy.resolve(
 			region.scanPriority,
