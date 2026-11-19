@@ -141,9 +141,6 @@ func (s *eventService) Name() string {
 
 func (s *eventService) Run(ctx context.Context) error {
 	log.Info("event service start to run")
-	defer func() {
-		log.Info("event service exited")
-	}()
 
 	ticker := time.NewTicker(10 * time.Second)
 	defer ticker.Stop()

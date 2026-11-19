@@ -210,7 +210,6 @@ func (c *HeartBeatCollector) sendHeartBeatMessages(ctx context.Context) error {
 	for {
 		select {
 		case <-ctx.Done():
-			log.Info("heartbeat collector is shutting down, exit sendHeartBeatMessages")
 			return ctx.Err()
 		default:
 			heartBeatRequestWithTargetID := c.heartBeatReqQueue.Dequeue(ctx)
@@ -234,7 +233,6 @@ func (c *HeartBeatCollector) sendBlockStatusMessages(ctx context.Context) error 
 	for {
 		select {
 		case <-ctx.Done():
-			log.Info("heartbeat collector is shutting down, exit sendBlockStatusMessages")
 			return ctx.Err()
 		default:
 			blockStatusRequestWithTargetID := c.blockStatusReqQueue.Dequeue(ctx)

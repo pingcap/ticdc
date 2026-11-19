@@ -428,9 +428,6 @@ func (e *eventStore) Name() string {
 
 func (e *eventStore) Run(ctx context.Context) error {
 	log.Info("event store start to run")
-	defer func() {
-		log.Info("event store exited")
-	}()
 
 	eg, ctx := errgroup.WithContext(ctx)
 	for _, p := range e.writeTaskPools {
