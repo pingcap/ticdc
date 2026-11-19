@@ -55,7 +55,7 @@ type cachedTable struct {
 
 type decoder struct {
 	// Keep old intervals available for delayed decoding of buffered messages.
-	tables      map[tableCacheKey]*cachedTable
+	cache       *common.TableInfoCache
 	ddlCommitTs map[[2]string][]uint64
 	keyBytes    []byte
 	valueBytes  []byte
@@ -98,6 +98,7 @@ func NewDecoder(
 		config:       config,
 		storage:      externalStorage,
 		upstreamTiDB: db,
+		cache:        common.NewTableInfoCache(),
 	}, nil
 }
 
@@ -315,13 +316,13 @@ func buildColumns(
 func (b *decoder) snapshotColumns(ctx context.Context, key *messageKey, ts uint64, conditions map[string]any, columns map[string]column) map[string]column {
 	schema, table := key.Schema, key.Table
 	cacheKey := b.tableCacheKey(key)
-	cached := b.tables[cacheKey]
+	cached := b.cachedTable(cacheKey)
 	var holder *common.ColumnsHolder
 	if cached == nil {
 		holder = common.MustSnapshotQuery(ctx, b.upstreamTiDB, ts, schema, table, conditions)
 		columns = buildColumns(holder, columns)
 		b.queryTableInfo(key, &messageRow{Update: columns})
-		cached = b.tables[cacheKey]
+		cached = b.cachedTable(cacheKey)
 	}
 	// On a cold cache, ENUM/SET names need another query to obtain numeric values.
 	if holder == nil || slices.ContainsFunc(cached.info.GetColumns(), func(col *timodel.ColumnInfo) bool {
@@ -402,6 +403,20 @@ func (b *decoder) assembleEventFromClaimCheckStorage(ctx context.Context, key *m
 	return b.assembleDMLEvent(msgKey, rowMsg)
 }
 
+// ShareTableInfo reads table info through the cache shared by all partitions.
+func (b *decoder) ShareTableInfo(cache *common.TableInfoCache) {
+	b.cache = cache
+}
+
+func (b *decoder) cachedTable(key tableCacheKey) *cachedTable {
+	cached, _ := b.cache.ReadValue(key.schema, key.table, key.ddlCommitTs).(*cachedTable)
+	return cached
+}
+
+func (b *decoder) cacheTable(key tableCacheKey, cached *cachedTable) {
+	b.cache.WriteValue(key.schema, key.table, key.ddlCommitTs, cached)
+}
+
 // DML at the DDL commit timestamp is flushed before that DDL.
 func (b *decoder) tableCacheKey(key *messageKey) tableCacheKey {
 	var version uint64
@@ -436,7 +451,7 @@ func (b *decoder) queryTableInfo(key *messageKey, value *messageRow) *commonType
 		columns = value.Delete
 	}
 	tableKey := b.tableCacheKey(key)
-	if cached := b.tables[tableKey]; cached != nil {
+	if cached := b.cachedTable(tableKey); cached != nil {
 		id := cached.info.TableName.TableID
 		key.Partition = &id
 		return cached.info
@@ -461,10 +476,7 @@ func (b *decoder) queryTableInfo(key *messageKey, value *messageRow) *commonType
 		}
 		names = append(names, name)
 	}
-	if b.tables == nil {
-		b.tables = make(map[tableCacheKey]*cachedTable)
-	}
-	b.tables[tableKey] = &cachedTable{columns: metadata, info: info, projection: strings.Join(names, ",")}
+	b.cacheTable(tableKey, &cachedTable{columns: metadata, info: info, projection: strings.Join(names, ",")})
 	return info
 }
 

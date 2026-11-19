@@ -19,57 +19,83 @@ import (
 	commonType "github.com/pingcap/ticdc/pkg/common"
 )
 
-// TableInfoCache keeps the latest TableInfo of every table. Decoders share one
-// cache: events of a table are ordered, so they only need the newest layout.
-// A message carrying an older version reads nothing and waits for its DDL.
+// TableInfoCache keeps the TableInfo of every table version. Decoders share
+// one cache: a decoder that lags behind can still read the version its message
+// asks for, and versions are released once the watermark passes them.
 type TableInfoCache struct {
 	mu      sync.RWMutex
-	tables  map[accessKey]*commonType.TableInfo
+	tables  map[accessKey]map[uint64]any
 	changed chan struct{}
 }
 
-// NewTableInfoCache creates an empty TableInfo cache.
+// NewTableInfoCache creates an empty versioned TableInfo cache.
 func NewTableInfoCache() *TableInfoCache {
 	return &TableInfoCache{
-		tables: make(map[accessKey]*commonType.TableInfo),
+		tables: make(map[accessKey]map[uint64]any),
 	}
 }
 
-// Write stores the TableInfo. A stale version never replaces a newer one.
+// Write stores the TableInfo under its version. A message carrying an older
+// version later overwrites nothing, it adds a version of its own.
 func (c *TableInfoCache) Write(info *commonType.TableInfo) {
-	if info == nil || info.TableName.Schema == "" || info.TableName.Table == "" {
+	if info == nil {
 		return
 	}
-	key := newAccessKey(info.TableName.Schema, info.TableName.Table)
+	c.WriteValue(info.TableName.Schema, info.TableName.Table, info.GetUpdateTS(), info)
+}
+
+// Read returns the TableInfo of exactly the requested version.
+func (c *TableInfoCache) Read(schema, table string, version uint64) *commonType.TableInfo {
+	info, _ := c.ReadValue(schema, table, version).(*commonType.TableInfo)
+	return info
+}
+
+// WriteValue stores a decoder's entry under the table version.
+func (c *TableInfoCache) WriteValue(schema, table string, version uint64, value any) {
+	if schema == "" || table == "" || value == nil {
+		return
+	}
+	key := newAccessKey(schema, table)
 
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if current := c.tables[key]; current != nil && current.GetUpdateTS() >= info.GetUpdateTS() {
-		return
+	versions := c.tables[key]
+	if versions == nil {
+		versions = make(map[uint64]any)
+		c.tables[key] = versions
 	}
-	c.tables[key] = info
+	versions[version] = value
 	if c.changed != nil {
 		close(c.changed)
 		c.changed = nil
 	}
 }
 
-// Read returns the TableInfo only when it matches the requested version.
-func (c *TableInfoCache) Read(schema, table string, version uint64) *commonType.TableInfo {
+// ReadValue returns the entry of exactly the requested version.
+func (c *TableInfoCache) ReadValue(schema, table string, version uint64) any {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
-	info := c.tables[newAccessKey(schema, table)]
-	if info == nil || info.GetUpdateTS() != version {
-		return nil
-	}
-	return info
+	return c.tables[newAccessKey(schema, table)][version]
 }
 
-// Delete removes the TableInfo of the table.
-func (c *TableInfoCache) Delete(schema, table string) {
+// ReleaseBefore drops the versions the watermark has passed. Every decoder has
+// consumed the messages carrying them, so no decoder can ask for them again.
+func (c *TableInfoCache) ReleaseBefore(watermark uint64) {
+	if watermark == 0 {
+		return
+	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	delete(c.tables, newAccessKey(schema, table))
+	for key, versions := range c.tables {
+		for version := range versions {
+			if version != 0 && version <= watermark {
+				delete(versions, version)
+			}
+		}
+		if len(versions) == 0 {
+			delete(c.tables, key)
+		}
+	}
 }
 
 // Changes returns a channel closed on the next write.

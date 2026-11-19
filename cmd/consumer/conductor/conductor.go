@@ -31,6 +31,7 @@ import (
 	"github.com/pingcap/ticdc/cmd/consumer/writer"
 	"github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/errors"
+	codecCommon "github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/tidb/pkg/parser"
 	"github.com/pingcap/tidb/pkg/parser/ast"
@@ -316,6 +317,7 @@ type Conductor struct {
 	positionsMu sync.Mutex
 
 	reader    source.Reader
+	schemas   *codecCommon.TableInfoCache
 	validator source.Validator
 	notifier  source.SchemaNotifier
 
@@ -330,9 +332,10 @@ type Conductor struct {
 	queuedDDLs map[ddl.Key]struct{}
 }
 
-func New(reader source.Reader) *Conductor {
+func New(reader source.Reader, schemas *codecCommon.TableInfoCache) *Conductor {
 	c := &Conductor{
 		reader:              reader,
+		schemas:             schemas,
 		confirmable:         make(chan struct{}, 1),
 		checkpoint:          new(atomic.Uint64),
 		positions:           make(map[int32][]sourcePosition),
@@ -355,6 +358,7 @@ func New(reader source.Reader) *Conductor {
 func (c *Conductor) advanceWatermark(ts uint64, partition int32) {
 	if len(c.partitionWatermarks) == 0 {
 		c.watermark = max(c.watermark, ts)
+		c.schemas.ReleaseBefore(c.watermark)
 		return
 	}
 	if int(partition) >= len(c.partitionWatermarks) {
@@ -369,6 +373,7 @@ func (c *Conductor) advanceWatermark(ts uint64, partition int32) {
 		watermark = min(watermark, resolved)
 	}
 	c.watermark = max(c.watermark, watermark)
+	c.schemas.ReleaseBefore(c.watermark)
 }
 
 // source.Payload progress can pass decoded work still awaiting delivery. Publish

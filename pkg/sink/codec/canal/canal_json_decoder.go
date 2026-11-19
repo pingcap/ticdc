@@ -89,10 +89,11 @@ type decoder struct {
 
 	config *common.Config
 
-	storage        storeapi.Storage
-	upstreamTiDB   *sql.DB
-	tableInfoCache map[tableKey]*commonType.TableInfo
-	allocator      *common.TableIDAllocator
+	storage      storeapi.Storage
+	upstreamTiDB *sql.DB
+	cache        *common.TableInfoCache
+	ddlCommitTs  map[[2]string][]uint64
+	allocator    *common.TableIDAllocator
 }
 
 // NewDecoder return a decoder for canal-json
@@ -118,12 +119,12 @@ func NewDecoder(
 	}
 
 	return &decoder{
-		config:         codecConfig,
-		allocator:      allocator,
-		decoder:        newBufferedJSONDecoder(),
-		storage:        externalStorage,
-		upstreamTiDB:   db,
-		tableInfoCache: make(map[tableKey]*commonType.TableInfo),
+		config:       codecConfig,
+		allocator:    allocator,
+		decoder:      newBufferedJSONDecoder(),
+		storage:      externalStorage,
+		upstreamTiDB: db,
+		cache:        common.NewTableInfoCache(),
 	}, nil
 }
 
@@ -377,9 +378,9 @@ func (d *decoder) NextDDLEvent() *commonEvent.DDLEvent {
 	d.allocator.AddBlockTableID(result.SchemaName, result.TableName, d.allocator.Allocate(result.SchemaName, result.TableName))
 
 	result.BlockedTables = common.GetBlockedTables(d.allocator, result)
-	// if receive a table level DDL, just remove the table info to trigger create a new one.
-	delete(d.tableInfoCache, tableKey{schema: result.SchemaName, table: result.TableName})
-	delete(d.tableInfoCache, tableKey{schema: result.SchemaName, table: result.TableName})
+	// Rows after this DDL carry its commit ts, so they read the new table info;
+	// rows buffered before it keep reading the cached older version.
+	d.addDDLCommitTs(result.SchemaName, result.TableName, result.FinishedTs)
 	return result
 }
 
@@ -531,16 +532,49 @@ func formatValue(value any, ft types.FieldType) any {
 	return nil
 }
 
+// ShareTableInfo reads table info through the cache shared by all partitions.
+func (d *decoder) ShareTableInfo(cache *common.TableInfoCache) {
+	d.cache = cache
+}
+
+// tableVersion returns the commit ts of the last DDL before the message. Rows
+// of a table are ordered, so the version only moves forward.
+func (d *decoder) tableVersion(schema, table string, ts uint64) uint64 {
+	var version uint64
+	for _, name := range [][2]string{{"", ""}, {schema, ""}, {schema, table}} {
+		timestamps := d.ddlCommitTs[name]
+		i, _ := slices.BinarySearch(timestamps, ts)
+		if i > 0 {
+			version = max(version, timestamps[i-1])
+		}
+	}
+	return version
+}
+
+func (d *decoder) addDDLCommitTs(schema, table string, ts uint64) {
+	if ts == 0 {
+		return
+	}
+	if d.ddlCommitTs == nil {
+		d.ddlCommitTs = make(map[[2]string][]uint64)
+	}
+	name := [2]string{schema, table}
+	timestamps := d.ddlCommitTs[name]
+	i, exists := slices.BinarySearch(timestamps, ts)
+	if !exists {
+		d.ddlCommitTs[name] = slices.Insert(timestamps, i, ts)
+	}
+}
+
 func (d *decoder) queryTableInfo(msg canalJSONMessageInterface) *commonType.TableInfo {
 	schemaName := *msg.getSchema()
 	tableName := *msg.getTable()
 
-	cacheKey := tableKey{
-		schema: schemaName,
-		table:  tableName,
+	version := d.tableVersion(schemaName, tableName, msg.getCommitTs())
+	if cached, _ := d.cache.ReadValue(schemaName, tableName, version).(*commonType.TableInfo); cached != nil {
+		return cached
 	}
-	tableInfo, ok := d.tableInfoCache[cacheKey]
-	if !ok {
+	{
 		tidbTableInfo := new(timodel.TableInfo)
 		tidbTableInfo.ID = d.allocator.Allocate(schemaName, tableName)
 		d.allocator.AddBlockTableID(schemaName, tableName, tidbTableInfo.ID)
@@ -550,10 +584,10 @@ func (d *decoder) queryTableInfo(msg canalJSONMessageInterface) *commonType.Tabl
 		tidbTableInfo.Columns = columns
 		tidbTableInfo.Indices = newTiIndices(columns, msg.pkNameSet())
 		commonType.SetHandleKeyFlags(tidbTableInfo)
-		tableInfo = commonType.NewTableInfo4Decoder(schemaName, tidbTableInfo)
-		d.tableInfoCache[cacheKey] = tableInfo
+		tableInfo := commonType.NewTableInfo4Decoder(schemaName, tidbTableInfo)
+		d.cache.WriteValue(schemaName, tableName, version, tableInfo)
+		return tableInfo
 	}
-	return tableInfo
 }
 
 func newTiColumns(msg canalJSONMessageInterface) []*timodel.ColumnInfo {

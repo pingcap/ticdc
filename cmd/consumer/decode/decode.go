@@ -80,6 +80,7 @@ type Group struct {
 
 // Options configures a decode group.
 type Options struct {
+	Kind          source.Kind
 	CodecConfig   *common.Config
 	ReplicaConfig *config.ReplicaConfig
 	Partitions    int32
@@ -92,12 +93,19 @@ func NewOptions(
 	codecConfig *common.Config, replicaConfig *config.ReplicaConfig, reader source.Reader, upstreamURI *url.URL,
 ) Options {
 	return Options{
+		Kind:          source.TypeOf(upstreamURI),
 		CodecConfig:   codecConfig,
 		ReplicaConfig: replicaConfig,
 		Partitions:    reader.Partitions(),
 		Topic:         strings.Trim(upstreamURI.Path, "/"),
 		UpstreamURI:   upstreamURI,
 	}
+}
+
+// tableInfoSharer is implemented by protocol decoders that read table info
+// through the cache shared by all partitions.
+type tableInfoSharer interface {
+	ShareTableInfo(*common.TableInfoCache)
 }
 
 // NewGroup builds a decode group for the source partitions.
@@ -109,6 +117,7 @@ func NewGroup(ctx context.Context, opts Options) *Group {
 		codecConfig: codecConfig,
 		upstreamDB:  upstreamDB,
 		allocator:   common.NewTableIDAllocator(),
+		schemas:     common.NewTableInfoCache(),
 		decoders:    make([]decoder, partitions),
 		queues:      make([]chan *Future, partitions),
 		output:      make(chan *Future, decoderQueueSize),
@@ -123,18 +132,19 @@ func NewGroup(ctx context.Context, opts Options) *Group {
 		}
 		group.selectors = selectors
 	}
-	// Storage constructs a decoder for each file using that file's schema.
-	if opts.Partitions == 0 {
+	// Storage decodes each file with a decoder built from that file's schema,
+	// so the group needs no per-partition decoder.
+	if opts.Kind == source.KindStorage {
 		return group
-	}
-	if codecConfig.Protocol == config.ProtocolSimple {
-		group.schemas = common.NewTableInfoCache()
 	}
 	for i := range group.decoders {
 		if group.schemas == nil {
 			item, err := codec.NewEventDecoder(ctx, codecConfig, opts.Topic, upstreamDB, group.allocator)
 			if err != nil {
 				log.Panic("consumer event decoder initialization failed", zap.String("protocol", codecConfig.Protocol.String()), zap.Error(err))
+			}
+			if sharer, ok := item.(tableInfoSharer); ok {
+				sharer.ShareTableInfo(group.schemas)
 			}
 			group.decoders[i] = decoder{Decoder: item}
 			continue
@@ -150,6 +160,11 @@ func NewGroup(ctx context.Context, opts Options) *Group {
 		group.decoders[i] = decoder{Decoder: decoded, schema: schema}
 	}
 	return group
+}
+
+// Schemas returns the table info cache shared by the decoders.
+func (d *Group) Schemas() *common.TableInfoCache {
+	return d.schemas
 }
 
 // Close releases the upstream metadata connection.

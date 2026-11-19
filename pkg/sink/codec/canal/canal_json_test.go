@@ -20,7 +20,6 @@ import (
 	"testing"
 
 	"github.com/pingcap/ticdc/downstreamadapter/sink/columnselector"
-	commonType "github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
@@ -1283,8 +1282,8 @@ func TestRowKey(t *testing.T) {
 // name) was used instead, which made every UPDATE scan the whole table.
 func TestTableInfoFromMessageLocatesRowByPrimaryKey(t *testing.T) {
 	dec := &decoder{
-		tableInfoCache: make(map[tableKey]*commonType.TableInfo),
-		allocator:      common.NewTableIDAllocator(),
+		cache:     common.NewTableInfoCache(),
+		allocator: common.NewTableIDAllocator(),
 	}
 	tableInfo := dec.queryTableInfo(&canalJSONMessageWithTiDBExtension{
 		JSONMessage: &JSONMessage{

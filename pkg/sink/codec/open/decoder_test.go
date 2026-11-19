@@ -30,11 +30,11 @@ import (
 )
 
 func TestDecoderReusesTableInfo(t *testing.T) {
-	d := &decoder{config: common.NewConfig(config.ProtocolOpen), allocator: common.NewTableIDAllocator()}
+	d := &decoder{config: common.NewConfig(config.ProtocolOpen), allocator: common.NewTableIDAllocator(), cache: common.NewTableInfoCache()}
 	key := &messageKey{Schema: "test", Table: "t", Ts: 100}
 	cols := map[string]column{"id": {Type: mysql.TypeLong, Flag: primaryKeyFlag, Value: json.Number("1")}}
 	first := d.queryTableInfo(key, &messageRow{Update: cols})
-	require.Nil(t, d.tables[d.tableCacheKey(key)].columns["id"].Value)
+	require.Nil(t, d.cachedTable(d.tableCacheKey(key)).columns["id"].Value)
 	cols["id"] = column{Type: mysql.TypeLong, Flag: primaryKeyFlag, Value: json.Number("2")}
 	require.Same(t, first, d.queryTableInfo(key, &messageRow{Update: cols}))
 	// DDL messages can be repeated or arrive out of timestamp order.
@@ -67,13 +67,13 @@ func TestDecoderReusesTableInfo(t *testing.T) {
 }
 
 func TestDeleteReusesCompleteTableInfo(t *testing.T) {
-	d := &decoder{allocator: common.NewTableIDAllocator()}
+	d := &decoder{allocator: common.NewTableIDAllocator(), cache: common.NewTableInfoCache()}
 	key := &messageKey{Schema: "test", Table: "t", Ts: 100}
 	handle := map[string]column{"id": {Type: mysql.TypeLong, Flag: primaryKeyFlag, Value: json.Number("1")}}
 	// A cold key-only delete does not seed the full-table cache.
 	cold := d.queryTableInfo(key, &messageRow{Delete: handle})
 	require.Len(t, cold.GetColumns(), 1)
-	require.Empty(t, d.tables)
+	require.Nil(t, d.cachedTable(d.tableCacheKey(key)))
 	cols := map[string]column{
 		"id": handle["id"],
 		"v":  {Type: mysql.TypeVarchar, Value: "value"},
@@ -90,7 +90,7 @@ func TestHandleKeyOnlyPreservesEnumSetTypes(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	require.NoError(t, err)
 	defer db.Close()
-	d := &decoder{upstreamTiDB: db, allocator: common.NewTableIDAllocator()}
+	d := &decoder{upstreamTiDB: db, allocator: common.NewTableIDAllocator(), cache: common.NewTableInfoCache()}
 	key := &messageKey{Schema: "test", Table: "t", Ts: 100}
 	cols := map[string]column{
 		"id": {Type: mysql.TypeLong, Flag: primaryKeyFlag, Value: json.Number("1")},
@@ -121,7 +121,7 @@ func TestHandleKeyOnlyColdCache(t *testing.T) {
 			db, mock, err := sqlmock.New()
 			require.NoError(t, err)
 			defer db.Close()
-			d := &decoder{upstreamTiDB: db, allocator: common.NewTableIDAllocator()}
+			d := &decoder{upstreamTiDB: db, allocator: common.NewTableIDAllocator(), cache: common.NewTableInfoCache()}
 			// The new interval must discover its own schema even with an old
 			// interval already cached for this table.
 			oldKey := &messageKey{Schema: "test", Table: "t", Ts: 50}
