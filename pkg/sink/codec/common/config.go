@@ -472,15 +472,12 @@ func (c *Config) Validate() error {
 			zap.String("protocol", c.Protocol.String()))
 	}
 
-<<<<<<< HEAD
 	if c.DebeziumIncludeStartTs && c.Protocol != config.ProtocolDebezium {
 		return errors.ErrCodecInvalidConfig.GenWithStack(
 			`debezium-include-start-ts only takes effect with protocol "debezium"`,
 		)
 	}
 
-=======
->>>>>>> d220ee9b8 (sink: add debezium-avro protocol (#5475))
 	if c.Protocol == config.ProtocolDebezium &&
 		(c.AvroConfluentSchemaRegistry != "" || c.AvroGlueSchemaRegistry != nil) {
 		return errors.ErrCodecInvalidConfig.GenWithStack(
@@ -488,7 +485,6 @@ func (c *Config) Validate() error {
 		)
 	}
 
-<<<<<<< HEAD
 	if c.SimpleIncludeStartTs {
 		if c.Protocol != config.ProtocolSimple {
 			return errors.ErrCodecInvalidConfig.GenWithStack(
@@ -538,15 +534,6 @@ func (c *Config) Validate() error {
 				protocol = "Debezium Avro"
 			}
 			return errors.ErrCodecInvalidConfig.GenWithStack(
-=======
-	if c.Protocol == config.ProtocolAvro || c.Protocol == config.ProtocolDebeziumAvro {
-		if c.AvroConfluentSchemaRegistry != "" && c.AvroGlueSchemaRegistry != nil {
-			protocol := "Avro"
-			if c.Protocol == config.ProtocolDebeziumAvro {
-				protocol = "Debezium Avro"
-			}
-			return errors.ErrCodecInvalidConfig.GenWithStack(
->>>>>>> d220ee9b8 (sink: add debezium-avro protocol (#5475))
 				`%s protocol requires only one of "%s" or "%s" to specify the schema registry`,
 				protocol,
 				codecOPTAvroSchemaRegistry,

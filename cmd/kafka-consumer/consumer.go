@@ -62,13 +62,9 @@ func getPartitionNum(o *option) (int32, error) {
 				}
 				return 0, errors.Trace(err)
 			}
-<<<<<<< HEAD
 
 			topicDetail, ok := resp.Topics[topic]
 			if ok && topicDetail.Error.Code() == kafka.ErrNoError {
-=======
-			if topicDetail, ok := resp.Topics[topic]; ok {
->>>>>>> d220ee9b8 (sink: add debezium-avro protocol (#5475))
 				numPartitions := int32(len(topicDetail.Partitions))
 				log.Info("get partition number of topic",
 					zap.String("topic", topic),

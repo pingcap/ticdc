@@ -42,7 +42,6 @@ function check_schema_registry_subject() {
 	return 1
 }
 
-<<<<<<< HEAD
 function run_handling_modes() {
 	local mode database topic sink_uri config_file diff_config
 	for mode in default precise string; do
@@ -91,8 +90,6 @@ EOF
 	done
 }
 
-=======
->>>>>>> d220ee9b8 (sink: add debezium-avro protocol (#5475))
 function run() {
 	if [ "$SINK_TYPE" != "kafka" ]; then
 		return
@@ -128,13 +125,10 @@ function run() {
 	check_schema_registry_subject "$TOPIC_NAME-key" "tp_accountKey"
 	check_schema_registry_subject "$TOPIC_NAME-value" "tp_accountEnvelope"
 
-<<<<<<< HEAD
 	cdc_cli_changefeed remove -c "$changefeed_id"
 	cleanup_process cdc_kafka_consumer
 	run_handling_modes
 
-=======
->>>>>>> d220ee9b8 (sink: add debezium-avro protocol (#5475))
 	cleanup_process "$CDC_BINARY"
 }
 

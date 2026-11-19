@@ -1838,11 +1838,7 @@ func verifyTablesForSink(
 	}
 
 	isAvroLike := protocol == config.ProtocolAvro || protocol == config.ProtocolDebeziumAvro
-<<<<<<< HEAD
 	eventRouter, err := eventrouter.NewEventRouter(replicaConfig.Sink, util.GetOrZero(replicaConfig.CaseSensitive), topic, config.IsPulsarScheme(scheme), isAvroLike)
-=======
-	eventRouter, err := eventrouter.NewEventRouter(replicaConfig.Sink, topic, config.IsPulsarScheme(scheme), isAvroLike)
->>>>>>> d220ee9b8 (sink: add debezium-avro protocol (#5475))
 	if err != nil {
 		return err
 	}
