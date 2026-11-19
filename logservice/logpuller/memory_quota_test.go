@@ -524,7 +524,7 @@ func TestAdmissionScanWaitDurationObservedOnceAfterNotifications(t *testing.T) {
 
 	countObservations := func() uint64 {
 		metric := &dto.Metric{}
-		require.NoError(t, logPullerMemoryQuotaScanWaitDuration.Write(metric))
+		require.NoError(t, metrics.LogPullerMemoryQuotaScanWaitDuration.Write(metric))
 		return metric.GetHistogram().GetSampleCount()
 	}
 	initialCount := countObservations()

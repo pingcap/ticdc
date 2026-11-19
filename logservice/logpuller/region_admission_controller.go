@@ -164,7 +164,7 @@ func (c *regionAdmissionController) pop(
 	var memoryWaitStart time.Time
 	defer func() {
 		if !memoryWaitStart.IsZero() {
-			logPullerMemoryQuotaScanWaitDuration.Observe(time.Since(memoryWaitStart).Seconds())
+			metrics.LogPullerMemoryQuotaScanWaitDuration.Observe(time.Since(memoryWaitStart).Seconds())
 		}
 	}()
 	for {
@@ -199,28 +199,16 @@ func (c *regionAdmissionController) pop(
 		case <-interrupt:
 			if waitingForMemory {
 				c.memoryQuota.scanWaiters.Add(-1)
-<<<<<<< HEAD
-				metrics.LogPullerMemoryQuotaScanWaitDuration.Observe(time.Since(waitStart).Seconds())
-=======
->>>>>>> a2503eb41 (logpuller: bound span cleanup and quiet expected drops (#6810))
 			}
 			return nil, nil
 		case <-ctx.Done():
 			if waitingForMemory {
 				c.memoryQuota.scanWaiters.Add(-1)
-<<<<<<< HEAD
-				metrics.LogPullerMemoryQuotaScanWaitDuration.Observe(time.Since(waitStart).Seconds())
-=======
->>>>>>> a2503eb41 (logpuller: bound span cleanup and quiet expected drops (#6810))
 			}
 			return nil, ctx.Err()
 		}
 		if waitingForMemory {
 			c.memoryQuota.scanWaiters.Add(-1)
-<<<<<<< HEAD
-			metrics.LogPullerMemoryQuotaScanWaitDuration.Observe(time.Since(waitStart).Seconds())
-=======
->>>>>>> a2503eb41 (logpuller: bound span cleanup and quiet expected drops (#6810))
 		}
 	}
 }
