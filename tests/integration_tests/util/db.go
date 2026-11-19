@@ -145,4 +145,3 @@ func MustExecWithConn(ctx context.Context, conn *sql.Conn, sql string, args ...i
 		log.S().Fatal(err)
 	}
 }
-

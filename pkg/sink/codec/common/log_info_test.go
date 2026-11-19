@@ -117,4 +117,3 @@ func TestSetCheckpointMessageLogInfo(t *testing.T) {
 	SetCheckpointMessageLogInfo(message, 900)
 	require.Equal(t, uint64(900), message.LogInfo.Checkpoint.CommitTs)
 }
-
