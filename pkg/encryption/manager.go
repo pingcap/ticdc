@@ -23,7 +23,6 @@ import (
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/encryption/kms"
 	cerrors "github.com/pingcap/ticdc/pkg/errors"
-	"github.com/pingcap/ticdc/pkg/util"
 	"go.uber.org/zap"
 )
 
@@ -105,9 +104,6 @@ func (m *encryptionMetaManager) IsEncryptionEnabled(ctx context.Context, keyspac
 func (m *encryptionMetaManager) GetCurrentDataKey(ctx context.Context, keyspaceID uint32) ([]byte, string, byte, error) {
 	meta, err := m.getMeta(ctx, keyspaceID)
 	if err != nil {
-		log.Warn("failed to get encryption meta for current data key",
-			zap.Uint32("keyspaceID", keyspaceID),
-			zap.Error(err))
 		return nil, "", 0, err
 	}
 
@@ -162,13 +158,6 @@ func (m *encryptionMetaManager) GetCurrentDataKey(ctx context.Context, keyspaceI
 
 	plaintextKey, err := m.decryptDataKey(ctx, meta.MasterKey, dataKey.Ciphertext)
 	if err != nil {
-		log.Warn("failed to decrypt current data key",
-			zap.Uint32("keyspaceID", keyspaceID),
-			zap.Uint32("dataKeyID", meta.Current.DataKeyId),
-			zap.Binary("dataKeyIDBytes", []byte(currentKeyID)),
-			zap.String("kmsVendor", safeKMSVendor(meta.MasterKey)),
-			zap.String("cmekID", safeCMEKID(meta.MasterKey)),
-			zap.Error(err))
 		return nil, "", 0, err
 	}
 
@@ -205,10 +194,6 @@ func (m *encryptionMetaManager) GetDataKey(ctx context.Context, keyspaceID uint3
 	// Get meta to find the data key
 	meta, err := m.getMeta(ctx, keyspaceID)
 	if err != nil {
-		log.Warn("failed to get encryption meta for data key",
-			zap.Uint32("keyspaceID", keyspaceID),
-			zap.Binary("dataKeyID", []byte(dataKeyID)),
-			zap.Error(err))
 		return nil, err
 	}
 
@@ -240,13 +225,6 @@ func (m *encryptionMetaManager) GetDataKey(ctx context.Context, keyspaceID uint3
 	// Decrypt the data key using master key
 	plaintextKey, err := m.decryptDataKey(ctx, meta.MasterKey, dataKey.Ciphertext)
 	if err != nil {
-		log.Warn("failed to decrypt data key",
-			zap.Uint32("keyspaceID", keyspaceID),
-			zap.Uint32("dataKeyID", id),
-			zap.Binary("dataKeyIDBytes", []byte(dataKeyID)),
-			zap.String("kmsVendor", safeKMSVendor(meta.MasterKey)),
-			zap.String("cmekID", safeCMEKID(meta.MasterKey)),
-			zap.Error(err))
 		return nil, err
 	}
 
@@ -293,9 +271,6 @@ func (m *encryptionMetaManager) getMeta(ctx context.Context, keyspaceID uint32) 
 			m.metaMu.Unlock()
 			return nil, nil
 		}
-		log.Warn("failed to fetch encryption meta from TiKV",
-			zap.Uint32("keyspaceID", keyspaceID),
-			zap.Error(err))
 		return nil, err
 	}
 
@@ -343,12 +318,6 @@ func (m *encryptionMetaManager) decryptDataKey(ctx context.Context, masterKey *M
 		masterKey.Endpoint,
 	)
 	if err != nil {
-		log.Warn("failed to decrypt master key via KMS",
-			zap.String("kmsVendor", masterKey.Vendor),
-			zap.String("cmekID", masterKey.CmekId),
-			zap.String("region", masterKey.Region),
-			zap.String("endpoint", util.MaskSensitiveDataInURIForError(masterKey.Endpoint)),
-			zap.Error(err))
 		return nil, cerrors.ErrDecodeFailed.Wrap(err)
 	}
 

@@ -343,7 +343,6 @@ func (c *server) Run(ctx context.Context) error {
 
 	err := c.initialize(ctx)
 	if err != nil {
-		log.Error("init server failed", zap.Error(err))
 		return errors.Trace(err)
 	}
 
