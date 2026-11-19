@@ -41,13 +41,11 @@ import (
 	"golang.org/x/sync/errgroup"
 )
 
-const (
-	decoderConcurrency = 8
-	decoderQueueSize   = 128
-)
+const decoderQueueSize = 128
 
-// Future carries one input and the events decoded from it. The decoder pool
-// appends the events and closes done; the conductor reads them after Ready. A
+// Future carries one input and the events decoded from it. The decoder owning
+// the input's partition appends the events and closes done; the conductor reads
+// them after Ready. A
 // nil event marks the end of an input, including inputs that produce no events.
 type Future struct {
 	Payload *source.Payload
@@ -62,15 +60,17 @@ type decoder struct {
 	schema *simple.Decoder
 }
 
-// Group decodes inputs with a bounded pool while preserving submission order.
+// Group decodes every partition with its own decoder while preserving
+// submission order. Decoder state describes one partition's schema history, so
+// a decoder never handles another partition's input.
 type Group struct {
 	codecConfig *common.Config
 	upstreamDB  *sql.DB
 	selectors   *columnselector.ColumnSelectors
 	decoders    []decoder
 	schemas     *simple.TableInfoCache
-	// input dispatches an undecoded input to the pool.
-	input chan *Future
+	// inputs dispatches an undecoded input to the decoder owning its partition.
+	inputs []chan *Future
 	// output queues inputs for the conductor in submission order. A Future may
 	// still be decoding when it enters.
 	output chan *Future
@@ -89,12 +89,16 @@ type Options struct {
 func NewGroup(ctx context.Context, opts Options) *Group {
 	codecConfig := opts.CodecConfig
 	upstreamDB := newUpstreamDB(ctx, opts.UpstreamURI)
+	partitions := max(1, int(opts.Partitions))
 	group := &Group{
 		codecConfig: codecConfig,
 		upstreamDB:  upstreamDB,
-		decoders:    make([]decoder, decoderConcurrency),
-		input:       make(chan *Future, decoderQueueSize),
+		decoders:    make([]decoder, partitions),
+		inputs:      make([]chan *Future, partitions),
 		output:      make(chan *Future, decoderQueueSize),
+	}
+	for i := range group.inputs {
+		group.inputs[i] = make(chan *Future, decoderQueueSize)
 	}
 	if codecConfig.Protocol == config.ProtocolCsv {
 		selectors, err := columnselector.New(opts.ReplicaConfig.Sink, util.GetOrZero(opts.ReplicaConfig.CaseSensitive))
@@ -157,7 +161,7 @@ func (d *Group) Close() {
 
 // Add transfers ownership of the source to the group. The reader calls it
 // serially, so output receives futures in the source's submission order even
-// though the pool finishes them in any order.
+// though the decoders finish them in any order.
 func (d *Group) Add(ctx context.Context, payloads []*source.Payload) error {
 	for _, item := range payloads {
 		f := &Future{
@@ -168,7 +172,7 @@ func (d *Group) Add(ctx context.Context, payloads []*source.Payload) error {
 		select {
 		case <-ctx.Done():
 			return context.Cause(ctx)
-		case d.input <- f:
+		case d.inputs[item.Partition] <- f:
 		}
 
 		select {
@@ -186,15 +190,16 @@ func (d *Group) Output() <-chan *Future {
 
 func (d *Group) Run(ctx context.Context) error {
 	g, ctx := errgroup.WithContext(ctx)
-	for _, decoder := range d.decoders {
+	for i, decoder := range d.decoders {
+		input := d.inputs[i]
 		g.Go(func() error {
-			return d.runDecoder(ctx, decoder)
+			return d.runDecoder(ctx, decoder, input)
 		})
 	}
 	return g.Wait()
 }
 
-func (d *Group) runDecoder(ctx context.Context, decoder decoder) error {
+func (d *Group) runDecoder(ctx context.Context, decoder decoder, input <-chan *Future) error {
 	// Inputs whose message the decoder cached until the table info arrives, in
 	// the order the decoder cached them.
 	var waiting []*Future
@@ -205,7 +210,7 @@ func (d *Group) runDecoder(ctx context.Context, decoder decoder) error {
 		case <-ctx.Done():
 			return context.Cause(ctx)
 		case <-changed:
-		case f := <-d.input:
+		case f := <-input:
 			cached, err := d.decodeInput(ctx, decoder, f)
 			if err != nil {
 				return err
