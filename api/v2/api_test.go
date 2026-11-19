@@ -114,3 +114,87 @@ func TestDebugInfoRequiresAuthentication(t *testing.T) {
 
 	require.Equal(t, http.StatusUnauthorized, response.Code, response.Body.String())
 }
+
+func TestManagementRoutesRequireAuthentication(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	originalConfig := config.GetGlobalServerConfig()
+	t.Cleanup(func() { config.StoreGlobalServerConfig(originalConfig) })
+	cfg := originalConfig.Clone()
+	cfg.Security.ClientUserRequired = true
+	cfg.Security.ClientAllowedUser = []string{"alice"}
+	config.StoreGlobalServerConfig(cfg)
+
+	requests := []struct {
+		method string
+		path   string
+	}{
+		{http.MethodPost, "/api/v2/log/redact?keyspace=" + common.DefaultKeyspaceName},
+		{http.MethodPost, "/api/v2/owner/resign?keyspace=" + common.DefaultKeyspaceName},
+		{http.MethodGet, "/debug/failpoints?keyspace=" + common.DefaultKeyspaceName},
+		{http.MethodPost, "/debug/failpoints?keyspace=" + common.DefaultKeyspaceName},
+		{http.MethodDelete, "/debug/failpoints?keyspace=" + common.DefaultKeyspaceName},
+		{http.MethodGet, "/debug/puller?keyspace=" + common.DefaultKeyspaceName},
+		{http.MethodGet, "/api/v2/unsafe/metadata?keyspace=" + common.DefaultKeyspaceName},
+		{http.MethodPost, "/api/v2/unsafe/resolve_lock?keyspace=" + common.DefaultKeyspaceName},
+		{http.MethodDelete, "/api/v2/unsafe/service_gc_safepoint?keyspace=" + common.DefaultKeyspaceName},
+	}
+
+	ctrl := gomock.NewController(t)
+	apiServer := mock.NewMockServer(ctrl)
+	etcdClient := etcd.NewMockCDCEtcdClient(ctrl)
+	apiServer.EXPECT().GetEtcdClient().Return(etcdClient).Times(len(requests))
+	etcdClient.EXPECT().GetEtcdClient().Return(nil).Times(len(requests))
+
+	// The requests are rejected before the keyspace lookup, so no keyspace
+	// manager is needed in NextGen mode either.
+	router := gin.New()
+	RegisterOpenAPIV2Routes(router, NewOpenAPIV2(apiServer))
+
+	for _, request := range requests {
+		t.Run(request.method+" "+request.path, func(t *testing.T) {
+			httpRequest := httptest.NewRequest(request.method, request.path, strings.NewReader(`{}`))
+			httpRequest.Header.Set("Content-Type", "application/json")
+			response := httptest.NewRecorder()
+
+			router.ServeHTTP(response, httpRequest)
+
+			require.Equal(t, http.StatusUnauthorized, response.Code, response.Body.String())
+		})
+	}
+}
+
+func TestManagementRoutesAllowedWithoutClientUserRequired(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	originalConfig := config.GetGlobalServerConfig()
+	t.Cleanup(func() { config.StoreGlobalServerConfig(originalConfig) })
+	cfg := originalConfig.Clone()
+	cfg.Security.ClientUserRequired = false
+	config.StoreGlobalServerConfig(cfg)
+
+	ctrl := gomock.NewController(t)
+	apiServer := mock.NewMockServer(ctrl)
+	if kerneltype.IsNextGen() {
+		previous, _ := appcontext.TryGetService[keyspace.Manager](appcontext.KeyspaceManager)
+		t.Cleanup(func() { appcontext.SetService(appcontext.KeyspaceManager, previous) })
+		keyspaceManager := keyspace.NewMockManager(ctrl)
+		keyspaceManager.EXPECT().LoadKeyspace(gomock.Any(), common.DefaultKeyspaceName).Return(
+			&keyspacepb.KeyspaceMeta{
+				Keyspace: &keyspacepb.KeyspaceMeta_Id{Id: common.DefaultKeyspaceID},
+				Name:     common.DefaultKeyspaceName,
+			}, nil,
+		)
+		appcontext.SetService[keyspace.Manager](appcontext.KeyspaceManager, keyspaceManager)
+	}
+
+	router := gin.New()
+	RegisterOpenAPIV2Routes(router, NewOpenAPIV2(apiServer))
+
+	request := httptest.NewRequest(http.MethodGet,
+		"/debug/failpoints?keyspace="+common.DefaultKeyspaceName, nil)
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, request)
+
+	require.Equal(t, http.StatusOK, response.Code, response.Body.String())
+}
