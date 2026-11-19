@@ -187,6 +187,7 @@ func (t *tableVersions) releaseBefore(watermark uint64) {
 		i++
 	}
 	if i > 1 {
+		clear(t.entries[:i-1])
 		t.entries = t.entries[i-1:]
 	}
 }

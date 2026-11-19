@@ -332,9 +332,14 @@ func (b *decoder) snapshotColumns(ctx context.Context, key *messageKey, ts uint6
 	for i, typ := range holder.Types {
 		values[typ.Name()] = holder.Values[i]
 	}
+	flags := initColumnFlags(info)
 	result := make(map[string]column, len(info.GetColumns()))
 	for _, col := range info.GetColumns() {
-		result[col.Name.O] = column{Type: col.GetType(), Value: values[col.Name.O]}
+		result[col.Name.O] = column{
+			Type:  col.GetType(),
+			Flag:  flags[col.Name.O],
+			Value: values[col.Name.O],
+		}
 	}
 	return result
 }

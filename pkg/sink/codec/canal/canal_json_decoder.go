@@ -22,8 +22,10 @@ import (
 	"path/filepath"
 	"reflect"
 	"slices"
+	"sort"
 	"strconv"
 	"strings"
+	"sync"
 
 	"github.com/pingcap/log"
 	commonType "github.com/pingcap/ticdc/pkg/common"
@@ -42,6 +44,17 @@ import (
 	"go.uber.org/zap"
 	"golang.org/x/text/encoding/charmap"
 )
+
+type tableKey struct {
+	schema      string
+	table       string
+	ddlCommitTs uint64
+}
+
+type tableNameKey struct {
+	schema string
+	table  string
+}
 
 type bufferedJSONDecoder struct {
 	buf     *bytes.Buffer
@@ -84,9 +97,11 @@ type decoder struct {
 
 	config *common.Config
 
-	storage      storeapi.Storage
-	upstreamTiDB *sql.DB
-	cache        *common.TableInfoProvider
+	storage        storeapi.Storage
+	upstreamTiDB   *sql.DB
+	tableInfoMu    sync.RWMutex
+	tableInfoCache map[tableKey]*commonType.TableInfo
+	ddlCommitTs    map[tableNameKey][]uint64
 }
 
 var tableIDAllocator = common.NewTableIDAllocator()
@@ -115,11 +130,12 @@ func NewDecoder(
 
 	tableIDAllocator.Clean()
 	return &decoder{
-		config:       codecConfig,
-		decoder:      newBufferedJSONDecoder(),
-		storage:      externalStorage,
-		upstreamTiDB: db,
-		cache:        common.NewTableInfoProvider(),
+		config:         codecConfig,
+		decoder:        newBufferedJSONDecoder(),
+		storage:        externalStorage,
+		upstreamTiDB:   db,
+		tableInfoCache: make(map[tableKey]*commonType.TableInfo),
+		ddlCommitTs:    make(map[tableNameKey][]uint64),
 	}, nil
 }
 
@@ -556,8 +572,16 @@ func (d *decoder) queryTableInfo(msg canalJSONMessageInterface) *commonType.Tabl
 	schemaName := *msg.getSchema()
 	tableName := *msg.getTable()
 
-	version, tableInfo := d.cache.ReadAt(schemaName, tableName, msg.getCommitTs())
-	if tableInfo == nil {
+	d.tableInfoMu.Lock()
+	defer d.tableInfoMu.Unlock()
+
+	cacheKey := tableKey{
+		schema:      schemaName,
+		table:       tableName,
+		ddlCommitTs: d.getDDLCommitTsLocked(schemaName, tableName, msg.getCommitTs()),
+	}
+	tableInfo, ok := d.tableInfoCache[cacheKey]
+	if !ok {
 		tidbTableInfo := new(timodel.TableInfo)
 		tidbTableInfo.ID = tableIDAllocator.Allocate(schemaName, tableName)
 		tableIDAllocator.AddBlockTableID(schemaName, tableName, tidbTableInfo.ID)
@@ -568,13 +592,44 @@ func (d *decoder) queryTableInfo(msg canalJSONMessageInterface) *commonType.Tabl
 		tidbTableInfo.Indices = newTiIndices(columns, msg.pkNameSet())
 		commonType.SetHandleKeyFlags(tidbTableInfo)
 		tableInfo = commonType.NewTableInfo4Decoder(schemaName, tidbTableInfo)
-		d.cache.Write(schemaName, tableName, version, tableInfo)
+		d.tableInfoCache[cacheKey] = tableInfo
 	}
 	return tableInfo
 }
 
 func (d *decoder) addDDLCommitTs(schema, table string, commitTs uint64) {
-	d.cache.AddDDL(schema, table, commitTs)
+	if schema == "" || table == "" || commitTs == 0 {
+		return
+	}
+
+	d.tableInfoMu.Lock()
+	defer d.tableInfoMu.Unlock()
+
+	key := tableNameKey{schema: schema, table: table}
+	commitTsList := d.ddlCommitTs[key]
+	i := sort.Search(len(commitTsList), func(i int) bool {
+		return commitTsList[i] >= commitTs
+	})
+	if i < len(commitTsList) && commitTsList[i] == commitTs {
+		return
+	}
+	d.ddlCommitTs[key] = slices.Insert(commitTsList, i, commitTs)
+}
+
+func (d *decoder) getDDLCommitTsLocked(schema, table string, commitTs uint64) uint64 {
+	if commitTs == 0 {
+		return 0
+	}
+
+	commitTsList := d.ddlCommitTs[tableNameKey{schema: schema, table: table}]
+	i := sort.Search(len(commitTsList), func(i int) bool {
+		// DMLs with the same commit-ts as a DDL are flushed before that DDL.
+		return commitTsList[i] >= commitTs
+	})
+	if i == 0 {
+		return 0
+	}
+	return commitTsList[i-1]
 }
 
 func newTiColumns(msg canalJSONMessageInterface) []*timodel.ColumnInfo {
