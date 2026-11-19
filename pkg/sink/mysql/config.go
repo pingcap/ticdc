@@ -566,24 +566,6 @@ func configureControlDBConn(db *sql.DB) {
 	})
 }
 
-// IsSinkSafeMode returns whether the sink is in safe mode.
-func IsSinkSafeMode(sinkURI *url.URL, replicaConfig *config.ReplicaConfig) (bool, error) {
-	if sinkURI == nil {
-		return false, errors.ErrMySQLInvalidConfig.GenWithStack("fail to open MySQL sink, empty SinkURI")
-	}
-
-	scheme := strings.ToLower(sinkURI.Scheme)
-	if !config.IsMySQLCompatibleScheme(scheme) {
-		return false, errors.ErrMySQLInvalidConfig.GenWithStack("can't create MySQL sink with unsupported scheme: %s", scheme)
-	}
-	query := sinkURI.Query()
-	var safeMode bool
-	if err := getSafeMode(query, &safeMode); err != nil {
-		return false, err
-	}
-	return safeMode, nil
-}
-
 func getWorkerCount(values url.Values, workerCount *int, workerCountSpecified *bool) error {
 	s := values.Get("worker-count")
 	if len(s) == 0 {

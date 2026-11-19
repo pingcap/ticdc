@@ -210,10 +210,3 @@ func GetGetClusterIDBySinkURIFn() func(context.Context, string, *config.Changefe
 func SetGetClusterIDBySinkURIFnForTest(fn func(context.Context, string, *config.ChangefeedConfig) (uint64, string, bool, error)) {
 	getClusterIDBySinkURIFn = fn
 }
-
-// SetNewMySQLConfigAndDBFnForTest sets the MySQL connection factory function for testing.
-func SetNewMySQLConfigAndDBFnForTest(
-	fn func(context.Context, common.ChangeFeedID, *url.URL, *config.ChangefeedConfig) (*mysql.Config, *sql.DB, error),
-) {
-	newMySQLConfigAndDBFn = fn
-}

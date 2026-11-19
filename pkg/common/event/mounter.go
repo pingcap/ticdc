@@ -252,22 +252,3 @@ func sizeOfBytes(b []byte) int {
 	// bytes data size + bytes struct size.
 	return len(b) + sizeOfEmptyBytes
 }
-
-// GetDDLDefaultDefinition returns the default definition of a column.
-func GetDDLDefaultDefinition(col *model.ColumnInfo) interface{} {
-	defaultValue := col.GetDefaultValue()
-	if defaultValue == nil {
-		defaultValue = col.GetOriginDefaultValue()
-	}
-	defaultDatum := types.NewDatum(defaultValue)
-	return defaultDatum.GetValue()
-}
-
-// DecodeTableID decodes the raw key to a table ID
-func DecodeTableID(key []byte) (int64, error) {
-	_, physicalTableID, err := decodeTableID(key)
-	if err != nil {
-		return 0, errors.Trace(err)
-	}
-	return physicalTableID, nil
-}

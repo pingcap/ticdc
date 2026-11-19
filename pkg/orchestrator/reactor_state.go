@@ -81,11 +81,6 @@ func (s *GlobalReactorState) CaptureRemoveTTLSeconds() int {
 	return s.captureRemoveTTL
 }
 
-// NewGlobalStateForTest creates a new global state for test.
-func NewGlobalStateForTest(clusterID string) *GlobalReactorState {
-	return NewGlobalState(clusterID, 0)
-}
-
 // UpdatePendingChange implements the ReactorState interface
 func (s *GlobalReactorState) UpdatePendingChange() {
 	for c, t := range s.toRemoveCaptures {
