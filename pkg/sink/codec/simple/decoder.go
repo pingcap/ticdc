@@ -53,7 +53,7 @@ type Decoder struct {
 
 	value []byte
 	msg   *message
-	memo  TableInfoProvider
+	memo  *common.TableInfoProvider
 
 	// cachedMessages is used to store the messages which does not have received corresponding table info yet.
 	cachedMessages *list.List
@@ -91,7 +91,7 @@ func NewDecoder(
 		storage:      externalStorage,
 		upstreamTiDB: db,
 
-		memo:           newMemoryTableInfoProvider(),
+		memo:           common.NewTableInfoProvider(),
 		cachedMessages: list.New(),
 	}, errors.Trace(err)
 }
@@ -301,8 +301,8 @@ func (d *Decoder) NextDDLEvent() *commonEvent.DDLEvent {
 	ddl := d.buildDDLEvent(d.msg)
 	d.msg = nil
 
-	d.memo.Write(ddl.TableInfo)
-	d.memo.Write(ddl.MultipleTableInfos[1])
+	d.memo.WriteInfo(ddl.TableInfo)
+	d.memo.WriteInfo(ddl.MultipleTableInfos[1])
 
 	for ele := d.cachedMessages.Front(); ele != nil; {
 		msg := ele.Value.(*message)
@@ -327,68 +327,6 @@ func (d *Decoder) GetCachedMessages() []*common.DMLMessage {
 // GetTableIDs identifies every table and partition whose events belong to the logical table.
 func (d *Decoder) GetTableIDs(schema, table string) []int64 {
 	return tableIDAllocator.GetBlockedTables(schema, table)
-}
-
-// TableInfoProvider is used to store and read table info
-// It works like a schema cache when consuming simple protocol messages
-// It will store multiple versions of table info for a table
-// The table info which has the exact (schema, table, version) will be returned when reading
-type TableInfoProvider interface {
-	Write(info *commonType.TableInfo)
-	Read(schema, table string, version uint64) *commonType.TableInfo
-}
-
-type memoryTableInfoProvider struct {
-	memo map[tableSchemaKey]*commonType.TableInfo
-}
-
-func newMemoryTableInfoProvider() *memoryTableInfoProvider {
-	return &memoryTableInfoProvider{
-		memo: make(map[tableSchemaKey]*commonType.TableInfo),
-	}
-}
-
-func (m *memoryTableInfoProvider) Write(info *commonType.TableInfo) {
-	if info == nil || info.TableName.Schema == "" || info.TableName.Table == "" {
-		return
-	}
-	key := tableSchemaKey{
-		schema:  info.TableName.Schema,
-		table:   info.TableName.Table,
-		version: info.GetUpdateTS(),
-	}
-
-	_, ok := m.memo[key]
-	if ok {
-		log.Debug("table info not stored, since it already exists",
-			zap.String("schema", info.TableName.Schema),
-			zap.String("table", info.TableName.Table),
-			zap.Uint64("version", info.GetUpdateTS()))
-		return
-	}
-
-	m.memo[key] = info
-	log.Info("table info stored",
-		zap.String("schema", info.TableName.Schema),
-		zap.String("table", info.TableName.Table),
-		zap.Uint64("version", info.GetUpdateTS()))
-}
-
-// Read returns the table info with the exact (schema, table, version)
-// Note: It's a blocking call, it will wait until the table info is stored
-func (m *memoryTableInfoProvider) Read(schema, table string, version uint64) *commonType.TableInfo {
-	key := tableSchemaKey{
-		schema:  schema,
-		table:   table,
-		version: version,
-	}
-	return m.memo[key]
-}
-
-type tableSchemaKey struct {
-	schema  string
-	table   string
-	version uint64
 }
 
 // newTiColumnInfo uses columnSchema and IndexSchema to construct a tidb column info.
