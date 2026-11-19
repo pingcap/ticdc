@@ -53,7 +53,7 @@ span_keys_ready() {
 	regions=$(curl -fsS "http://$UP_TIDB_HOST:$UP_TIDB_STATUS/tables/storage_split_span_schema/t/regions" |
 		jq -ce '.record_regions | select(length == 2) | map(.region_id | tostring)') || return 1
 	# Identify node 1's span by region ID instead of parsing redacted span keys from logs.
-	moved_region=$(curl -fsS 'http://127.0.0.1:8301/debug/puller?subscription_limit=20&region_limit=20' |
+	moved_region=$(curl -fsS "http://127.0.0.1:8301/debug/puller?subscription_limit=20&region_limit=20&keyspace=$KEYSPACE_NAME" |
 		jq -er --arg table_id "$table_id" '[.slow_subscriptions[] |
 			select(.table_id == $table_id and .initialized and .locked_regions == 1) |
 			.slow_regions[].region_id] | select(length == 1) | .[0]') || return 1

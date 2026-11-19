@@ -415,7 +415,7 @@ def move_table():
 
 
 def resign_owner():
-    url = BASE_URL1 + "/owner/resign"
+    url = BASE_URL1 + "/owner/resign?keyspace=keyspace1"
     resp = rq.post(url, auth=Auth, cert=CERT, verify=VERIFY)
     assert resp.status_code == rq.codes.ok
 
