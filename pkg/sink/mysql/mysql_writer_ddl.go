@@ -111,7 +111,7 @@ func (w *Writer) execDDL(event *commonEvent.DDLEvent) error {
 		_, err = tx.ExecContext(ctx, "USE "+common.QuoteName(event.GetTargetSchemaName())+";")
 		if err != nil {
 			if rbErr := tx.Rollback(); rbErr != nil {
-				log.Error("Failed to rollback", zap.Error(err))
+				log.Error("Failed to rollback", zap.Error(rbErr))
 			}
 			return err
 		}
