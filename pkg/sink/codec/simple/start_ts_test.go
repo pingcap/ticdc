@@ -68,7 +68,7 @@ func newEncoderDecoder(t *testing.T, includeStartTs bool) (*Encoder, *Decoder) {
 	cfg.SimpleIncludeStartTs = includeStartTs
 	enc, err := NewEncoder(cfg, nil)
 	require.NoError(t, err)
-	dec, err := NewDecoder(ctx, cfg, nil, common.NewTableInfoCache(), common.NewTableIDAllocator())
+	dec, err := NewDecoder(ctx, cfg, nil, common.NewTableInfoProvider(), common.NewTableIDAllocator())
 	require.NoError(t, err)
 	return enc.(*Encoder), dec.(*Decoder)
 }

@@ -69,7 +69,7 @@ type Group struct {
 	upstreamDB  *sql.DB
 	selectors   *columnselector.ColumnSelectors
 	decoders    []decoder
-	schemas     *common.TableInfoCache
+	schemas     *common.TableInfoProvider
 	allocator   *common.TableIDAllocator
 	// inputs dispatches an undecoded input to the decoder owning its partition.
 	queues []chan *Future
@@ -105,7 +105,7 @@ func NewOptions(
 // tableInfoSharer is implemented by protocol decoders that read table info
 // through the cache shared by all partitions.
 type tableInfoSharer interface {
-	ShareTableInfo(*common.TableInfoCache)
+	ShareTableInfo(*common.TableInfoProvider)
 }
 
 // NewGroup builds a decode group for the source partitions.
@@ -117,7 +117,7 @@ func NewGroup(ctx context.Context, opts Options) *Group {
 		codecConfig: codecConfig,
 		upstreamDB:  upstreamDB,
 		allocator:   common.NewTableIDAllocator(),
-		schemas:     common.NewTableInfoCache(),
+		schemas:     common.NewTableInfoProvider(),
 		decoders:    make([]decoder, partitions),
 		queues:      make([]chan *Future, partitions),
 		output:      make(chan *Future, decoderQueueSize),
@@ -163,7 +163,7 @@ func NewGroup(ctx context.Context, opts Options) *Group {
 }
 
 // Schemas returns the table info cache shared by the decoders.
-func (d *Group) Schemas() *common.TableInfoCache {
+func (d *Group) Schemas() *common.TableInfoProvider {
 	return d.schemas
 }
 

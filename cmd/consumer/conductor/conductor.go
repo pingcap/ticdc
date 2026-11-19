@@ -317,7 +317,7 @@ type Conductor struct {
 	positionsMu sync.Mutex
 
 	reader    source.Reader
-	schemas   *codecCommon.TableInfoCache
+	schemas   *codecCommon.TableInfoProvider
 	validator source.Validator
 	notifier  source.SchemaNotifier
 
@@ -332,7 +332,7 @@ type Conductor struct {
 	queuedDDLs map[ddl.Key]struct{}
 }
 
-func New(reader source.Reader, schemas *codecCommon.TableInfoCache) *Conductor {
+func New(reader source.Reader, schemas *codecCommon.TableInfoProvider) *Conductor {
 	c := &Conductor{
 		reader:              reader,
 		schemas:             schemas,

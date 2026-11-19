@@ -16,11 +16,11 @@ package open
 import (
 	"context"
 	"database/sql"
+	"database/sql/driver"
 	"encoding/base64"
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
-	"maps"
 	"path/filepath"
 	"slices"
 	"strconv"
@@ -41,24 +41,11 @@ import (
 	"go.uber.org/zap"
 )
 
-type tableCacheKey struct {
-	schema      string
-	table       string
-	ddlCommitTs uint64
-}
-
-type cachedTable struct {
-	columns    map[string]column
-	info       *commonType.TableInfo
-	projection string
-}
-
 type decoder struct {
 	// Keep old intervals available for delayed decoding of buffered messages.
-	cache       *common.TableInfoCache
-	ddlCommitTs map[[2]string][]uint64
-	keyBytes    []byte
-	valueBytes  []byte
+	cache      *common.TableInfoProvider
+	keyBytes   []byte
+	valueBytes []byte
 
 	nextKey *messageKey
 
@@ -98,7 +85,7 @@ func NewDecoder(
 		config:       config,
 		storage:      externalStorage,
 		upstreamTiDB: db,
-		cache:        common.NewTableInfoCache(),
+		cache:        common.NewTableInfoProvider(),
 	}, nil
 }
 
@@ -203,7 +190,7 @@ func (b *decoder) NextDDLEvent() *commonEvent.DDLEvent {
 		// tables rather than relying on the single name carried by the message.
 		schema, table = "", ""
 	}
-	b.addDDLCommitTs(schema, table, result.FinishedTs)
+	b.cache.AddDDL(schema, table, result.FinishedTs)
 
 	b.allocator.AddBlockTableID(result.SchemaName, result.TableName, b.allocator.Allocate(result.SchemaName, result.TableName))
 	result.BlockedTables = common.GetBlockedTables(b.allocator, result)
@@ -286,6 +273,9 @@ func (b *decoder) decodeDMLMessage(key *messageKey, value []byte) *commonEvent.D
 func buildColumns(
 	holder *common.ColumnsHolder, columns map[string]column,
 ) map[string]column {
+	if columns == nil {
+		columns = make(map[string]column, holder.Length())
+	}
 	columnsCount := holder.Length()
 	for i := 0; i < columnsCount; i++ {
 		columnType := holder.Types[i]
@@ -311,33 +301,48 @@ func buildColumns(
 	return columns
 }
 
-// snapshotColumns uses protocol metadata so snapshot rows have the same chunk
-// layout as ordinary messages. Cached columns never retain row values.
+// snapshotColumns fills the rows of a handle-key-only event from the upstream
+// snapshot. The columns keep the layout of the messages, which carry the types
+// a snapshot query does not report back.
 func (b *decoder) snapshotColumns(ctx context.Context, key *messageKey, ts uint64, conditions map[string]any, columns map[string]column) map[string]column {
 	schema, table := key.Schema, key.Table
-	cacheKey := b.tableCacheKey(key)
-	cached := b.cachedTable(cacheKey)
-	var holder *common.ColumnsHolder
-	if cached == nil {
-		holder = common.MustSnapshotQuery(ctx, b.upstreamTiDB, ts, schema, table, conditions)
+	_, info := b.cachedTable(key)
+	if info == nil {
+		holder := common.MustSnapshotQuery(ctx, b.upstreamTiDB, ts, schema, table, conditions)
 		columns = buildColumns(holder, columns)
-		b.queryTableInfo(key, &messageRow{Update: columns})
-		cached = b.cachedTable(cacheKey)
+		info = b.queryTableInfo(key, &messageRow{Update: columns})
+		if !slices.ContainsFunc(info.GetColumns(), isEnumOrSet) {
+			return columns
+		}
 	}
-	// On a cold cache, ENUM/SET names need another query to obtain numeric values.
-	if holder == nil || slices.ContainsFunc(cached.info.GetColumns(), func(col *timodel.ColumnInfo) bool {
-		return col.GetType() == mysql.TypeEnum || col.GetType() == mysql.TypeSet
-	}) {
-		holder = common.MustSnapshotQuery(ctx, b.upstreamTiDB, ts, schema, table, conditions, cached.projection)
-	}
-	result := maps.Clone(cached.columns)
+	// A snapshot returns ENUM/SET as strings, while the protocol carries their
+	// numeric values.
+	holder := common.MustSnapshotQuery(ctx, b.upstreamTiDB, ts, schema, table, conditions, projection(info))
+	values := make(map[string]driver.Value, len(holder.Types))
 	for i, typ := range holder.Types {
-		name := typ.Name()
-		col := result[name]
-		col.Value = holder.Values[i]
-		result[name] = col
+		values[typ.Name()] = holder.Values[i]
+	}
+	result := make(map[string]column, len(info.GetColumns()))
+	for _, col := range info.GetColumns() {
+		result[col.Name.O] = column{Type: col.GetType(), Value: values[col.Name.O]}
 	}
 	return result
+}
+
+func isEnumOrSet(col *timodel.ColumnInfo) bool {
+	return col.GetType() == mysql.TypeEnum || col.GetType() == mysql.TypeSet
+}
+
+func projection(info *commonType.TableInfo) string {
+	names := make([]string, 0, len(info.GetColumns()))
+	for _, col := range info.GetColumns() {
+		name := commonType.QuoteName(col.Name.O)
+		if isEnumOrSet(col) {
+			name = "CAST(" + name + " AS UNSIGNED) AS " + name
+		}
+		names = append(names, name)
+	}
+	return strings.Join(names, ",")
 }
 
 func (b *decoder) assembleHandleKeyOnlyDMLEvent(ctx context.Context, key *messageKey, row *messageRow) *commonEvent.DMLEvent {
@@ -404,45 +409,12 @@ func (b *decoder) assembleEventFromClaimCheckStorage(ctx context.Context, key *m
 }
 
 // ShareTableInfo reads table info through the cache shared by all partitions.
-func (b *decoder) ShareTableInfo(cache *common.TableInfoCache) {
+func (b *decoder) ShareTableInfo(cache *common.TableInfoProvider) {
 	b.cache = cache
 }
 
-func (b *decoder) cachedTable(key tableCacheKey) *cachedTable {
-	cached, _ := b.cache.ReadValue(key.schema, key.table, key.ddlCommitTs).(*cachedTable)
-	return cached
-}
-
-func (b *decoder) cacheTable(key tableCacheKey, cached *cachedTable) {
-	b.cache.WriteValue(key.schema, key.table, key.ddlCommitTs, cached)
-}
-
-// DML at the DDL commit timestamp is flushed before that DDL.
-func (b *decoder) tableCacheKey(key *messageKey) tableCacheKey {
-	var version uint64
-	for _, name := range [][2]string{{"", ""}, {key.Schema, ""}, {key.Schema, key.Table}} {
-		timestamps := b.ddlCommitTs[name]
-		i, _ := slices.BinarySearch(timestamps, key.Ts)
-		if i > 0 {
-			version = max(version, timestamps[i-1])
-		}
-	}
-	return tableCacheKey{schema: key.Schema, table: key.Table, ddlCommitTs: version}
-}
-
-func (b *decoder) addDDLCommitTs(schema, table string, ts uint64) {
-	if ts == 0 {
-		return
-	}
-	if b.ddlCommitTs == nil {
-		b.ddlCommitTs = make(map[[2]string][]uint64)
-	}
-	name := [2]string{schema, table}
-	timestamps := b.ddlCommitTs[name]
-	i, exists := slices.BinarySearch(timestamps, ts)
-	if !exists {
-		b.ddlCommitTs[name] = slices.Insert(timestamps, i, ts)
-	}
+func (b *decoder) cachedTable(key *messageKey) (uint64, *commonType.TableInfo) {
+	return b.cache.ReadAt(key.Schema, key.Table, key.Ts)
 }
 
 func (b *decoder) queryTableInfo(key *messageKey, value *messageRow) *commonType.TableInfo {
@@ -450,33 +422,19 @@ func (b *decoder) queryTableInfo(key *messageKey, value *messageRow) *commonType
 	if columns == nil {
 		columns = value.Delete
 	}
-	tableKey := b.tableCacheKey(key)
-	if cached := b.cachedTable(tableKey); cached != nil {
-		id := cached.info.TableName.TableID
+	version, info := b.cachedTable(key)
+	if info != nil {
+		id := info.TableName.TableID
 		key.Partition = &id
-		return cached.info
+		return info
 	}
-	info := b.newTableInfo(key, value)
+	info = b.newTableInfo(key, value)
 	// A delete can contain only handle columns. Use a complete row to seed
 	// the cache; a cold delete must not define the layout of later inserts.
 	if value.Update == nil {
 		return info
 	}
-	metadata := make(map[string]column, len(columns))
-	for name, col := range columns {
-		col.Value = nil
-		col.WhereHandle = nil
-		metadata[name] = col
-	}
-	names := make([]string, 0, len(columns))
-	for _, col := range info.GetColumns() {
-		name := commonType.QuoteName(col.Name.O)
-		if col.GetType() == mysql.TypeEnum || col.GetType() == mysql.TypeSet {
-			name = "CAST(" + name + " AS UNSIGNED) AS " + name
-		}
-		names = append(names, name)
-	}
-	b.cacheTable(tableKey, &cachedTable{columns: metadata, info: info, projection: strings.Join(names, ",")})
+	b.cache.Write(key.Schema, key.Table, version, info)
 	return info
 }
 

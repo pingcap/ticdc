@@ -1282,7 +1282,7 @@ func TestRowKey(t *testing.T) {
 // name) was used instead, which made every UPDATE scan the whole table.
 func TestTableInfoFromMessageLocatesRowByPrimaryKey(t *testing.T) {
 	dec := &decoder{
-		cache:     common.NewTableInfoCache(),
+		cache:     common.NewTableInfoProvider(),
 		allocator: common.NewTableIDAllocator(),
 	}
 	tableInfo := dec.queryTableInfo(&canalJSONMessageWithTiDBExtension{

@@ -72,7 +72,7 @@ func NewEventDecoder(
 		}
 		return avro.NewDecoder(codecConfig, schemaM, topic, upstreamTiDB, allocator), nil
 	case config.ProtocolSimple:
-		return simple.NewDecoder(ctx, codecConfig, upstreamTiDB, common.NewTableInfoCache(), allocator)
+		return simple.NewDecoder(ctx, codecConfig, upstreamTiDB, common.NewTableInfoProvider(), allocator)
 	case config.ProtocolDebezium:
 		return debezium.NewDecoder(codecConfig, upstreamTiDB, allocator), nil
 	case config.ProtocolDebeziumAvro:

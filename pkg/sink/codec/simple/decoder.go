@@ -51,7 +51,7 @@ type Decoder struct {
 
 	value     []byte
 	msg       *message
-	memo      *common.TableInfoCache
+	memo      *common.TableInfoProvider
 	allocator *common.TableIDAllocator
 
 	// cachedMessages is used to store the messages which does not have received corresponding table info yet.
@@ -62,7 +62,7 @@ type Decoder struct {
 
 // NewDecoder returns a new Decoder
 func NewDecoder(
-	ctx context.Context, config *common.Config, db *sql.DB, provider *common.TableInfoCache,
+	ctx context.Context, config *common.Config, db *sql.DB, provider *common.TableInfoProvider,
 	allocator *common.TableIDAllocator,
 ) (common.Decoder, error) {
 	var (
@@ -281,8 +281,8 @@ func (d *Decoder) NextDDLEvent() *commonEvent.DDLEvent {
 	ddl := d.buildDDLEvent(d.msg)
 	d.msg = nil
 
-	d.memo.Write(ddl.TableInfo)
-	d.memo.Write(ddl.MultipleTableInfos[1])
+	d.memo.WriteInfo(ddl.TableInfo)
+	d.memo.WriteInfo(ddl.MultipleTableInfos[1])
 
 	for ele := d.cachedMessages.Front(); ele != nil; {
 		msg := ele.Value.(*message)

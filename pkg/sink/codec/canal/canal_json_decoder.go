@@ -91,7 +91,7 @@ type decoder struct {
 
 	storage      storeapi.Storage
 	upstreamTiDB *sql.DB
-	cache        *common.TableInfoCache
+	cache        *common.TableInfoProvider
 	ddlCommitTs  map[[2]string][]uint64
 	allocator    *common.TableIDAllocator
 }
@@ -124,7 +124,7 @@ func NewDecoder(
 		decoder:      newBufferedJSONDecoder(),
 		storage:      externalStorage,
 		upstreamTiDB: db,
-		cache:        common.NewTableInfoCache(),
+		cache:        common.NewTableInfoProvider(),
 	}, nil
 }
 
@@ -380,7 +380,7 @@ func (d *decoder) NextDDLEvent() *commonEvent.DDLEvent {
 	result.BlockedTables = common.GetBlockedTables(d.allocator, result)
 	// Rows after this DDL carry its commit ts, so they read the new table info;
 	// rows buffered before it keep reading the cached older version.
-	d.addDDLCommitTs(result.SchemaName, result.TableName, result.FinishedTs)
+	d.cache.AddDDL(result.SchemaName, result.TableName, result.FinishedTs)
 	return result
 }
 
@@ -533,45 +533,16 @@ func formatValue(value any, ft types.FieldType) any {
 }
 
 // ShareTableInfo reads table info through the cache shared by all partitions.
-func (d *decoder) ShareTableInfo(cache *common.TableInfoCache) {
+func (d *decoder) ShareTableInfo(cache *common.TableInfoProvider) {
 	d.cache = cache
-}
-
-// tableVersion returns the commit ts of the last DDL before the message. Rows
-// of a table are ordered, so the version only moves forward.
-func (d *decoder) tableVersion(schema, table string, ts uint64) uint64 {
-	var version uint64
-	for _, name := range [][2]string{{"", ""}, {schema, ""}, {schema, table}} {
-		timestamps := d.ddlCommitTs[name]
-		i, _ := slices.BinarySearch(timestamps, ts)
-		if i > 0 {
-			version = max(version, timestamps[i-1])
-		}
-	}
-	return version
-}
-
-func (d *decoder) addDDLCommitTs(schema, table string, ts uint64) {
-	if ts == 0 {
-		return
-	}
-	if d.ddlCommitTs == nil {
-		d.ddlCommitTs = make(map[[2]string][]uint64)
-	}
-	name := [2]string{schema, table}
-	timestamps := d.ddlCommitTs[name]
-	i, exists := slices.BinarySearch(timestamps, ts)
-	if !exists {
-		d.ddlCommitTs[name] = slices.Insert(timestamps, i, ts)
-	}
 }
 
 func (d *decoder) queryTableInfo(msg canalJSONMessageInterface) *commonType.TableInfo {
 	schemaName := *msg.getSchema()
 	tableName := *msg.getTable()
 
-	version := d.tableVersion(schemaName, tableName, msg.getCommitTs())
-	if cached, _ := d.cache.ReadValue(schemaName, tableName, version).(*commonType.TableInfo); cached != nil {
+	version, cached := d.cache.ReadAt(schemaName, tableName, msg.getCommitTs())
+	if cached != nil {
 		return cached
 	}
 	{
@@ -585,7 +556,7 @@ func (d *decoder) queryTableInfo(msg canalJSONMessageInterface) *commonType.Tabl
 		tidbTableInfo.Indices = newTiIndices(columns, msg.pkNameSet())
 		commonType.SetHandleKeyFlags(tidbTableInfo)
 		tableInfo := commonType.NewTableInfo4Decoder(schemaName, tidbTableInfo)
-		d.cache.WriteValue(schemaName, tableName, version, tableInfo)
+		d.cache.Write(schemaName, tableName, version, tableInfo)
 		return tableInfo
 	}
 }
