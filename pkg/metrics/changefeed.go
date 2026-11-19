@@ -59,14 +59,14 @@ var (
 			Subsystem: "maintainer",
 			Name:      "syncpoint_ts",
 			Help:      "upstream timestamp (physical time in ms) of the latest syncpoint written to the downstream",
-		}, []string{GetKeyspaceLabel(), "changefeed"})
+		}, []string{getKeyspaceLabel(), "changefeed"})
 	MaintainerSyncPointTsLagGauge = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Namespace: "ticdc",
 			Subsystem: "maintainer",
 			Name:      "syncpoint_ts_lag",
 			Help:      "age in seconds of the latest syncpoint's upstream timestamp, measured against current upstream PD time",
-		}, []string{GetKeyspaceLabel(), "changefeed"})
+		}, []string{getKeyspaceLabel(), "changefeed"})
 
 	CoordinatorCounter = prometheus.NewCounter(
 		prometheus.CounterOpts{
