@@ -17,12 +17,7 @@ package source
 import (
 	"context"
 	"encoding/json"
-	"io"
-	"io/fs"
 	"maps"
-	"os"
-	"path"
-	"path/filepath"
 	"slices"
 	"strconv"
 	"strings"
@@ -39,13 +34,9 @@ import (
 	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/tidb/pkg/objstore/storeapi"
 	"go.uber.org/zap"
-	"golang.org/x/sync/errgroup"
 )
 
-const (
-	storageScanInterval = 2 * time.Second
-	storageScanPageSize = 1000
-)
+const storageScanInterval = 2 * time.Second
 
 type storageMetadata struct {
 	CheckpointTs uint64 `json:"checkpoint-ts"`
@@ -54,12 +45,6 @@ type storageMetadata struct {
 type storageIndexRange struct {
 	start uint64
 	end   uint64
-}
-
-type storageIndex struct {
-	path  string
-	key   cloudstorage.DMLPathKey
-	index cloudstorage.FileIndex
 }
 
 type storageInput struct {
@@ -110,19 +95,6 @@ func newStorageReader(ctx context.Context, opts Options) *storageReader {
 	}
 }
 
-func (c *storageReader) readFile(ctx context.Context, path string) ([]byte, error) {
-	reader, err := c.storage.Open(ctx, path, nil)
-	if err != nil {
-		return nil, errors.WrapError(errors.ErrExternalStorageAPI, err, "open Storage file")
-	}
-	defer closeStorageFile(reader, path)
-	data, err := io.ReadAll(reader)
-	if err != nil {
-		return nil, errors.WrapError(errors.ErrExternalStorageAPI, err, "read Storage file")
-	}
-	return data, nil
-}
-
 func (c *storageReader) ddlWatermark(table string) uint64 {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -143,49 +115,38 @@ func (c *storageReader) scanFiles(ctx context.Context) (map[cloudstorage.DMLPath
 		}
 	}
 	files := make(map[cloudstorage.DMLPathKey]map[cloudstorage.FileIndexKey]storageIndexRange)
-	var paths []*storageIndex
-	metadata, err := c.metadataPaths(ctx)
-	if err != nil {
-		return nil, err
-	}
-	for _, path := range metadata {
+	err := c.storage.WalkDir(ctx, &storeapi.WalkOption{}, func(path string, _ int64) error {
 		if cloudstorage.IsSchemaFile(path) {
 			key, added, err := c.readSchema(ctx, path)
 			if err != nil {
-				return nil, err
+				return err
 			}
 			if added {
 				files[cloudstorage.NewSchemaFileDMLPathKey(key)] = nil
 			}
-			continue
+			return nil
+		}
+		if !strings.HasSuffix(path, ".index") {
+			return nil
 		}
 		var key cloudstorage.DMLPathKey
 		if err := key.ParseIndexFilePath(c.dateSeparator, path); err != nil {
-			continue // Ignore unsupported index paths in a shared Storage directory.
+			return nil // Ignore unsupported index paths in a shared Storage directory.
 		}
 		if (c.sourceCheckpoint > 0 && key.TableVersion > c.sourceCheckpoint) || key.TableVersion < c.ddlWatermark(key.GetKey()) {
-			continue
+			return nil
 		}
-		paths = append(paths, &storageIndex{
-			path: path,
-			key:  key,
-		})
-	}
-	if err := c.readIndices(ctx, paths); err != nil {
-		return nil, err
-	}
-	for _, path := range paths {
-		key, index := path.key, path.index
+		index, err := c.readIndex(ctx, path)
+		if err != nil {
+			return err
+		}
 		indices := c.fileIndices[key]
 		if indices == nil {
 			indices = make(map[cloudstorage.FileIndexKey]uint64)
 			c.fileIndices[key] = indices
 		}
-		if _, known := indices[index.FileIndexKey]; !known {
-			indices[index.FileIndexKey] = 0
-		}
-
 		previous := indices[index.FileIndexKey]
+		indices[index.FileIndexKey] = max(previous, index.Idx)
 		if index.Idx > previous {
 			if files[key] == nil {
 				files[key] = make(map[cloudstorage.FileIndexKey]storageIndexRange)
@@ -195,34 +156,17 @@ func (c *storageReader) scanFiles(ctx context.Context) (map[cloudstorage.DMLPath
 				end:   index.Idx,
 			}
 		}
-	}
-	return files, nil
+		return nil
+	})
+	return files, errors.WrapError(errors.ErrExternalStorageAPI, err, "scan Storage metadata")
 }
 
-func (c *storageReader) readIndices(ctx context.Context, paths []*storageIndex) error {
-	g, ctx := errgroup.WithContext(ctx)
-	workers := min(8, len(paths))
-	for worker := range workers {
-		g.Go(func() error {
-			return c.readIndexWorker(ctx, paths, worker, workers)
-		})
+func (c *storageReader) readIndex(ctx context.Context, path string) (cloudstorage.FileIndex, error) {
+	data, err := c.storage.ReadFile(ctx, path)
+	if err != nil {
+		return cloudstorage.FileIndex{}, errors.WrapError(errors.ErrExternalStorageAPI, err, "read Storage index")
 	}
-	return g.Wait()
-}
-
-func (c *storageReader) readIndexWorker(ctx context.Context, paths []*storageIndex, worker, workers int) error {
-	for index := worker; index < len(paths) && ctx.Err() == nil; index += workers {
-		path := paths[index]
-		data, err := c.readFile(ctx, path.path)
-		if err != nil {
-			return err
-		}
-		path.index, err = cloudstorage.ParseFileIndexFromFileName(strings.TrimSuffix(string(data), "\n"), c.fileExtension)
-		if err != nil {
-			return err
-		}
-	}
-	return context.Cause(ctx)
+	return cloudstorage.ParseFileIndexFromFileName(strings.TrimSuffix(string(data), "\n"), c.fileExtension)
 }
 
 func (c *storageReader) readSchema(ctx context.Context, path string) (cloudstorage.SchemaPathKey, bool, error) {
@@ -231,9 +175,9 @@ func (c *storageReader) readSchema(ctx context.Context, path string) (cloudstora
 	if (c.sourceCheckpoint > 0 && key.TableVersion > c.sourceCheckpoint) || c.schemas[key] != nil || key.TableVersion < c.ddlWatermark(key.GetKey()) {
 		return key, false, nil
 	}
-	data, err := c.readFile(ctx, path)
+	data, err := c.storage.ReadFile(ctx, path)
 	if err != nil {
-		return key, false, err
+		return key, false, errors.WrapError(errors.ErrExternalStorageAPI, err, "read Storage schema")
 	}
 	var file cloudstorage.SchemaFile
 	if err := json.Unmarshal(data, &file); err != nil {
@@ -341,9 +285,9 @@ func (c *storageReader) scanInputs(ctx context.Context) error {
 		return errors.WrapError(errors.ErrExternalStorageAPI, err, "check Storage metadata")
 	}
 	if exists {
-		data, err := c.readFile(ctx, "metadata")
+		data, err := c.storage.ReadFile(ctx, "metadata")
 		if err != nil {
-			return err
+			return errors.WrapError(errors.ErrExternalStorageAPI, err, "read Storage metadata")
 		}
 		var metadata storageMetadata
 		if err := json.Unmarshal(data, &metadata); err != nil {
@@ -377,23 +321,14 @@ func (c *storageReader) scanInputs(ctx context.Context) error {
 
 func (c *storageReader) readDMLFile(ctx context.Context, input storageInput, schema *cloudstorage.SchemaFile, tableID int64) (*Payload, error) {
 	path := input.key.GenerateDMLFilePath(&input.index, c.fileExtension, c.fileIndexWidth)
-	f, err := c.storage.Open(ctx, path, nil)
+	data, err := c.storage.ReadFile(ctx, path)
 	if err != nil {
-		return nil, errors.WrapError(errors.ErrExternalStorageAPI, err, "open Storage DML file")
-	}
-	defer closeStorageFile(f, path)
-	size, err := f.GetFileSize()
-	if err != nil {
-		return nil, errors.WrapError(errors.ErrExternalStorageAPI, err, "get Storage DML file size")
-	}
-	data := make([]byte, size)
-	if _, err := io.ReadFull(f, data); err != nil {
 		return nil, errors.WrapError(errors.ErrExternalStorageAPI, err, "read Storage DML file")
 	}
 	c.fileIndices[input.key][input.index.FileIndexKey] = input.index.Idx
 	return &Payload{
 		Value: data,
-		Bytes: size,
+		Bytes: int64(len(data)),
 		File:  &File{Schema: schema, TableID: tableID},
 	}, nil
 }
@@ -419,122 +354,4 @@ func (c *storageReader) MarkProcessed(tables []event.SchemaTableName, timestamp 
 
 func (c *storageReader) Close() {
 	c.storage.Close()
-}
-
-func closeStorageFile(file io.Closer, path string) {
-	if err := file.Close(); err != nil {
-		log.Warn("storage input file close failed", zap.String("path", path), zap.Error(err))
-	}
-}
-
-// Discover metadata on every scan so new tables, dates and dispatcher indexes
-// remain visible. Data-file contents and sequence numbers come from the indexes.
-func (c *storageReader) metadataPaths(ctx context.Context) ([]string, error) {
-	var paths []string
-	uri := c.storage.URI()
-	if root, local := strings.CutPrefix(uri, "file://"); local {
-		// WalkDir uses directory entries, avoiding a stat for every data file.
-		err := filepath.WalkDir(root, func(name string, entry fs.DirEntry, err error) error {
-			return collectLocalMetadata(ctx, root, &paths, name, entry, err)
-		})
-		return paths, errors.WrapError(errors.ErrExternalStorageAPI, err, "scan local Storage metadata")
-	}
-	if !strings.HasPrefix(uri, "s3://") && !strings.HasPrefix(uri, "gcs://") {
-		return c.listMetadata(ctx)
-	}
-
-	// These backends support ordered listing with StartAfter. Small directories
-	// use normal listing; a full page of data files lets us skip the remaining
-	// sequences in that directory without adding requests for small directories.
-	var after string
-	for {
-		var (
-			next          string
-			directory     string
-			dataFiles     int
-			cursorIgnored bool
-		)
-		err := c.storage.WalkDir(ctx, &storeapi.WalkOption{StartAfter: after, ListCount: storageScanPageSize}, func(name string, _ int64) error {
-			var err error
-			next, cursorIgnored, err = c.scanMetadataEntry(after, name, &paths, &directory, &dataFiles)
-			return err
-		})
-		if err != nil && (!errors.Is(err, io.EOF) || (next == "" && !cursorIgnored)) {
-			return nil, errors.WrapError(errors.ErrExternalStorageAPI, err, "discover Storage metadata")
-		}
-		if cursorIgnored {
-			// Preserve discovery on compatible services that ignore StartAfter.
-			return c.listMetadata(ctx)
-		}
-		if next == "" {
-			return paths, nil
-		}
-		after = next
-	}
-}
-
-func (c *storageReader) listMetadata(ctx context.Context) ([]string, error) {
-	var paths []string
-	err := c.storage.WalkDir(ctx, &storeapi.WalkOption{}, func(name string, _ int64) error {
-		return collectStorageMetadata(&paths, name)
-	})
-	return paths, errors.WrapError(errors.ErrExternalStorageAPI, err, "scan Storage metadata")
-}
-
-func isStorageMetadata(name string) bool {
-	return cloudstorage.IsSchemaFile(name) || strings.HasSuffix(name, ".index")
-}
-
-func collectLocalMetadata(ctx context.Context, root string, paths *[]string, name string, entry fs.DirEntry, err error) error {
-	if err != nil {
-		if os.IsNotExist(err) {
-			return nil
-		}
-		return err
-	}
-	if err := context.Cause(ctx); err != nil {
-		return err
-	}
-	if entry.IsDir() {
-		return nil
-	}
-	relative, err := filepath.Rel(root, name)
-	if err != nil {
-		return err
-	}
-	name = filepath.ToSlash(relative)
-	if isStorageMetadata(name) {
-		*paths = append(*paths, name)
-	}
-	return nil
-}
-
-func (c *storageReader) scanMetadataEntry(after, name string, paths *[]string, directory *string, dataFiles *int) (string, bool, error) {
-	if name <= after {
-		return "", true, io.EOF
-	}
-	filename := path.Base(name)
-	if strings.HasPrefix(filename, "CDC") && strings.HasSuffix(filename, c.fileExtension) {
-		if parent := path.Dir(name); parent != *directory {
-			*directory, *dataFiles = parent, 0
-		}
-		*dataFiles++
-		if *dataFiles >= storageScanPageSize {
-			*dataFiles = 0
-			_, err := cloudstorage.ParseFileIndexFromFileName(filename, c.fileExtension)
-			var key cloudstorage.DMLPathKey
-			if err == nil && key.ParseIndexFilePath(c.dateSeparator, path.Join(*directory, "meta", "CDC.index")) == nil {
-				// Skip data-file names while preserving metadata and later siblings.
-				return path.Join(*directory, "CDD"), false, io.EOF
-			}
-		}
-	}
-	return "", false, collectStorageMetadata(paths, name)
-}
-
-func collectStorageMetadata(paths *[]string, name string) error {
-	if isStorageMetadata(name) {
-		*paths = append(*paths, name)
-	}
-	return nil
 }

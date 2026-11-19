@@ -166,13 +166,9 @@ func (c *pulsarReader) Read(ctx context.Context) ([]*Payload, error) {
 		return nil, context.Cause(ctx)
 	case message = <-c.consumer.Chan():
 	}
-	partition, ok := c.partitions[message.Topic()]
-	if !ok {
-		return nil, errors.ErrPulsarInvalidConfig.GenWithStackByArgs("Pulsar partitions changed; restart the consumer")
-	}
 	id := message.ID()
 	return []*Payload{{
-		Partition: partition,
+		Partition: c.partitions[message.Topic()],
 		Key:       []byte(message.Key()),
 		Value:     message.Payload(),
 		Bytes:     int64(len(message.Key()) + len(message.Payload())),

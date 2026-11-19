@@ -119,6 +119,16 @@ type Options struct {
 	CodecConfig   *common.Config
 }
 
+// NewOptions builds source options for the upstream URI.
+func NewOptions(upstreamURI *url.URL, consumerID string, replicaConfig *config.ReplicaConfig, codecConfig *common.Config) Options {
+	return Options{
+		UpstreamURI:   upstreamURI,
+		ConsumerID:    consumerID,
+		ReplicaConfig: replicaConfig,
+		CodecConfig:   codecConfig,
+	}
+}
+
 // Open builds the reader for the upstream URI.
 func Open(ctx context.Context, opts Options) Reader {
 	switch TypeOf(opts.UpstreamURI) {

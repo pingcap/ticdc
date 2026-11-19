@@ -46,6 +46,15 @@ type Options struct {
 	CodecConfig   *codecCommon.Config
 }
 
+// NewOptions builds writer options for the downstream URI.
+func NewOptions(downstreamURI string, replicaConfig *config.ReplicaConfig, codecConfig *codecCommon.Config) Options {
+	return Options{
+		DownstreamURI: downstreamURI,
+		ReplicaConfig: replicaConfig,
+		CodecConfig:   codecConfig,
+	}
+}
+
 // New creates a writer targeting the configured downstream sink.
 func New(ctx context.Context, opts Options) *Writer {
 	changefeedID := common.NewChangeFeedIDWithName("consumer", common.DefaultKeyspaceName)

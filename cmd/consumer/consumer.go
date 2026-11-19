@@ -57,21 +57,12 @@ func newConsumer(ctx context.Context, options *options) *consumer {
 	codecConfig := newCodecConfig(upstreamURI, replicaConfig)
 	logConsumerConfig(sourceType, consumerID, upstreamURI, options.downstreamURI, replicaConfig, codecConfig)
 
-	reader := source.Open(ctx, source.Options{
-		UpstreamURI:   upstreamURI,
-		ConsumerID:    consumerID,
-		ReplicaConfig: replicaConfig,
-		CodecConfig:   codecConfig,
-	})
+	reader := source.Open(ctx, source.NewOptions(upstreamURI, consumerID, replicaConfig, codecConfig))
 	c := &consumer{
 		reader:    reader,
-		decoder:   decode.NewGroup(ctx, decode.Options{CodecConfig: codecConfig, ReplicaConfig: replicaConfig, Partitions: reader.Partitions(), Topic: strings.Trim(upstreamURI.Path, "/"), UpstreamURI: upstreamURI}),
+		decoder:   decode.NewGroup(ctx, decode.NewOptions(codecConfig, replicaConfig, reader, upstreamURI)),
 		conductor: conductor.New(reader),
-		writer: writer.New(ctx, writer.Options{
-			DownstreamURI: options.downstreamURI,
-			ReplicaConfig: replicaConfig,
-			CodecConfig:   codecConfig,
-		}),
+		writer:    writer.New(ctx, writer.NewOptions(options.downstreamURI, replicaConfig, codecConfig)),
 	}
 	c.conductor.OnCheckpoint(c.decoder.ReleaseSchemas)
 	return c

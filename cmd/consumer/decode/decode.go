@@ -22,6 +22,7 @@ import (
 	"context"
 	"database/sql"
 	"net/url"
+	"strings"
 	"time"
 
 	"github.com/pingcap/log"
@@ -83,6 +84,17 @@ type Options struct {
 	Partitions    int32
 	Topic         string
 	UpstreamURI   *url.URL
+}
+
+// NewOptions builds decode options for a source.
+func NewOptions(codecConfig *common.Config, replicaConfig *config.ReplicaConfig, reader source.Reader, upstreamURI *url.URL) Options {
+	return Options{
+		CodecConfig:   codecConfig,
+		ReplicaConfig: replicaConfig,
+		Partitions:    reader.Partitions(),
+		Topic:         strings.Trim(upstreamURI.Path, "/"),
+		UpstreamURI:   upstreamURI,
+	}
 }
 
 // NewGroup builds a decode group for the source partitions.
