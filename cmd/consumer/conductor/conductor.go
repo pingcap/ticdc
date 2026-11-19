@@ -97,36 +97,24 @@ func (c *Conductor) run(ctx context.Context, tasks <-chan *decode.Future, w *wri
 	}
 }
 
-func (c *Conductor) acceptBatch(batch []event.Event, input *source.Payload) error {
-	var rows int
+func (c *Conductor) acceptBatch(batch []event.Event, payload *source.Payload) error {
 	for _, work := range batch {
-		if dml, ok := work.(*event.DMLEvent); ok {
-			rows += int(dml.Len())
-		}
-	}
-	if rows > 0 {
-		c.inputRows += rows
-		if c.validator != nil {
-			c.validator.CheckInput(input, c.inputRows)
-		}
-	}
-	for _, work := range batch {
-		if err := c.accept(work, input); err != nil {
+		if err := c.accept(work, payload); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func (c *Conductor) accept(work event.Event, input *source.Payload) error {
+func (c *Conductor) accept(work event.Event, payload *source.Payload) error {
 	switch work := work.(type) {
 	case *event.DMLEvent:
-		c.inputMarker, c.hasInputMarker = max(c.inputMarker, work.CommitTs), true
-		c.queueDML(&dmlTask{dml: work, partition: input.Partition, offset: input.Offset})
+		c.marker, c.hasMarker = max(c.marker, work.CommitTs), true
+		c.queueDML(&dmlTask{dml: work, partition: payload.Partition, offset: payload.Offset})
 	case *event.ResolvedEvent:
-		c.advanceWatermark(work.ResolvedTs, input.Partition)
+		c.advanceWatermark(work.ResolvedTs, payload.Partition)
 	case *event.DDLEvent:
-		c.inputMarker, c.hasInputMarker = max(c.inputMarker, work.GetCommitTs()), true
+		c.marker, c.hasMarker = max(c.marker, work.GetCommitTs()), true
 		if err := setDDLTableNames(work); err != nil {
 			return err
 		}
@@ -141,13 +129,13 @@ func (c *Conductor) accept(work event.Event, input *source.Payload) error {
 	case nil:
 		// A source position becomes confirmable only after all its events
 		// have been decoded and registered.
-		if input.Ack != nil && c.hasInputMarker {
+		if payload.Ack != nil && c.hasMarker {
 			c.positionsMu.Lock()
-			c.positions[input.Partition] = append(c.positions[input.Partition], sourcePosition{through: c.inputMarker, ack: input.Ack})
+			c.positions[payload.Partition] = append(c.positions[payload.Partition], sourcePosition{through: c.marker, ack: payload.Ack})
 			c.positionsMu.Unlock()
 			notifyConfirmation(c.confirmable)
 		}
-		c.inputRows, c.inputMarker, c.hasInputMarker = 0, 0, false
+		c.marker, c.hasMarker = 0, false
 	}
 	return nil
 }
@@ -160,13 +148,13 @@ func (c *Conductor) queueDML(item *dmlTask) {
 }
 
 // queueDDL records a DDL once. Replicas of the same DDL are dropped.
-func (c *Conductor) queueDDL(block *event.DDLEvent) {
-	key := ddl.KeyOf(block)
+func (c *Conductor) queueDDL(ddlEvent *event.DDLEvent) {
+	key := ddl.KeyOf(ddlEvent)
 	if _, ok := c.queuedDDLs[key]; ok {
 		return
 	}
 	c.queuedDDLs[key] = struct{}{}
-	c.pendingDDL = insertSorted(c.pendingDDL, block.GetCommitTs(), block, func(block *event.DDLEvent) uint64 {
+	c.pendingDDL = insertSorted(c.pendingDDL, ddlEvent.GetCommitTs(), ddlEvent, func(block *event.DDLEvent) uint64 {
 		return block.GetCommitTs()
 	})
 }
@@ -321,9 +309,8 @@ func (c *Conductor) flush(ctx context.Context, w *writer.Writer) error {
 
 // conductor coordinates write ordering and completion progress.
 type Conductor struct {
-	inputRows      int
-	inputMarker    uint64
-	hasInputMarker bool
+	marker    uint64
+	hasMarker bool
 
 	positions   map[int32][]sourcePosition
 	positionsMu sync.Mutex

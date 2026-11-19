@@ -159,10 +159,6 @@ func (c *pulsarReader) Partitions() int32 {
 	return int32(len(c.partitions))
 }
 
-func (*pulsarReader) DDLPartition() int32 {
-	return 0
-}
-
 func (c *pulsarReader) Read(ctx context.Context) ([]*Payload, error) {
 	var message pulsar.ConsumerMessage
 	select {

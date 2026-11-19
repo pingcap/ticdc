@@ -65,15 +65,14 @@ type decoder struct {
 // submission order. Decoder state describes one partition's schema history, so
 // a decoder never handles another partition's input.
 type Group struct {
-	codecConfig  *common.Config
-	upstreamDB   *sql.DB
-	selectors    *columnselector.ColumnSelectors
-	decoders     []decoder
-	schemas      *common.TableInfoCache
-	allocator    *common.TableIDAllocator
-	ddlPartition int32
+	codecConfig *common.Config
+	upstreamDB  *sql.DB
+	selectors   *columnselector.ColumnSelectors
+	decoders    []decoder
+	schemas     *common.TableInfoCache
+	allocator   *common.TableIDAllocator
 	// inputs dispatches an undecoded input to the decoder owning its partition.
-	inputs []chan *Future
+	queues []chan *Future
 	// output queues inputs for the conductor in submission order. A Future may
 	// still be decoding when it enters.
 	output chan *Future
@@ -86,10 +85,6 @@ type Options struct {
 	Partitions    int32
 	Topic         string
 	UpstreamURI   *url.URL
-	// DDLPartition is the partition whose DDL messages are delivered
-	// downstream. The other partitions decode them only to update their own
-	// state.
-	DDLPartition int32
 }
 
 // NewOptions builds decode options for a source.
@@ -102,7 +97,6 @@ func NewOptions(
 		Partitions:    reader.Partitions(),
 		Topic:         strings.Trim(upstreamURI.Path, "/"),
 		UpstreamURI:   upstreamURI,
-		DDLPartition:  reader.DDLPartition(),
 	}
 }
 
@@ -112,16 +106,15 @@ func NewGroup(ctx context.Context, opts Options) *Group {
 	upstreamDB := newUpstreamDB(ctx, opts.UpstreamURI)
 	partitions := max(1, int(opts.Partitions))
 	group := &Group{
-		codecConfig:  codecConfig,
-		upstreamDB:   upstreamDB,
-		allocator:    common.NewTableIDAllocator(),
-		ddlPartition: opts.DDLPartition,
-		decoders:     make([]decoder, partitions),
-		inputs:       make([]chan *Future, partitions),
-		output:       make(chan *Future, decoderQueueSize),
+		codecConfig: codecConfig,
+		upstreamDB:  upstreamDB,
+		allocator:   common.NewTableIDAllocator(),
+		decoders:    make([]decoder, partitions),
+		queues:      make([]chan *Future, partitions),
+		output:      make(chan *Future, decoderQueueSize),
 	}
-	for i := range group.inputs {
-		group.inputs[i] = make(chan *Future, decoderQueueSize)
+	for i := range group.queues {
+		group.queues[i] = make(chan *Future, decoderQueueSize)
 	}
 	if codecConfig.Protocol == config.ProtocolCsv {
 		selectors, err := columnselector.New(opts.ReplicaConfig.Sink, util.GetOrZero(opts.ReplicaConfig.CaseSensitive))
@@ -182,7 +175,7 @@ func (d *Group) Add(ctx context.Context, payloads []*source.Payload) error {
 		select {
 		case <-ctx.Done():
 			return context.Cause(ctx)
-		case d.inputs[item.Partition] <- f:
+		case d.queues[item.Partition] <- f:
 		}
 
 		select {
@@ -201,15 +194,15 @@ func (d *Group) Output() <-chan *Future {
 func (d *Group) Run(ctx context.Context) error {
 	g, ctx := errgroup.WithContext(ctx)
 	for i, decoder := range d.decoders {
-		input := d.inputs[i]
+		futures := d.queues[i]
 		g.Go(func() error {
-			return d.runDecoder(ctx, decoder, input)
+			return d.runDecoder(ctx, decoder, futures)
 		})
 	}
 	return g.Wait()
 }
 
-func (d *Group) runDecoder(ctx context.Context, decoder decoder, input <-chan *Future) error {
+func (d *Group) runDecoder(ctx context.Context, decoder decoder, futures <-chan *Future) error {
 	// Inputs whose message the decoder cached until the table info arrives, in
 	// the order the decoder cached them.
 	var waiting []*Future
@@ -220,7 +213,7 @@ func (d *Group) runDecoder(ctx context.Context, decoder decoder, input <-chan *F
 		case <-ctx.Done():
 			return context.Cause(ctx)
 		case <-changed:
-		case f := <-input:
+		case f := <-futures:
 			cached, err := d.decodeInput(ctx, decoder, f)
 			if err != nil {
 				return err
@@ -257,11 +250,11 @@ func (d *Group) addRow(f *Future, dml *event.DMLEvent) {
 	if dml == nil {
 		log.Panic("consumer DML decoding failed")
 	}
-	if input := f.Payload; input.File != nil {
-		dml.PhysicalTableID = input.File.TableID
-		if dml.TableInfo.UpdateTS != input.File.Schema.TableVersion {
+	if payload := f.Payload; payload.File != nil {
+		dml.PhysicalTableID = payload.File.TableID
+		if dml.TableInfo.UpdateTS != payload.File.Schema.TableVersion {
 			dml.TableInfo = dml.TableInfo.CloneWithRouting(dml.TableInfo.GetTargetSchemaName(), dml.TableInfo.GetTargetTableName())
-			dml.TableInfo.UpdateTS = input.File.Schema.TableVersion
+			dml.TableInfo.UpdateTS = payload.File.Schema.TableVersion
 		}
 	}
 	f.appendEvent(dml)
@@ -287,15 +280,15 @@ func (d *Group) drainCached(decoder decoder, waiting []*Future) ([]*Future, <-ch
 // decodeInput decodes the input, reporting whether the decoder cached the
 // message until its table info arrives.
 func (d *Group) decodeInput(ctx context.Context, decoder decoder, future *Future) (bool, error) {
-	input := future.Payload
-	if input.File != nil {
+	payload := future.Payload
+	if payload.File != nil {
 		return false, d.decodeStorage(ctx, future)
 	}
-	if input.Watermark != 0 {
-		future.appendEvent(&event.ResolvedEvent{ResolvedTs: input.Watermark})
+	if payload.Watermark != 0 {
+		future.appendEvent(&event.ResolvedEvent{ResolvedTs: payload.Watermark})
 		return false, nil
 	}
-	decoder.AddKeyValue(input.Key, input.Value)
+	decoder.AddKeyValue(payload.Key, payload.Value)
 	for {
 		if err := context.Cause(ctx); err != nil {
 			return false, err
@@ -315,9 +308,9 @@ func (d *Group) decodeInput(ctx context.Context, decoder decoder, future *Future
 			d.addRow(future, dml)
 		case common.MessageTypeDDL:
 			ddl := decoder.NextDDLEvent()
-			if input.Partition != d.ddlPartition {
+			if payload.Partition != 0 {
 				// Every partition receives the broadcast DDL and decodes it to
-				// update its own state, but only one copy is applied downstream.
+				// update its own state, but only partition 0 delivers it downstream.
 				continue
 			}
 			if d.schemas != nil && ddl.Query == "" {
@@ -331,11 +324,11 @@ func (d *Group) decodeInput(ctx context.Context, decoder decoder, future *Future
 }
 
 func (d *Group) decodeStorage(ctx context.Context, future *Future) error {
-	input := future.Payload
-	schema := input.File.Schema
+	payload := future.Payload
+	schema := payload.File.Schema
 	table := schema.TableInfo()
 	table.UpdateTS = schema.TableVersion
-	if input.Value == nil {
+	if payload.Value == nil {
 		scope := event.InfluenceTypeNormal
 		switch {
 		case schema.Schema == "" || model.ActionType(schema.Type) == model.ActionCreateView:
@@ -358,13 +351,13 @@ func (d *Group) decodeStorage(ctx context.Context, future *Future) error {
 	switch d.codecConfig.Protocol {
 	case config.ProtocolCsv:
 		var err error
-		decoder, err = csv.NewDecoderWithColumnSelector(ctx, d.codecConfig, table, input.Value, d.selectors.GetForTableInfo(table))
+		decoder, err = csv.NewDecoderWithColumnSelector(ctx, d.codecConfig, table, payload.Value, d.selectors.GetForTableInfo(table))
 		if err != nil {
 			return errors.WrapError(errors.ErrCodecDecode, err, "create CSV decoder")
 		}
 	case config.ProtocolCanalJSON:
 		decoder = canal.NewTxnDecoder(d.codecConfig)
-		decoder.AddKeyValue(nil, input.Value)
+		decoder.AddKeyValue(nil, payload.Value)
 	default:
 		return errors.ErrCodecDecode.GenWithStackByArgs("storage consumer protocol is unsupported")
 	}

@@ -62,7 +62,7 @@ type storageIndexRange struct {
 	end   uint64
 }
 
-type storageInput struct {
+type storageRange struct {
 	key   cloudstorage.DMLPathKey
 	index cloudstorage.FileIndex
 	end   uint64 // The pending range is expanded one file at a time.
@@ -87,7 +87,7 @@ type storageReader struct {
 	ddlWatermarks    map[string]uint64
 	pendingSchema    chan struct{} // Header decoding determines the next file groups.
 	mu               sync.Mutex
-	inputs           []storageInput
+	ranges           []storageRange
 	scanned          bool
 	// Listing a directory needs a client that returns common prefixes.
 	scheme     string
@@ -266,14 +266,14 @@ func (c *storageReader) listEntries(ctx context.Context, dir string) ([]string, 
 		return dirs, files, nil
 	}
 	prefix := c.s3Prefix(dir)
-	input := &s3.ListObjectsV2Input{
+	request := &s3.ListObjectsV2Input{
 		Bucket:    aws.String(c.bucket),
 		Prefix:    aws.String(prefix),
 		Delimiter: aws.String("/"),
 	}
 	var dirs, files []string
 	for {
-		output, err := c.s3Client.ListObjectsV2(ctx, input)
+		output, err := c.s3Client.ListObjectsV2(ctx, request)
 		if err != nil {
 			return nil, nil, errors.WrapError(errors.ErrExternalStorageAPI, err, "list Storage directory")
 		}
@@ -292,7 +292,7 @@ func (c *storageReader) listEntries(ctx context.Context, dir string) ([]string, 
 		if !aws.ToBool(output.IsTruncated) {
 			break
 		}
-		input.ContinuationToken = output.NextContinuationToken
+		request.ContinuationToken = output.NextContinuationToken
 	}
 	slices.Sort(dirs)
 	slices.Sort(files)
@@ -360,7 +360,7 @@ func (c *storageReader) Read(ctx context.Context) ([]*Payload, error) {
 			c.mu.Unlock()
 		}
 	}
-	if len(c.inputs) == 0 {
+	if len(c.ranges) == 0 {
 		if c.scanned && c.sourceCheckpoint > c.watermark {
 			c.watermark = c.sourceCheckpoint
 			// The metadata checkpoint covers every file in the completed scan.
@@ -371,15 +371,15 @@ func (c *storageReader) Read(ctx context.Context) ([]*Payload, error) {
 		}
 		return nil, nil
 	}
-	input := c.inputs[0]
-	key := input.key
+	item := c.ranges[0]
+	key := item.key
 	ddlWatermark := c.ddlWatermark(key.GetKey())
 	switch {
-	case input.index.Idx < input.end && key.TableVersion >= ddlWatermark:
-		c.inputs[0].index.Idx++
+	case item.index.Idx < item.end && key.TableVersion >= ddlWatermark:
+		c.ranges[0].index.Idx++
 	default:
-		c.inputs[0] = storageInput{}
-		c.inputs = c.inputs[1:]
+		c.ranges[0] = storageRange{}
+		c.ranges = c.ranges[1:]
 	}
 	schema := c.schemas[key.SchemaPathKey]
 	if schema == nil {
@@ -389,7 +389,7 @@ func (c *storageReader) Read(ctx context.Context) ([]*Payload, error) {
 		return nil, nil
 	}
 	if key.TableVersion < ddlWatermark {
-		c.fileIndices[key][input.index.FileIndexKey] = max(input.index.Idx, input.end)
+		c.fileIndices[key][item.index.FileIndexKey] = max(item.index.Idx, item.end)
 		return nil, nil
 	}
 	if key.IsSchemaFileDMLPathKey() {
@@ -410,7 +410,7 @@ func (c *storageReader) Read(ctx context.Context) ([]*Payload, error) {
 		tableID = c.nextTableID
 		c.tableIDs[idKey] = tableID
 	}
-	data, err := c.readDMLFile(ctx, input, schema, tableID)
+	data, err := c.readDMLFile(ctx, item, schema, tableID)
 	if err != nil {
 		return nil, err
 	}
@@ -448,11 +448,11 @@ func (c *storageReader) scanInputs(ctx context.Context) error {
 	keys := slices.SortedFunc(maps.Keys(files), cloudstorage.CompareDMLPathKey)
 	for _, key := range keys {
 		if key.IsSchemaFileDMLPathKey() {
-			c.inputs = append(c.inputs, storageInput{key: key})
+			c.ranges = append(c.ranges, storageRange{key: key})
 			continue
 		}
 		for indexKey, span := range files[key] {
-			c.inputs = append(c.inputs, storageInput{
+			c.ranges = append(c.ranges, storageRange{
 				key: key,
 				index: cloudstorage.FileIndex{
 					FileIndexKey: indexKey,
@@ -465,13 +465,13 @@ func (c *storageReader) scanInputs(ctx context.Context) error {
 	return nil
 }
 
-func (c *storageReader) readDMLFile(ctx context.Context, input storageInput, schema *cloudstorage.SchemaFile, tableID int64) (*Payload, error) {
-	path := input.key.GenerateDMLFilePath(&input.index, c.fileExtension, c.fileIndexWidth)
+func (c *storageReader) readDMLFile(ctx context.Context, item storageRange, schema *cloudstorage.SchemaFile, tableID int64) (*Payload, error) {
+	path := item.key.GenerateDMLFilePath(&item.index, c.fileExtension, c.fileIndexWidth)
 	data, err := c.storage.ReadFile(ctx, path)
 	if err != nil {
 		return nil, errors.WrapError(errors.ErrExternalStorageAPI, err, "read Storage DML file")
 	}
-	c.fileIndices[input.key][input.index.FileIndexKey] = input.index.Idx
+	c.fileIndices[item.key][item.index.FileIndexKey] = item.index.Idx
 	return &Payload{
 		Value: data,
 		Bytes: int64(len(data)),
@@ -481,10 +481,6 @@ func (c *storageReader) readDMLFile(ctx context.Context, input storageInput, sch
 
 // storageReader scans files in order, so its inputs carry no partition.
 func (*storageReader) Partitions() int32 {
-	return 0
-}
-
-func (*storageReader) DDLPartition() int32 {
 	return 0
 }
 

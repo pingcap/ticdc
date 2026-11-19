@@ -67,18 +67,12 @@ type Reader interface {
 	// Partitions returns the number of independently read partitions. A source
 	// without partitions publishes a global watermark instead.
 	Partitions() int32
-
-	// DDLPartition is the partition whose DDL messages are applied downstream.
-	DDLPartition() int32
-
 	Close()
 }
 
 // validator is implemented by sources that can verify encoded inputs against
 // their own routing and size limits.
 type Validator interface {
-	// CheckInput validates the decoded row count of one input.
-	CheckInput(input *Payload, rows int)
 	// CheckDML validates that a dispatched row batch was read from the
 	// partition its routing selects.
 	CheckDML(dml *event.DMLEvent, partition int32, offset int64)

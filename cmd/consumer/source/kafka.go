@@ -40,7 +40,6 @@ type kafkaReader struct {
 	protocol        config.Protocol
 	router          *eventrouter.EventRouter
 	maxMessageBytes int
-	maxBatchSize    int
 	client          *kgo.Client
 	topic           string
 	partitions      int32
@@ -71,12 +70,9 @@ func newKafkaReader(ctx context.Context, opts Options) *kafkaReader {
 		kgo.BrokerMaxReadBytes(32 << 20),
 	}
 	query := upstreamURI.Query()
-	maxMessageBytes, maxBatchSize := math.MaxInt, math.MaxInt
+	maxMessageBytes := math.MaxInt
 	if query.Has("max-message-bytes") {
 		maxMessageBytes = codecConfig.MaxMessageBytes
-	}
-	if query.Has("max-batch-size") {
-		maxBatchSize = codecConfig.MaxBatchSize
 	}
 	ca, cert, key := query.Get("ca"), query.Get("cert"), query.Get("key")
 	if upstreamURI.Scheme == config.KafkaSSLScheme || cmp.Or(ca, cert, key) != "" {
@@ -123,7 +119,6 @@ func newKafkaReader(ctx context.Context, opts Options) *kafkaReader {
 		protocol:        codecConfig.Protocol,
 		router:          router,
 		maxMessageBytes: maxMessageBytes,
-		maxBatchSize:    maxBatchSize,
 		client:          client,
 		topic:           topic,
 		partitions:      partitions,
@@ -132,10 +127,6 @@ func newKafkaReader(ctx context.Context, opts Options) *kafkaReader {
 
 func (c *kafkaReader) Partitions() int32 {
 	return c.partitions
-}
-
-func (*kafkaReader) DDLPartition() int32 {
-	return 0
 }
 
 func (c *kafkaReader) Read(ctx context.Context) ([]*Payload, error) {
@@ -153,6 +144,11 @@ func (c *kafkaReader) Read(ctx context.Context) ([]*Payload, error) {
 	var batch []*Payload
 	for iterator := fetches.RecordIter(); !iterator.Done(); {
 		record := iterator.Next()
+		if size := len(record.Key) + len(record.Value); size > c.maxMessageBytes {
+			log.Panic("kafka message size limit exceeded", zap.String("topic", c.topic),
+				zap.Int32("partition", record.Partition), zap.Int64("offset", record.Offset),
+				zap.Int("maxMessageBytes", c.maxMessageBytes), zap.Int("recordBytes", size))
+		}
 		// CommitRecords reads only these fields. Copying them keeps the fetch
 		// buffer, which Key and Value alias, out of the acknowledgement closure.
 		position := kgo.Record{
@@ -165,7 +161,6 @@ func (c *kafkaReader) Read(ctx context.Context) ([]*Payload, error) {
 			Partition: record.Partition,
 			Key:       record.Key,
 			Value:     record.Value,
-			Bytes:     int64(len(record.Key) + len(record.Value)),
 			Offset:    record.Offset,
 			Ack: func(ctx context.Context) error {
 				if err := c.client.CommitRecords(ctx, &position); err != nil {
@@ -180,17 +175,6 @@ func (c *kafkaReader) Read(ctx context.Context) ([]*Payload, error) {
 
 func (c *kafkaReader) Close() {
 	c.client.Close()
-}
-
-// CheckMessage validates an input after decoding has revealed its DML count.
-// A single oversized row is allowed by the Kafka encoder.
-func (c *kafkaReader) CheckInput(input *Payload, rows int) {
-	if rows > c.maxBatchSize {
-		log.Panic("kafka message batch size limit exceeded", zap.String("topic", c.topic), zap.Int32("partition", input.Partition), zap.Int64("offset", input.Offset), zap.Int("maxBatchSize", c.maxBatchSize), zap.Int("actualBatchSize", rows))
-	}
-	if rows > 1 && input.Bytes > int64(c.maxMessageBytes) {
-		log.Panic("kafka message byte size limit exceeded", zap.String("topic", c.topic), zap.Int32("partition", input.Partition), zap.Int64("offset", input.Offset), zap.Int("maxMessageBytes", c.maxMessageBytes), zap.Int64("receivedBytes", input.Bytes))
-	}
 }
 
 func (c *kafkaReader) CheckDML(dml *event.DMLEvent, part int32, offset int64) {
