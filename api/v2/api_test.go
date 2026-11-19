@@ -201,19 +201,8 @@ func TestManagementRoutesRequireAuthentication(t *testing.T) {
 	apiServer.EXPECT().GetEtcdClient().Return(etcdClient).Times(len(requests))
 	etcdClient.EXPECT().GetEtcdClient().Return(nil).Times(len(requests))
 
-	if kerneltype.IsNextGen() {
-		previous, _ := appcontext.TryGetService[keyspace.Manager](appcontext.KeyspaceManager)
-		t.Cleanup(func() { appcontext.SetService(appcontext.KeyspaceManager, previous) })
-		keyspaceManager := keyspace.NewMockManager(ctrl)
-		keyspaceManager.EXPECT().LoadKeyspace(gomock.Any(), common.DefaultKeyspaceName).Return(
-			&keyspacepb.KeyspaceMeta{
-				Keyspace: &keyspacepb.KeyspaceMeta_Id{Id: common.DefaultKeyspaceID},
-				Name:     common.DefaultKeyspaceName,
-			}, nil,
-		).Times(len(requests))
-		appcontext.SetService[keyspace.Manager](appcontext.KeyspaceManager, keyspaceManager)
-	}
-
+	// The requests are rejected before the keyspace lookup, so no keyspace
+	// manager is needed in NextGen mode either.
 	router := gin.New()
 	RegisterOpenAPIV2Routes(router, NewOpenAPIV2(apiServer))
 
