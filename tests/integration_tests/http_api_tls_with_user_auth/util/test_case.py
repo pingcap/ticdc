@@ -476,7 +476,9 @@ def set_log_level():
 def log_redact():
     keyspace = os.getenv("KEYSPACE_NAME", "default")
     url = BASE_URL0 + "/log/redact?keyspace=" + keyspace
-    data = json.dumps({"redact_info_log": "marker"})
+    # The server starts with redaction ON by default, so use the same mode
+    # to keep this test to the authentication behavior.
+    data = json.dumps({"redact_info_log": "on"})
     headers = {"Content-Type": "application/json"}
 
     resp = rq.post(url, data=data, headers=headers,
