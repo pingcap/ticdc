@@ -284,7 +284,7 @@ func (s *eventService) handleMessage(ctx context.Context, msg *messaging.TargetM
 		m := msg.Message[0].(*event.CongestionControl)
 		s.handleCongestionControl(msg.From, m)
 	default:
-		log.Warn("unknown message type, ignore it", zap.String("type", msg.Type.String()), zap.Any("message", msg))
+		log.Warn("unknown message type, ignore it", zap.String("type", msg.Type.String()))
 	}
 	return nil
 }

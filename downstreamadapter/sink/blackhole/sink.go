@@ -73,8 +73,7 @@ func (s *Sink) WriteBlockEvent(event commonEvent.BlockEvent) error {
 		}
 	case commonEvent.TypeSyncPointEvent:
 	default:
-		log.Error("unknown event type",
-			zap.Any("event", event))
+		log.Error("unknown event type", zap.String("eventType", commonEvent.TypeToString(event.GetType())))
 	}
 	event.PostFlush()
 	return nil
