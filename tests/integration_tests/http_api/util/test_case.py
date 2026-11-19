@@ -1,9 +1,6 @@
 import sys
-<<<<<<< HEAD
-=======
 import os
 import subprocess
->>>>>>> 1c7d94466 (api: allow managing changefeeds after keyspace deletion (#6245))
 import requests as rq
 from requests.exceptions import RequestException
 import time
@@ -268,25 +265,6 @@ def pause_changefeed():
     assert data["error_code"] == "CDC:ErrChangeFeedNotExists"
 
 
-<<<<<<< HEAD
-=======
-def check_keyspace_guidance():
-    url = BASE_URL0_V2 + "/changefeeds/missing-keyspace/pause"
-    resp = rq.post(url)
-    assert_status_code(resp, rq.codes.bad_request, url)
-    data = resp.json()
-    assert data["error_code"] == "CDC:ErrAPIInvalidParam"
-    assert "please specify --keyspace or -k" in data["error_msg"]
-
-    url = BASE_URL0_V2 + \
-        "/changefeeds/missing-keyspace/pause?keyspace=not-exist"
-    resp = rq.post(url)
-    assert_status_code(resp, rq.codes.bad_request, url)
-    data = resp.json()
-    assert data["error_code"] == "CDC:ErrChangeFeedNotExists"
-
-
->>>>>>> 1c7d94466 (api: allow managing changefeeds after keyspace deletion (#6245))
 def update_changefeed():
     # update fail
     # can only update a stopped changefeed
