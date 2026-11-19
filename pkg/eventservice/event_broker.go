@@ -31,6 +31,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/node"
+	"github.com/pingcap/ticdc/pkg/ordering"
 	"github.com/pingcap/ticdc/pkg/pdutil"
 	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/ticdc/utils/notifyqueue"
@@ -296,7 +297,9 @@ func (c *eventBroker) sendDML(remoteID node.ID, batchEvent *event.BatchDMLEvent,
 }
 
 func (c *eventBroker) sendDDL(ctx context.Context, remoteID node.ID, e *event.DDLEvent, d *dispatcherStat) {
-	c.emitSyncPointEventIfNeeded(e.FinishedTs, d, remoteID)
+	if e.Err == "" {
+		c.emitSyncPointEventIfNeeded(e.FinishedTs, d, remoteID)
+	}
 	e.DispatcherID = d.id
 	e.Seq = d.seq.Add(1)
 	e.Epoch = d.epoch
@@ -418,7 +421,7 @@ func (c *eventBroker) tickTableTriggerDispatchers(ctx context.Context) error {
 					ID:   stat.info.GetTableSpan().KeyspaceID,
 					Name: stat.info.GetChangefeedID().Keyspace(),
 				}
-				ddlEvents, endTs, err := c.schemaStore.FetchTableTriggerDDLEvents(keyspaceMeta, key.(common.DispatcherID), stat.filter, startTs, 100)
+				ddlEvents, endTs, err := c.schemaStore.FetchTableTriggerDDLEvents(keyspaceMeta, key.(common.DispatcherID), stat.filter, stat.txnOrderMatcher, startTs, 100)
 				if err != nil {
 					log.Error("table trigger ddl events fetch failed", zap.Uint32("keyspaceID", stat.info.GetTableSpan().KeyspaceID), zap.Stringer("dispatcherID", stat.id), zap.Error(err))
 					return true
@@ -819,6 +822,16 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask) {
 	if err != nil {
 		releaseQuota(available, uint64(sl.maxDMLBytes))
 		if task.isRemoved.Load() {
+			return
+		}
+		if errors.ErrInvalidReplicaConfig.Equal(err) {
+			// Use the dispatcher error path with this scan's upper bound as the
+			// event timestamp. No DML or resolved timestamp from this scan is sent.
+			c.sendDDL(ctx, remoteID, &event.DDLEvent{
+				Version:    event.DDLEventVersion1,
+				FinishedTs: request.Range.CommitTsEnd,
+				Err:        errors.WrapChangefeedUnretryableErr(err).Error(),
+			}, task)
 			return
 		}
 		log.Error("scan events failed",
@@ -1331,15 +1344,22 @@ func (c *eventBroker) addDispatcher(info DispatcherInfo) error {
 	id := info.GetID()
 	span := info.GetTableSpan()
 	changefeedID := info.GetChangefeedID()
+	status, err := c.tryGetOrSetChangefeedStatus(info)
+	if err != nil {
+		return err
+	}
 
 	if existing := c.getDispatcher(id); existing != nil {
 		// REGISTER may be a retry or a recreated collector starting at epoch zero.
 		// Release the old store registrations before replacing their ID mappings,
 		// then let the new dispatcher follow the normal Ready/RESET handshake.
 		c.removeDispatcher(existing.Load().info)
+		// Removing the last dispatcher can also remove its changefeed status.
+		status, err = c.tryGetOrSetChangefeedStatus(info)
+		if err != nil {
+			return err
+		}
 	}
-
-	status := c.getOrSetChangefeedStatus(info)
 	dispatcher := newDispatcherStat(info, uint64(len(c.scanTaskQueues)), uint64(len(c.messageCh)), nil, status)
 	dispatcherPtr := &atomic.Pointer[dispatcherStat]{}
 	dispatcherPtr.Store(dispatcher)
@@ -1397,7 +1417,7 @@ func (c *eventBroker) addDispatcher(info DispatcherInfo) error {
 		ID:   span.KeyspaceID,
 		Name: changefeedID.Keyspace(),
 	}
-	err := c.schemaStore.RegisterTable(c.ctx, keyspaceMeta, span.GetTableID(), info.GetStartTs())
+	err = c.schemaStore.RegisterTable(c.ctx, keyspaceMeta, span.GetTableID(), info.GetStartTs())
 	if err != nil {
 		log.Error("register table to schemaStore failed",
 			zap.Uint32("keyspaceID", span.KeyspaceID),
@@ -1527,6 +1547,11 @@ func (c *eventBroker) resetDispatcher(dispatcherInfo DispatcherInfo) error {
 		return nil
 	}
 
+	status, err := c.tryGetOrSetChangefeedStatus(dispatcherInfo)
+	if err != nil {
+		return err
+	}
+
 	// Mark the old dispatcher as removed and cancel its scan before cleaning up
 	// resources shared with that scan.
 	oldStat.markRemoved()
@@ -1560,8 +1585,6 @@ func (c *eventBroker) resetDispatcher(dispatcherInfo DispatcherInfo) error {
 			return err
 		}
 	}
-	status := c.getOrSetChangefeedStatus(dispatcherInfo)
-
 	newStat := newDispatcherStat(dispatcherInfo, uint64(len(c.scanTaskQueues)), uint64(len(c.messageCh)), tableInfo, status)
 	newStat.copyStatistics(oldStat)
 
@@ -1642,32 +1665,40 @@ func (c *eventBroker) runLargeTxnCleanupWorker(
 	}
 }
 
-func (c *eventBroker) getOrSetChangefeedStatus(info DispatcherInfo) *changefeedStatus {
+func (c *eventBroker) tryGetOrSetChangefeedStatus(info DispatcherInfo) (*changefeedStatus, error) {
 	changefeedID := info.GetChangefeedID()
+	filterConfig := info.GetFilterConfig()
+	if filterConfig == nil || filterConfig.FilterConfig == nil {
+		return nil, errors.ErrInvalidReplicaConfig.GenWithStackByArgs(
+			"dispatcher filter config is required")
+	}
 	if stat, ok := c.changefeedMap.Load(changefeedID); ok {
-		return stat.(*changefeedStatus)
+		return stat.(*changefeedStatus), nil
 	}
 
 	// Filter config is changefeed scoped. In production, a config change must pause the
 	// changefeed first, which closes all related dispatchers and removes the old
 	// changefeedStatus before a new one is created. So within one changefeedStatus
 	// lifecycle we expect filter config and timezone to stay stable.
-	changefeedFilter, err := filter.GetSharedFilterStorage().GetOrSetFilter(
-		changefeedID, info.GetFilterConfig(), c.timezone)
+	txnOrderMatcher, err := ordering.NewTxnOrderMatcher(filterConfig.TxnOrderTables, filterConfig.CaseSensitive)
 	if err != nil {
-		log.Panic("create filter failed",
-			zap.Stringer("changefeedID", changefeedID),
-			zap.Any("filterConfig", info.GetFilterConfig()),
-			zap.Error(err))
+		return nil, err
+	}
+
+	changefeedFilter, err := filter.GetSharedFilterStorage().GetOrSetFilter(
+		changefeedID, filterConfig, c.timezone)
+	if err != nil {
+		return nil, err
 	}
 
 	status := newChangefeedStatus(changefeedID, info.GetSyncPointInterval())
 	status.lowLatencyMode = info.IsLowLatencyMode()
 	status.filter = changefeedFilter
+	status.txnOrderMatcher = txnOrderMatcher
 	status.mounter = event.NewMounter(c.tz, info.GetIntegrity())
 	actual, loaded := c.changefeedMap.LoadOrStore(changefeedID, status)
 	if loaded {
-		return actual.(*changefeedStatus)
+		return actual.(*changefeedStatus), nil
 	}
 	if status.lowLatencyMode {
 		select {
@@ -1678,6 +1709,17 @@ func (c *eventBroker) getOrSetChangefeedStatus(info DispatcherInfo) *changefeedS
 	log.Info("new changefeed status", zap.Stringer("changefeedID", changefeedID))
 	if status.scanWindowController != nil {
 		initializeScanWindowMetrics(changefeedID.String())
+	}
+	return status, nil
+}
+
+func (c *eventBroker) getOrSetChangefeedStatus(info DispatcherInfo) *changefeedStatus {
+	status, err := c.tryGetOrSetChangefeedStatus(info)
+	if err != nil {
+		log.Error("create changefeed status failed",
+			zap.Stringer("changefeedID", info.GetChangefeedID()),
+			zap.Error(err))
+		return nil
 	}
 	return status
 }

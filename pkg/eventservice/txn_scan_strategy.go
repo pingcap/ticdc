@@ -368,6 +368,7 @@ func drainLargeTxnInserts(
 		session.dispatcherStat.info.EnableIgnoreUpdateOnlyColumns())
 	processor.ctx = session.ctx
 	processor.dispatcherStat = session.dispatcherStat
+	processor.txnOrderMatcher = session.dispatcherStat.txnOrderMatcher
 
 	for {
 		shouldStop, err := ctx.scanner.checkScanConditions(session)

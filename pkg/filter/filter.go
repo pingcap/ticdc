@@ -74,8 +74,7 @@ type Filter interface {
 	// IsForceReplicateEnabled reports whether tables without a primary key or
 	// a non-null unique key are eligible for replication.
 	IsForceReplicateEnabled() bool
-	// Verify should only be called by create changefeed OpenAPI.
-	// Its purpose is to verify the expression filter config.
+	// Verify validates table constraints during changefeed creation and updates.
 	Verify(tableInfos []*common.TableInfo) error
 }
 
@@ -231,7 +230,6 @@ func (f *filter) ShouldIgnoreSchema(schema string) bool {
 	return IsSysSchema(schema) || !f.tableFilter.MatchSchema(schema)
 }
 
-// TODO
 func (f *filter) Verify(tableInfos []*common.TableInfo) error {
 	return nil
 	// return f.dmlExprFilter.verify(tableInfos)
@@ -368,6 +366,8 @@ func isFilterConfigEqual(cfg1, cfg2 *eventpb.FilterConfig) bool {
 		return false
 	}
 
-	// Use protobuf's built-in Equal method for content comparison
-	return proto.Equal(cfg1, cfg2)
+	// Compare only the configuration that affects replication filtering.
+	return cfg1.CaseSensitive == cfg2.CaseSensitive &&
+		cfg1.ForceReplicate == cfg2.ForceReplicate &&
+		proto.Equal(cfg1.FilterConfig, cfg2.FilterConfig)
 }

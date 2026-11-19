@@ -227,6 +227,26 @@ func callback() {
 	count.Add(1)
 }
 
+func TestTxnOrderDDLErrorReachesDispatcher(t *testing.T) {
+	dispatcher := newTestBasicDispatcher(t, common.MysqlSinkType, false)
+	validationErr := errors.ErrInvalidReplicaConfig.GenWithStackByArgs(
+		"sink.mysql-config.txn-order-tables does not support partitioned table test.ordered")
+	ddl := &commonEvent.DDLEvent{
+		FinishedTs: dispatcher.startTs + 1,
+		Err:        errors.WrapChangefeedUnretryableErr(validationErr).Error(),
+	}
+	require.True(t, dispatcher.handleEvents([]DispatcherEvent{{Event: ddl}}, func() {
+		t.Fatal("a validation error must not wake the dispatcher")
+	}))
+	select {
+	case err := <-dispatcher.sharedInfo.errCh:
+		require.ErrorContains(t, err, "txn-order-tables does not support partitioned table")
+		require.True(t, errors.ShouldFailChangefeed(err))
+	default:
+		t.Fatal("expected the validation failure in the dispatcher error channel")
+	}
+}
+
 // test different events can be correctly handled by the dispatcher
 func TestDispatcherHandleEvents(t *testing.T) {
 	count.Swap(0)

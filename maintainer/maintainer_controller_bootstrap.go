@@ -17,6 +17,7 @@ import (
 	"bytes"
 	"context"
 	"sort"
+	"strconv"
 	"time"
 
 	"github.com/pingcap/log"
@@ -32,6 +33,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/filter"
 	"github.com/pingcap/ticdc/pkg/node"
+	"github.com/pingcap/ticdc/pkg/ordering"
 	"github.com/pingcap/ticdc/pkg/routing"
 	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/ticdc/utils"
@@ -101,6 +103,14 @@ func (c *Controller) FinishBootstrap(
 	// Step 2: Load tables from schema store
 	// Share the filter and schema store across snapshot and DDL history queries in both modes.
 	// Use an empty timezone because table filtering does not need it.
+	var txnOrderTables []string
+	if isMysqlCompatibleBackend {
+		txnOrderTables = c.replicaConfig.Sink.GetTxnOrderTables("mysql")
+	}
+	txnOrderMatcher, err := ordering.NewTxnOrderMatcher(txnOrderTables, util.GetOrZero(c.replicaConfig.CaseSensitive))
+	if err != nil {
+		return nil, err
+	}
 	f, err := filter.NewFilter(c.replicaConfig.Filter, "", util.GetOrZero(c.replicaConfig.CaseSensitive), util.GetOrZero(c.replicaConfig.ForceReplicate))
 	if err != nil {
 		log.Error("load table from scheme store failed",
@@ -109,7 +119,7 @@ func (c *Controller) FinishBootstrap(
 		return nil, err
 	}
 	schemaStore := appcontext.GetService[schemastore.SchemaStore](appcontext.SchemaStore)
-	tables, err := c.loadTables(ctx, startTs, schemaStore, f)
+	tables, err := c.loadTables(ctx, startTs, schemaStore, f, txnOrderMatcher)
 	if err != nil {
 		log.Error("load table from scheme store failed",
 			zap.String("changefeed", c.changefeedID.Name()),
@@ -123,7 +133,7 @@ func (c *Controller) FinishBootstrap(
 		redoSchemaInfos    map[int64]*heartbeatpb.SchemaInfo
 	)
 	if c.enableRedo {
-		redoTables, err = c.loadTables(ctx, redoStartTs, schemaStore, f)
+		redoTables, err = c.loadTables(ctx, redoStartTs, schemaStore, f, txnOrderMatcher)
 		if err != nil {
 			log.Error("load table from scheme store failed",
 				zap.String("changefeed", c.changefeedID.Name()),
@@ -133,13 +143,13 @@ func (c *Controller) FinishBootstrap(
 	}
 
 	// Step 3: Build working task map from bootstrap responses and Process tables and build schema info
-	addedTables, err := c.loadBootstrapAddedTables(allNodesResp, tables, startTs, common.DefaultMode, schemaStore, f)
+	addedTables, err := c.loadBootstrapAddedTables(allNodesResp, tables, startTs, common.DefaultMode, schemaStore, f, txnOrderMatcher)
 	if err != nil {
 		return nil, err
 	}
 	var redoAddedTables map[int64]bootstrapAddedTable
 	if c.enableRedo {
-		redoAddedTables, err = c.loadBootstrapAddedTables(allNodesResp, redoTables, redoStartTs, common.RedoMode, schemaStore, f)
+		redoAddedTables, err = c.loadBootstrapAddedTables(allNodesResp, redoTables, redoStartTs, common.RedoMode, schemaStore, f, txnOrderMatcher)
 		if err != nil {
 			return nil, err
 		}
@@ -147,6 +157,16 @@ func (c *Controller) FinishBootstrap(
 	c.bootstrapAddedTables = map[int64]map[int64]bootstrapAddedTable{
 		common.DefaultMode: addedTables,
 		common.RedoMode:    redoAddedTables,
+	}
+	if len(txnOrderTables) != 0 {
+		if err := verifyTxnOrderBootstrapSpans(allNodesResp, tables, addedTables, common.DefaultMode, txnOrderMatcher); err != nil {
+			return nil, err
+		}
+		if c.enableRedo {
+			if err := verifyTxnOrderBootstrapSpans(allNodesResp, redoTables, redoAddedTables, common.RedoMode, txnOrderMatcher); err != nil {
+				return nil, err
+			}
+		}
 	}
 	workingTaskMap, schemaInfos, err := c.buildTaskInfo(allNodesResp, tables, addedTables, isMysqlCompatibleBackend, common.DefaultMode)
 	if err != nil {
@@ -456,6 +476,7 @@ func (c *Controller) loadBootstrapAddedTables(
 	mode int64,
 	schemaStore schemastore.SchemaStore,
 	f filter.Filter,
+	txnOrderMatcher *ordering.TxnOrderMatcher,
 ) (map[int64]bootstrapAddedTable, error) {
 	knownTables := buildTableSplitMap(tables)
 	candidates := make(map[int64]uint64)
@@ -490,11 +511,14 @@ func (c *Controller) loadBootstrapAddedTables(
 	addedTables := make(map[int64]bootstrapAddedTable)
 	// Keep tracking each candidate after an add: a later drop can invalidate it.
 	for cursor := startTs; cursor < endTs; {
-		events, resolvedTs, err := schemaStore.FetchTableTriggerDDLEvents(c.keyspaceMeta, dispatcherID, f, cursor, 100)
+		events, resolvedTs, err := schemaStore.FetchTableTriggerDDLEvents(c.keyspaceMeta, dispatcherID, f, txnOrderMatcher, cursor, 100)
 		if err != nil {
 			return nil, err
 		}
 		for _, event := range events {
+			if err := event.GetError(); err != nil {
+				return nil, err
+			}
 			if dropped := event.NeedDroppedTables; dropped != nil {
 				switch dropped.InfluenceType {
 				case commonEvent.InfluenceTypeNormal:
@@ -584,8 +608,61 @@ func (c *Controller) createSpanReplication(spanInfo *heartbeatpb.BootstrapTableS
 	)
 }
 
-func (c *Controller) loadTables(ctx context.Context, startTs uint64, schemaStore schemastore.SchemaStore, f filter.Filter) ([]commonEvent.Table, error) {
-	return schemaStore.GetAllPhysicalTables(ctx, c.keyspaceMeta, startTs, f)
+func (c *Controller) loadTables(ctx context.Context, startTs uint64, schemaStore schemastore.SchemaStore, f filter.Filter, txnOrderMatcher *ordering.TxnOrderMatcher) ([]commonEvent.Table, error) {
+	return schemaStore.GetAllPhysicalTables(ctx, c.keyspaceMeta, startTs, f, txnOrderMatcher)
+}
+
+func verifyTxnOrderBootstrapSpans(
+	responses map[node.ID]*heartbeatpb.MaintainerBootstrapResponse,
+	tables []commonEvent.Table,
+	addedTables map[int64]bootstrapAddedTable,
+	mode int64,
+	txnOrderMatcher *ordering.TxnOrderMatcher,
+) error {
+	orderedTables := make(map[int64]struct{})
+	addTable := func(table commonEvent.Table) {
+		if table.SchemaTableName != nil && txnOrderMatcher.Match(table.SchemaName, table.TableName) {
+			orderedTables[table.TableID] = struct{}{}
+		}
+	}
+	for _, table := range tables {
+		addTable(table)
+	}
+	for _, added := range addedTables {
+		addTable(added.table)
+	}
+	if len(orderedTables) == 0 {
+		return nil
+	}
+	verify := func(span *heartbeatpb.TableSpan, spanMode int64) error {
+		if span == nil || spanMode != mode {
+			return nil
+		}
+		if _, ordered := orderedTables[span.TableID]; !ordered {
+			return nil
+		}
+		wholeSpan := common.TableIDToComparableSpan(span.KeyspaceID, span.TableID)
+		if !span.Equal(&wholeSpan) {
+			return errors.ErrInvalidReplicaConfig.GenWithStackByArgs(
+				"sink.mysql-config.txn-order-tables does not support split spans, table ID " + strconv.FormatInt(span.TableID, 10))
+		}
+		return nil
+	}
+	for _, response := range responses {
+		for _, span := range response.Spans {
+			if err := verify(span.Span, span.Mode); err != nil {
+				return err
+			}
+		}
+		for _, op := range response.Operators {
+			if op.Config != nil {
+				if err := verify(op.Config.Span, op.Config.Mode); err != nil {
+					return err
+				}
+			}
+		}
+	}
+	return nil
 }
 
 func getSchemaInfo(table commonEvent.Table, isMysqlCompatibleBackend bool, enableActiveActive bool) *heartbeatpb.SchemaInfo {
