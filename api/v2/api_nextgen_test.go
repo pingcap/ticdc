@@ -30,7 +30,6 @@ import (
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/keyspace"
-	"github.com/pingcap/ticdc/pkg/server/mock"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap/zapcore"
 )
@@ -49,9 +48,8 @@ func TestLogLevelRouteAuthenticationRealm(t *testing.T) {
 	t.Cleanup(func() { log.SetLevel(originalLogLevel) })
 	log.SetLevel(zapcore.InfoLevel)
 
-	ctrl := gomock.NewController(t)
 	router := gin.New()
-	RegisterOpenAPIV2Routes(router, NewOpenAPIV2(mock.NewMockServer(ctrl)))
+	RegisterOpenAPIV2Routes(router, NewOpenAPIV2(&apiTestServer{}))
 
 	request := httptest.NewRequest(
 		http.MethodPost,
@@ -63,7 +61,7 @@ func TestLogLevelRouteAuthenticationRealm(t *testing.T) {
 	router.ServeHTTP(response, request)
 
 	require.Equal(t, http.StatusBadRequest, response.Code, response.Body.String())
-	require.Contains(t, response.Body.String(), "missing required query parameter keyspace")
+	require.Contains(t, response.Body.String(), "invalid api parameter")
 	require.Equal(t, zapcore.InfoLevel, log.GetLevel())
 }
 
@@ -80,9 +78,8 @@ func TestLogLevelRouteWithoutAuthenticationDoesNotRequireRealm(t *testing.T) {
 	t.Cleanup(func() { log.SetLevel(originalLogLevel) })
 	log.SetLevel(zapcore.InfoLevel)
 
-	ctrl := gomock.NewController(t)
 	router := gin.New()
-	RegisterOpenAPIV2Routes(router, NewOpenAPIV2(mock.NewMockServer(ctrl)))
+	RegisterOpenAPIV2Routes(router, NewOpenAPIV2(&apiTestServer{}))
 
 	request := httptest.NewRequest(
 		http.MethodPost,
@@ -110,7 +107,7 @@ func TestTableInspectionRoutesRejectInvalidKeyspace(t *testing.T) {
 	appcontext.SetService[keyspace.Manager](appcontext.KeyspaceManager, keyspaceManager)
 
 	router := gin.New()
-	RegisterOpenAPIV2Routes(router, NewOpenAPIV2(mock.NewMockServer(ctrl)))
+	RegisterOpenAPIV2Routes(router, NewOpenAPIV2(&apiTestServer{}))
 
 	paths := []string{"/api/v2/verify_table", "/api/v2/get_all_tables"}
 	for _, path := range paths {

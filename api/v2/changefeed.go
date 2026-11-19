@@ -346,6 +346,18 @@ func (h *OpenAPIV2) ListChangeFeeds(c *gin.Context) {
 		_ = c.Error(err)
 		return
 	}
+	if len(changefeeds) == 0 {
+		c.JSON(http.StatusOK, toListResponse(c, []ChangefeedCommonInfo{}))
+		return
+	}
+	info := changefeeds[0]
+	middleware.SetKeyspaceInContext(c, &keyspacepb.KeyspaceMeta{
+		Keyspace: &keyspacepb.KeyspaceMeta_Id{Id: info.KeyspaceID},
+		Name:     info.ChangefeedID.Keyspace(),
+	})
+	if !middleware.AuthenticateRequest(c, h.server) {
+		return
+	}
 	state := c.Query(api.APIOpVarChangefeedState)
 	commonInfos := make([]ChangefeedCommonInfo, 0)
 	for idx, changefeed := range changefeeds {
@@ -424,6 +436,10 @@ func (h *OpenAPIV2) VerifyTable(c *gin.Context) {
 
 	// fill replicaConfig
 	replicaCfg := cfg.ReplicaConfig.ToInternalReplicaConfig()
+	// VerifyTable is a preflight API. Keep configuration validation free of
+	// storage side effects; CreateChangefeed performs the actual accessibility
+	// check before persisting the changefeed.
+	replicaCfg.EnableRedoIOCheck = new(false)
 
 	// verify replicaConfig
 	sinkURIParsed, err := url.Parse(cfg.SinkURI)
@@ -502,6 +518,13 @@ func (h *OpenAPIV2) GetChangeFeed(c *gin.Context) {
 	cfInfo, status, err := co.GetChangefeed(c, changefeedDisplayName)
 	if err != nil {
 		_ = c.Error(err)
+		return
+	}
+	middleware.SetKeyspaceInContext(c, &keyspacepb.KeyspaceMeta{
+		Keyspace: &keyspacepb.KeyspaceMeta_Id{Id: cfInfo.KeyspaceID},
+		Name:     cfInfo.ChangefeedID.Keyspace(),
+	})
+	if !middleware.AuthenticateRequest(c, h.server) {
 		return
 	}
 
@@ -611,10 +634,21 @@ func (h *OpenAPIV2) DeleteChangefeed(c *gin.Context) {
 	cfInfo, _, err := co.GetChangefeed(c, changefeedDisplayName)
 	if err != nil {
 		if errors.ErrChangeFeedNotExists.Equal(err) {
+			setKeyspaceInContextForAuthentication(c)
+			if !middleware.AuthenticateRequest(c, h.server) {
+				return
+			}
 			c.JSON(getStatus(c), nil)
 			return
 		}
 		_ = c.Error(err)
+		return
+	}
+	middleware.SetKeyspaceInContext(c, &keyspacepb.KeyspaceMeta{
+		Keyspace: &keyspacepb.KeyspaceMeta_Id{Id: cfInfo.KeyspaceID},
+		Name:     cfInfo.ChangefeedID.Keyspace(),
+	})
+	if !middleware.AuthenticateRequest(c, h.server) {
 		return
 	}
 	_, err = co.RemoveChangefeed(ctx, cfInfo.ChangefeedID)
@@ -623,6 +657,30 @@ func (h *OpenAPIV2) DeleteChangefeed(c *gin.Context) {
 		return
 	}
 	c.JSON(getStatus(c), &EmptyResponse{})
+}
+
+// setKeyspaceInContextForAuthentication restores the keyspace context that the
+// keyspace checker used to provide before authentication was moved into the
+// delete handler. It is needed when an idempotent delete cannot obtain the
+// keyspace ID from a persisted changefeed.
+func setKeyspaceInContextForAuthentication(c *gin.Context) {
+	security := config.GetGlobalServerConfig().Security
+	if !kerneltype.IsNextGen() || security == nil || !security.ClientUserRequired {
+		return
+	}
+	if _, _, ok := c.Request.BasicAuth(); !ok {
+		return
+	}
+
+	keyspaceManager := appcontext.GetService[keyspace.Manager](appcontext.KeyspaceManager)
+	loadKeyspaceInContext(c, keyspaceManager)
+}
+
+func loadKeyspaceInContext(c *gin.Context, keyspaceManager keyspace.Manager) {
+	keyspaceMeta, err := keyspaceManager.LoadKeyspace(c.Request.Context(), GetKeyspaceValueWithDefault(c))
+	if err == nil {
+		middleware.SetKeyspaceInContext(c, keyspaceMeta)
+	}
 }
 
 // PauseChangefeed handles pause changefeed request
@@ -661,6 +719,13 @@ func (h *OpenAPIV2) PauseChangefeed(c *gin.Context) {
 	cfInfo, _, err := co.GetChangefeed(c, changefeedDisplayName)
 	if err != nil {
 		_ = c.Error(err)
+		return
+	}
+	middleware.SetKeyspaceInContext(c, &keyspacepb.KeyspaceMeta{
+		Keyspace: &keyspacepb.KeyspaceMeta_Id{Id: cfInfo.KeyspaceID},
+		Name:     cfInfo.ChangefeedID.Keyspace(),
+	})
+	if !middleware.AuthenticateRequest(c, h.server) {
 		return
 	}
 	err = co.PauseChangefeed(ctx, cfInfo.ChangefeedID)
@@ -1534,6 +1599,13 @@ func (h *OpenAPIV2) status(c *gin.Context) {
 	info, status, err := co.GetChangefeed(c, changefeedDisplayName)
 	if err != nil {
 		_ = c.Error(err)
+		return
+	}
+	middleware.SetKeyspaceInContext(c, &keyspacepb.KeyspaceMeta{
+		Keyspace: &keyspacepb.KeyspaceMeta_Id{Id: info.KeyspaceID},
+		Name:     info.ChangefeedID.Keyspace(),
+	})
+	if !middleware.AuthenticateRequest(c, h.server) {
 		return
 	}
 	var (

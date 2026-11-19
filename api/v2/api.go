@@ -45,7 +45,7 @@ func RegisterOpenAPIV2Routes(router *gin.Engine, api OpenAPIV2) {
 	// TiDB Operator relies on this API to determine whether the TiCDC node is healthy.
 	router.GET("/status", api.ServerStatus)
 	// Integration test relies on this API to determine whether the TiCDC node is healthy.
-	router.GET("/debug/info", gin.WrapF(api.handleDebugInfo))
+	router.GET("/debug/info", middleware.AuthenticateMiddleware(api.server), gin.WrapF(api.handleDebugInfo))
 
 	debugGroup := router.Group("/debug")
 	debugGroup.Use(middleware.LogMiddleware())
@@ -56,21 +56,22 @@ func RegisterOpenAPIV2Routes(router *gin.Engine, api OpenAPIV2) {
 
 	coordinatorMiddleware := middleware.ForwardToCoordinatorMiddleware(api.server)
 	keyspaceCheckerMiddleware := middleware.KeyspaceCheckerMiddleware()
+	keyspaceNameCheckerMiddleware := middleware.KeyspaceNameCheckerMiddleware()
 	v2.GET("health", coordinatorMiddleware, api.ServerHealth)
 
 	// changefeed apis
 	changefeedGroup := v2.Group("/changefeeds")
-	changefeedGroup.GET("/:changefeed_id", coordinatorMiddleware, keyspaceCheckerMiddleware, api.GetChangeFeed)
+	changefeedGroup.GET("/:changefeed_id", coordinatorMiddleware, keyspaceNameCheckerMiddleware, api.GetChangeFeed)
 	// The authenticateMiddleware will retire the KeyspaceMeta from the context,
 	// which is set by the keyspaceCheckerMiddleware.
 	// Therefore, the The authenticateMiddleware must be called after the keyspaceCheckerMiddleware.
 	changefeedGroup.POST("", coordinatorMiddleware, keyspaceCheckerMiddleware, authenticateMiddleware, api.CreateChangefeed)
-	changefeedGroup.GET("", coordinatorMiddleware, keyspaceCheckerMiddleware, api.ListChangeFeeds)
+	changefeedGroup.GET("", coordinatorMiddleware, keyspaceNameCheckerMiddleware, api.ListChangeFeeds)
 	changefeedGroup.PUT("/:changefeed_id", coordinatorMiddleware, keyspaceCheckerMiddleware, authenticateMiddleware, api.UpdateChangefeed)
 	changefeedGroup.POST("/:changefeed_id/resume", coordinatorMiddleware, keyspaceCheckerMiddleware, authenticateMiddleware, api.ResumeChangefeed)
-	changefeedGroup.POST("/:changefeed_id/pause", coordinatorMiddleware, keyspaceCheckerMiddleware, authenticateMiddleware, api.PauseChangefeed)
-	changefeedGroup.DELETE("/:changefeed_id", coordinatorMiddleware, keyspaceCheckerMiddleware, authenticateMiddleware, api.DeleteChangefeed)
-	changefeedGroup.GET("/:changefeed_id/status", coordinatorMiddleware, keyspaceCheckerMiddleware, authenticateMiddleware, api.status)
+	changefeedGroup.POST("/:changefeed_id/pause", coordinatorMiddleware, keyspaceNameCheckerMiddleware, api.PauseChangefeed)
+	changefeedGroup.DELETE("/:changefeed_id", coordinatorMiddleware, keyspaceNameCheckerMiddleware, api.DeleteChangefeed)
+	changefeedGroup.GET("/:changefeed_id/status", coordinatorMiddleware, keyspaceNameCheckerMiddleware, api.status)
 	changefeedGroup.GET("/:changefeed_id/synced", coordinatorMiddleware, keyspaceCheckerMiddleware, authenticateMiddleware, api.synced)
 
 	// internal APIs
@@ -87,9 +88,9 @@ func RegisterOpenAPIV2Routes(router *gin.Engine, api OpenAPIV2) {
 	captureGroup.GET("", api.ListCaptures)
 
 	verifyTableGroup := v2.Group("/verify_table")
-	verifyTableGroup.POST("", api.VerifyTable)
+	verifyTableGroup.POST("", keyspaceCheckerMiddleware, authenticateMiddleware, api.VerifyTable)
 	getAllTablesGroup := v2.Group("/get_all_tables")
-	getAllTablesGroup.POST("", api.GetAllTables)
+	getAllTablesGroup.POST("", keyspaceCheckerMiddleware, authenticateMiddleware, api.GetAllTables)
 
 	// processor apis
 	// Note: They are not useful in new arch cdc,

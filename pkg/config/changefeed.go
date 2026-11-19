@@ -329,16 +329,36 @@ func (info *ChangeFeedInfo) String() (str string) {
 		return str
 	}
 
-	clone.SinkURI = util.MaskSensitiveDataInURI(clone.SinkURI)
-	if clone.Config != nil {
-		clone.Config.MaskSensitiveData()
-	}
+	clone.maskSensitiveData()
 
 	str, err = clone.Marshal()
 	if err != nil {
 		log.Error("failed to marshal changefeed info", zap.Error(err))
 	}
 	return str
+}
+
+// MaskChangefeedInfo returns masked metadata for display without modifying data.
+func MaskChangefeedInfo(data []byte) (string, error) {
+	info := new(ChangeFeedInfo)
+	if err := info.Unmarshal(data); err != nil {
+		return "", err
+	}
+	info.maskSensitiveData()
+	return info.Marshal()
+}
+
+func (info *ChangeFeedInfo) maskSensitiveData() {
+	info.SinkURI = util.MaskSensitiveDataInURI(info.SinkURI)
+	if info.Config != nil {
+		info.Config.MaskSensitiveData()
+	}
+	if info.Error != nil {
+		info.Error.Message = util.RedactValue(info.Error.Message)
+	}
+	if info.Warning != nil {
+		info.Warning.Message = util.RedactValue(info.Warning.Message)
+	}
 }
 
 // GetStartTs returns StartTs if it's specified or using the

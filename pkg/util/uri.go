@@ -179,7 +179,6 @@ func ContainsSensitiveDataInURI(uri string) bool {
 func MaskSensitiveDataInURI(uri string) string {
 	uriParsed, err := url.Parse(uri)
 	if err != nil {
-		log.Error("failed to parse sink URI", zap.Error(err))
 		return ""
 	}
 	queries := uriParsed.Query()

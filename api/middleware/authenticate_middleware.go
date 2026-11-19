@@ -30,23 +30,18 @@ import (
 	"go.uber.org/zap"
 )
 
+const ctxAuthenticatedKey = "ctx-authenticated"
+
 // AuthenticateMiddleware authenticates the request by query upstream TiDB.
 func AuthenticateMiddleware(server server.Server) gin.HandlerFunc {
 	return func(ctx *gin.Context) {
-		security := config.GetGlobalServerConfig().Security
-		if security != nil && security.ClientUserRequired {
-			if err := verify(ctx, server.GetEtcdClient().GetEtcdClient()); err != nil {
-				ctx.IndentedJSON(http.StatusUnauthorized, api.NewHTTPError(err))
-				ctx.Abort()
-				return
-			}
+		if !AuthenticateRequest(ctx, server) {
+			return
 		}
 		ctx.Next()
 	}
 }
 
-<<<<<<< HEAD
-=======
 // AuthenticateNodeMiddleware authenticates a node-level request. In next-gen
 // mode, the keyspace query parameter identifies the TiDB authentication realm.
 func AuthenticateNodeMiddleware(server server.Server) gin.HandlerFunc {
@@ -85,7 +80,6 @@ func AuthenticateRequest(ctx *gin.Context, server server.Server) bool {
 	return true
 }
 
->>>>>>> 3ae3f2e20 (api: require authentication for log level changes (#6899))
 func verify(ctx *gin.Context, etcdCli etcd.Client) error {
 	// get the username and password from the authorization header
 	username, password, ok := ctx.Request.BasicAuth()
