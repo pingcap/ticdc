@@ -307,6 +307,9 @@ func NewDispatcherManager(
 	manager.writePathMu.Unlock()
 
 	sinkType := manager.sink.SinkType()
+	if sinkType == common.MysqlSinkType {
+		filterCfg.TxnOrderTables = cfConfig.SinkConfig.GetTxnOrderTables(config.MySQLScheme)
+	}
 	if sinkType != common.KafkaSinkType {
 		ignoreUpdateOnlyColumnsRuleCount := countIgnoreUpdateOnlyColumnsRules(cfConfig.Filter)
 		if ignoreUpdateOnlyColumnsRuleCount > 0 {
