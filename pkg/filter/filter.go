@@ -46,14 +46,10 @@ const (
 // Filter are safe for concurrent use.
 type Filter interface {
 	// ShouldIgnoreDML returns true if the DML event should not be handled.
-<<<<<<< HEAD
-	ShouldIgnoreDML(dmlType common.RowType, preRow, row chunk.Row, tableInfo *common.TableInfo, startTs uint64) (bool, error)
+	ShouldIgnoreDML(dmlType common.RowType, preRow, row chunk.Row, tableInfo *common.TableInfo, startTs uint64, ctx DMLFilterContext) (bool, error)
 	// ShouldIgnoreDMLByEventType returns true only when filters that do not need
 	// decoded row values can determine the DML should be ignored.
 	ShouldIgnoreDMLByEventType(dmlType common.RowType, tableInfo *common.TableInfo, startTs uint64) (bool, error)
-=======
-	ShouldIgnoreDML(dmlType common.RowType, preRow, row chunk.Row, tableInfo *common.TableInfo, startTs uint64, ctx DMLFilterContext) (bool, error)
->>>>>>> 640d3d31e (filter: support ignore update only columns for kafka sink (#5194))
 	// ShouldDiscardDDL returns true if the DDL event should not be handled.
 	ShouldDiscardDDL(schema, table string, ddlType timodel.ActionType, tableInfo *common.TableInfo) bool
 	// ShouldIgnoreDDL returns true if the DDL event should not be sent to downstream.
@@ -140,22 +136,26 @@ func NewFilter(cfg *config.FilterConfig, tz string, caseSensitive bool, forceRep
 // 1. By startTs.
 // 2. By table name.
 // 3. By type.
-<<<<<<< HEAD
-// 4. By row value expression.
-func (f *filter) ShouldIgnoreDML(dmlType common.RowType, preRow, row chunk.Row, tableInfo *common.TableInfo, startTs uint64) (bool, error) {
+// 4. By update-only-column config.
+// 5. By row value expression.
+func (f *filter) ShouldIgnoreDML(dmlType common.RowType, preRow, row chunk.Row, tableInfo *common.TableInfo, startTs uint64, filterContext DMLFilterContext) (bool, error) {
 	ignore, err := f.ShouldIgnoreDMLByEventType(dmlType, tableInfo, startTs)
 	if ignore || err != nil {
 		return ignore, err
+	}
+	if filterContext.EnableIgnoreUpdateOnlyColumns {
+		ignoreByUpdateOnlyColumns, err := f.updateOnlyColumnsFilter.shouldSkipDML(dmlType, preRow, row, tableInfo)
+		if err != nil {
+			return false, err
+		}
+		if ignoreByUpdateOnlyColumns {
+			return true, nil
+		}
 	}
 	return f.dmlExprFilter.shouldSkipDML(dmlType, preRow, row, tableInfo)
 }
 
 func (f *filter) ShouldIgnoreDMLByEventType(dmlType common.RowType, tableInfo *common.TableInfo, startTs uint64) (bool, error) {
-=======
-// 4. By update-only-column config.
-// 5. By row value expression.
-func (f *filter) ShouldIgnoreDML(dmlType common.RowType, preRow, row chunk.Row, tableInfo *common.TableInfo, startTs uint64, filterContext DMLFilterContext) (bool, error) {
->>>>>>> 640d3d31e (filter: support ignore update only columns for kafka sink (#5194))
 	if f.shouldIgnoreStartTs(startTs) {
 		return true, nil
 	}
@@ -174,20 +174,7 @@ func (f *filter) ShouldIgnoreDML(dmlType common.RowType, preRow, row chunk.Row, 
 	if ignoreByEventType {
 		return true, nil
 	}
-<<<<<<< HEAD
 	return false, nil
-=======
-	if filterContext.EnableIgnoreUpdateOnlyColumns {
-		ignoreByUpdateOnlyColumns, err := f.updateOnlyColumnsFilter.shouldSkipDML(dmlType, preRow, row, tableInfo)
-		if err != nil {
-			return false, err
-		}
-		if ignoreByUpdateOnlyColumns {
-			return true, nil
-		}
-	}
-	return f.dmlExprFilter.shouldSkipDML(dmlType, preRow, row, tableInfo)
->>>>>>> 640d3d31e (filter: support ignore update only columns for kafka sink (#5194))
 }
 
 // ShouldDiscardDDL checks if a DDL event should be discarded by conditions below:

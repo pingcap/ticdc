@@ -196,11 +196,9 @@ func (r *updateOnlyColumnsRule) resolveColumns(tableInfo *common.TableInfo) reso
 }
 
 func (r *updateOnlyColumnsRule) resolveColumnByName(tableInfo *common.TableInfo, name string) (*model.ColumnInfo, bool) {
-	if r.caseSensitive {
-		return tableInfo.GetColumnInfoByName(name)
-	}
 	for _, col := range tableInfo.GetColumns() {
-		if strings.EqualFold(col.Name.O, name) {
+		if (r.caseSensitive && col.Name.O == name) ||
+			(!r.caseSensitive && strings.EqualFold(col.Name.O, name)) {
 			return col, true
 		}
 	}

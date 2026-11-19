@@ -571,22 +571,6 @@ func (s *dispatcherSession) newDispatcherRegisterRequest(serverID string, onlyRe
 			TableSpan:    s.target.GetTableSpan(),
 			StartTs:      startTs,
 			// ServerId is the id of the request sender.
-<<<<<<< HEAD
-			ServerId:             serverID,
-			ActionType:           eventpb.ActionType_ACTION_TYPE_REGISTER,
-			FilterConfig:         s.target.GetFilterConfig(),
-			EnableSyncPoint:      s.target.EnableSyncPoint(),
-			SyncPointInterval:    uint64(syncPointInterval.Seconds()),
-			SyncPointTs:          syncpoint.CalculateStartSyncPointTs(startTs, syncPointInterval, s.target.GetSkipSyncpointAtStartTs()),
-			OnlyReuse:            onlyReuse,
-			BdrMode:              s.target.GetBDRMode(),
-			Mode:                 s.target.GetMode(),
-			Epoch:                0,
-			Integrity:            s.target.GetIntegrityConfig(),
-			OutputRawChangeEvent: s.target.IsOutputRawChangeEvent(),
-			TxnAtomicity:         string(s.target.GetTxnAtomicity()),
-			LowLatencyMode:       s.target.IsLowLatencyMode(),
-=======
 			ServerId:                      serverID,
 			ActionType:                    eventpb.ActionType_ACTION_TYPE_REGISTER,
 			FilterConfig:                  s.target.GetFilterConfig(),
@@ -597,12 +581,11 @@ func (s *dispatcherSession) newDispatcherRegisterRequest(serverID string, onlyRe
 			BdrMode:                       s.target.GetBDRMode(),
 			Mode:                          s.target.GetMode(),
 			Epoch:                         0,
-			Timezone:                      s.target.GetTimezone(),
 			Integrity:                     s.target.GetIntegrityConfig(),
 			OutputRawChangeEvent:          s.target.IsOutputRawChangeEvent(),
 			TxnAtomicity:                  string(s.target.GetTxnAtomicity()),
+			LowLatencyMode:                s.target.IsLowLatencyMode(),
 			EnableIgnoreUpdateOnlyColumns: s.target.EnableIgnoreUpdateOnlyColumns(),
->>>>>>> 640d3d31e (filter: support ignore update only columns for kafka sink (#5194))
 		},
 	}
 }
@@ -631,24 +614,14 @@ func (s *dispatcherSession) newDispatcherResetRequest(serverID string, resetTs u
 			SyncPointInterval: uint64(syncPointInterval.Seconds()),
 			SyncPointTs:       syncpoint.CalculateStartSyncPointTs(resetTs, syncPointInterval, skipSyncpointSameAsResetTs),
 			// OnlyReuse:         false,
-<<<<<<< HEAD
-			BdrMode:              s.target.GetBDRMode(),
-			Mode:                 s.target.GetMode(),
-			Epoch:                epoch,
-			Integrity:            s.target.GetIntegrityConfig(),
-			OutputRawChangeEvent: s.target.IsOutputRawChangeEvent(),
-			TxnAtomicity:         string(s.target.GetTxnAtomicity()),
-			LowLatencyMode:       s.target.IsLowLatencyMode(),
-=======
 			BdrMode:                       s.target.GetBDRMode(),
 			Mode:                          s.target.GetMode(),
 			Epoch:                         epoch,
-			Timezone:                      s.target.GetTimezone(),
 			Integrity:                     s.target.GetIntegrityConfig(),
 			OutputRawChangeEvent:          s.target.IsOutputRawChangeEvent(),
 			TxnAtomicity:                  string(s.target.GetTxnAtomicity()),
+			LowLatencyMode:                s.target.IsLowLatencyMode(),
 			EnableIgnoreUpdateOnlyColumns: s.target.EnableIgnoreUpdateOnlyColumns(),
->>>>>>> 640d3d31e (filter: support ignore update only columns for kafka sink (#5194))
 		},
 	}
 }

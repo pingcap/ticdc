@@ -1135,18 +1135,11 @@ type EventFilterRule struct {
 	// regular expression
 	IgnoreSQL []string `toml:"ignore_sql" json:"ignore_sql"`
 	// sql expression
-<<<<<<< HEAD
-	IgnoreInsertValueExpr    string `json:"ignore_insert_value_expr" toml:"ignore-insert-value-expr"`
-	IgnoreUpdateNewValueExpr string `json:"ignore_update_new_value_expr" toml:"ignore-update-new-value-expr"`
-	IgnoreUpdateOldValueExpr string `json:"ignore_update_old_value_expr" toml:"ignore-update-old-value-expr"`
-	IgnoreDeleteValueExpr    string `json:"ignore_delete_value_expr" toml:"ignore-delete-value-expr"`
-=======
-	IgnoreInsertValueExpr    string   `json:"ignore_insert_value_expr"`
-	IgnoreUpdateNewValueExpr string   `json:"ignore_update_new_value_expr"`
-	IgnoreUpdateOldValueExpr string   `json:"ignore_update_old_value_expr"`
-	IgnoreDeleteValueExpr    string   `json:"ignore_delete_value_expr"`
-	IgnoreUpdateOnlyColumns  []string `json:"ignore_update_only_columns,omitempty"`
->>>>>>> 640d3d31e (filter: support ignore update only columns for kafka sink (#5194))
+	IgnoreInsertValueExpr    string   `json:"ignore_insert_value_expr" toml:"ignore-insert-value-expr"`
+	IgnoreUpdateNewValueExpr string   `json:"ignore_update_new_value_expr" toml:"ignore-update-new-value-expr"`
+	IgnoreUpdateOldValueExpr string   `json:"ignore_update_old_value_expr" toml:"ignore-update-old-value-expr"`
+	IgnoreDeleteValueExpr    string   `json:"ignore_delete_value_expr" toml:"ignore-delete-value-expr"`
+	IgnoreUpdateOnlyColumns  []string `json:"ignore_update_only_columns,omitempty" toml:"ignore-update-only-columns,omitempty"`
 }
 
 // ToInternalEventFilterRule converts EventFilterRule to *config.EventFilterRule

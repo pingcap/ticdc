@@ -421,7 +421,6 @@ func TestShouldIgnoreDML(t *testing.T) {
 	require.True(t, ignore, "Should be ignored by SQL event filter")
 }
 
-<<<<<<< HEAD
 func TestShouldIgnoreDMLByEventType(t *testing.T) {
 	t.Parallel()
 
@@ -466,7 +465,8 @@ func TestShouldIgnoreDMLByEventType(t *testing.T) {
 	ignore, err = f.ShouldIgnoreDMLByEventType(common.RowTypeInsert, ti1, 0)
 	require.NoError(t, err)
 	require.False(t, ignore)
-=======
+}
+
 func TestShouldIgnoreDMLByUpdateOnlyColumns(t *testing.T) {
 	t.Parallel()
 
@@ -478,7 +478,7 @@ func TestShouldIgnoreDMLByUpdateOnlyColumns(t *testing.T) {
 		newColumnInfo(5, "updated_at", mysql.TypeLong, 0),
 	}
 	indices := []*model.IndexInfo{
-		newIndexInfo("email_idx", []*model.IndexColumn{{Name: ast.NewCIStr("email"), Offset: 1}}, false, true),
+		newIndexInfo("email_idx", []*model.IndexColumn{{Name: parser_model.NewCIStr("email"), Offset: 1}}, false, true),
 	}
 	tableInfo := mustNewCommonTableInfo("test", "t", cols, indices)
 	enabled := DMLFilterContext{EnableIgnoreUpdateOnlyColumns: true}
@@ -750,7 +750,6 @@ func TestColumnValueEqual(t *testing.T) {
 			require.Equal(t, tc.equal, equal)
 		})
 	}
->>>>>>> 640d3d31e (filter: support ignore update only columns for kafka sink (#5194))
 }
 
 func TestShouldIgnoreDMLCaseSensitivity(t *testing.T) {

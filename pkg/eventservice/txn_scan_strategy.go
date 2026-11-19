@@ -379,7 +379,8 @@ func drainLargeTxnInserts(
 		ctx.scanner.schemaGetter,
 		session.dispatcherStat.filter,
 		session.dispatcherStat.info.IsOutputRawChangeEvent(),
-		ctx.scanner.mode)
+		ctx.scanner.mode,
+		session.dispatcherStat.info.EnableIgnoreUpdateOnlyColumns())
 	processor.ctx = session.ctx
 	processor.dispatcherStat = session.dispatcherStat
 

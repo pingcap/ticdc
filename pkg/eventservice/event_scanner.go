@@ -162,7 +162,8 @@ func (s *eventScanner) scan(
 		s.schemaGetter,
 		dispatcherStat.filter,
 		dispatcherStat.info.IsOutputRawChangeEvent(),
-		s.mode)
+		s.mode,
+		dispatcherStat.info.EnableIgnoreUpdateOnlyColumns())
 	scanCtx.processor.ctx = ctx
 	scanCtx.processor.dispatcherStat = dispatcherStat
 	checkpoint, err := dispatcherStat.snapshotOriginalScan()
@@ -278,16 +279,6 @@ func (s *eventScanner) scanAndMergeEvents(
 	processor := scanCtx.processor
 	tableID := session.dataRange.Span.TableID
 	dispatcher := session.dispatcherStat
-<<<<<<< HEAD
-=======
-	processor := newDMLProcessor(
-		s.mounter,
-		s.schemaGetter,
-		dispatcher.filter,
-		dispatcher.info.IsOutputRawChangeEvent(),
-		s.mode,
-		dispatcher.info.EnableIgnoreUpdateOnlyColumns())
->>>>>>> 640d3d31e (filter: support ignore update only columns for kafka sink (#5194))
 
 	for {
 		shouldStop, err := s.checkScanConditions(session)
@@ -855,8 +846,8 @@ type dmlProcessor struct {
 	mounter      event.Mounter
 	schemaGetter schemaGetter
 
-<<<<<<< HEAD
 	filter                   filter.Filter
+	filterContext            filter.DMLFilterContext
 	dispatcherStat           *dispatcherStat
 	spillDir                 string
 	cleanupLargeTxnAfterScan bool
@@ -867,10 +858,6 @@ type dmlProcessor struct {
 		valid  bool
 		ignore bool
 	}
-=======
-	filter        filter.Filter
-	filterContext filter.DMLFilterContext
->>>>>>> 640d3d31e (filter: support ignore update only columns for kafka sink (#5194))
 
 	// insertRowCache is used to cache the split update event's insert part of the current transaction.
 	// It will be used to append to the current DML event when the transaction is finished.
@@ -891,19 +878,16 @@ func newDMLProcessor(
 	dmlFilter filter.Filter, outputRawChangeEvent bool, mode int64,
 	enableIgnoreUpdateOnlyColumns bool,
 ) *dmlProcessor {
-<<<<<<< HEAD
 	// Preserve legacy raw UPDATE records for redo applier integration tests.
 	failpoint.Inject("OutputRawRedoUpdates", func() {
 		if common.IsRedoMode(mode) {
 			outputRawChangeEvent = true
 		}
 	})
-=======
 	filterContext := filter.DMLFilterContext{}
 	if enableIgnoreUpdateOnlyColumns {
 		filterContext.EnableIgnoreUpdateOnlyColumns = true
 	}
->>>>>>> 640d3d31e (filter: support ignore update only columns for kafka sink (#5194))
 	return &dmlProcessor{
 		ctx:                  context.Background(),
 		mounter:              mounter,
@@ -937,18 +921,8 @@ func (p *dmlProcessor) startTxn(
 }
 
 func (p *dmlProcessor) commitTxn() error {
-<<<<<<< HEAD
 	if err := p.flushCachedInsertRows(); err != nil {
 		return err
-=======
-	if p.currentTxn != nil && len(p.insertRowCache) > 0 {
-		for _, insertRow := range p.insertRowCache {
-			if err := p.currentTxn.AppendRow(insertRow, p.mounter.DecodeToChunk, p.filter, p.filterContext); err != nil {
-				return err
-			}
-		}
-		p.insertRowCache = make([]*common.RawKVEntry, 0)
->>>>>>> 640d3d31e (filter: support ignore update only columns for kafka sink (#5194))
 	}
 	p.currentTxn = nil
 	return nil
@@ -959,7 +933,7 @@ func (p *dmlProcessor) flushCachedInsertRows() error {
 		return nil
 	}
 	for _, insertRow := range p.insertRowCache {
-		if err := p.currentTxn.AppendRow(insertRow, p.mounter.DecodeToChunk, p.filter); err != nil {
+		if err := p.currentTxn.AppendRow(insertRow, p.mounter.DecodeToChunk, p.filter, p.filterContext); err != nil {
 			return err
 		}
 	}
@@ -972,7 +946,7 @@ func (p *dmlProcessor) appendInsertRow(rawEvent *common.RawKVEntry) error {
 		log.Panic("no current DML event to append to")
 	}
 	rawEvent.Key = event.RemoveKeyspacePrefix(rawEvent.Key)
-	return p.currentTxn.AppendRow(rawEvent, p.mounter.DecodeToChunk, p.filter)
+	return p.currentTxn.AppendRow(rawEvent, p.mounter.DecodeToChunk, p.filter, p.filterContext)
 }
 
 // appendRow appends a row to the current DML event.
@@ -1016,7 +990,6 @@ func (p *dmlProcessor) appendRow(rawEvent *common.RawKVEntry) error {
 	rawType := rawEvent.GetType()
 	if !rawEvent.IsUpdate() {
 		updateMetricEventServiceSendDMLTypeCount(p.mode, rawType, false)
-<<<<<<< HEAD
 		ignore, err := p.shouldIgnoreRawEventByDMLType(rawEvent)
 		if err != nil {
 			return err
@@ -1024,10 +997,7 @@ func (p *dmlProcessor) appendRow(rawEvent *common.RawKVEntry) error {
 		if ignore {
 			return nil
 		}
-		return p.currentTxn.AppendRow(rawEvent, p.mounter.DecodeToChunk, p.filter)
-=======
 		return p.currentTxn.AppendRow(rawEvent, p.mounter.DecodeToChunk, p.filter, p.filterContext)
->>>>>>> 640d3d31e (filter: support ignore update only columns for kafka sink (#5194))
 	}
 
 	var (
@@ -1063,7 +1033,6 @@ func (p *dmlProcessor) appendRow(rawEvent *common.RawKVEntry) error {
 	if err != nil {
 		return err
 	}
-<<<<<<< HEAD
 	ignoreInsert, err := p.shouldIgnoreRawEventByDMLType(insertRow)
 	if err != nil {
 		return err
@@ -1088,11 +1057,7 @@ func (p *dmlProcessor) appendRow(rawEvent *common.RawKVEntry) error {
 	if ignoreDelete {
 		return nil
 	}
-	return p.currentTxn.AppendRow(deleteRow, p.mounter.DecodeToChunk, p.filter)
-=======
-	p.insertRowCache = append(p.insertRowCache, insertRow)
 	return p.currentTxn.AppendRow(deleteRow, p.mounter.DecodeToChunk, p.filter, p.filterContext)
->>>>>>> 640d3d31e (filter: support ignore update only columns for kafka sink (#5194))
 }
 
 func (p *dmlProcessor) shouldIgnoreRawEventByDMLType(rawEvent *common.RawKVEntry) (bool, error) {

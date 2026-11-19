@@ -29,10 +29,7 @@ import (
 	bf "github.com/pingcap/ticdc/pkg/binlog-filter"
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/common/event"
-<<<<<<< HEAD
 	"github.com/pingcap/ticdc/pkg/config"
-=======
->>>>>>> 640d3d31e (filter: support ignore update only columns for kafka sink (#5194))
 	"github.com/pingcap/ticdc/pkg/filter"
 	"github.com/pingcap/ticdc/pkg/integrity"
 	"github.com/pingcap/ticdc/pkg/metrics"
@@ -1637,7 +1634,6 @@ func TestDMLProcessor(t *testing.T) {
 
 	// Test case 0: create a new DML processor
 	t.Run("CreateNewDMLProcessor", func(t *testing.T) {
-<<<<<<< HEAD
 		originalConfig := config.GetGlobalServerConfig().Clone()
 		cfg := originalConfig.Clone()
 		cfg.DataDir = t.TempDir()
@@ -1646,10 +1642,7 @@ func TestDMLProcessor(t *testing.T) {
 			config.StoreGlobalServerConfig(originalConfig)
 		})
 
-		processor := newDMLProcessor(mockMounter, mockSchemaGetter, nil, false, common.DefaultMode)
-=======
 		processor := newDMLProcessor(mockMounter, mockSchemaGetter, nil, false, common.DefaultMode, false)
->>>>>>> 640d3d31e (filter: support ignore update only columns for kafka sink (#5194))
 		require.NotNil(t, processor)
 		require.NotNil(t, processor.batchDML)
 		require.Nil(t, processor.currentTxn)
@@ -1851,7 +1844,7 @@ func TestDMLProcessor(t *testing.T) {
 	})
 
 	t.Run("UpdateThatChangesUKCachesInsertWhenSplitTxnIsBelowSpillThreshold", func(t *testing.T) {
-		processor := newDMLProcessor(mockMounter, mockSchemaGetter, nil, false, common.DefaultMode)
+		processor := newDMLProcessor(mockMounter, mockSchemaGetter, nil, false, common.DefaultMode, false)
 		disp := &dispatcherStat{id: dispatcherID}
 		processor.dispatcherStat = disp
 		processor.spillDir = t.TempDir()
@@ -1876,7 +1869,7 @@ func TestDMLProcessor(t *testing.T) {
 	})
 
 	t.Run("UpdateThatChangesUKSpillsInsertWhenSplitTxnExceedsThreshold", func(t *testing.T) {
-		processor := newDMLProcessor(mockMounter, mockSchemaGetter, nil, false, common.DefaultMode)
+		processor := newDMLProcessor(mockMounter, mockSchemaGetter, nil, false, common.DefaultMode, false)
 		disp := &dispatcherStat{id: dispatcherID}
 		processor.dispatcherStat = disp
 		processor.spillDir = t.TempDir()
@@ -1912,7 +1905,7 @@ func TestDMLProcessor(t *testing.T) {
 	})
 
 	t.Run("UpdateThatChangesUKKeepsSpillingAfterLargeTxnResume", func(t *testing.T) {
-		processor := newDMLProcessor(mockMounter, mockSchemaGetter, nil, false, common.DefaultMode)
+		processor := newDMLProcessor(mockMounter, mockSchemaGetter, nil, false, common.DefaultMode, false)
 		disp := &dispatcherStat{id: dispatcherID}
 		processor.dispatcherStat = disp
 		processor.spillDir = t.TempDir()
@@ -1969,11 +1962,7 @@ func TestDMLProcessorAppendRow(t *testing.T) {
 
 	// Test case 1: appendRow before txn started, illegal usage.
 	t.Run("NoCurrentDMLEvent", func(t *testing.T) {
-<<<<<<< HEAD
-		processor := newDMLProcessor(testMounter, mockSchemaGetter, nil, false, common.DefaultMode)
-=======
-		processor := newDMLProcessor(mockMounter, mockSchemaGetter, nil, false, common.DefaultMode, false)
->>>>>>> 640d3d31e (filter: support ignore update only columns for kafka sink (#5194))
+		processor := newDMLProcessor(testMounter, mockSchemaGetter, nil, false, common.DefaultMode, false)
 		rawEvent := kvEvents[0]
 
 		require.Panics(t, func() {
@@ -1983,11 +1972,7 @@ func TestDMLProcessorAppendRow(t *testing.T) {
 
 	// Test case 2: appendRow for insert operation (non-update)
 	t.Run("AppendInsertRow", func(t *testing.T) {
-<<<<<<< HEAD
-		processor := newDMLProcessor(testMounter, mockSchemaGetter, nil, false, common.DefaultMode)
-=======
-		processor := newDMLProcessor(mockMounter, mockSchemaGetter, nil, false, common.DefaultMode, false)
->>>>>>> 640d3d31e (filter: support ignore update only columns for kafka sink (#5194))
+		processor := newDMLProcessor(testMounter, mockSchemaGetter, nil, false, common.DefaultMode, false)
 
 		firstEvent := kvEvents[0]
 		processor.startTxn(dispatcherID, tableID, tableInfo, firstEvent.StartTs, firstEvent.CRTs, false)
@@ -2005,11 +1990,7 @@ func TestDMLProcessorAppendRow(t *testing.T) {
 
 	// Test case 3: appendRow for delete operation (non-update)
 	t.Run("AppendDeleteRow", func(t *testing.T) {
-<<<<<<< HEAD
-		processor := newDMLProcessor(testMounter, mockSchemaGetter, nil, false, common.DefaultMode)
-=======
-		processor := newDMLProcessor(mockMounter, mockSchemaGetter, nil, false, common.DefaultMode, false)
->>>>>>> 640d3d31e (filter: support ignore update only columns for kafka sink (#5194))
+		processor := newDMLProcessor(testMounter, mockSchemaGetter, nil, false, common.DefaultMode, false)
 
 		rawEvent := kvEvents[0]
 		deleteRow := insertToDeleteRow(rawEvent)
@@ -2038,7 +2019,7 @@ func TestDMLProcessorAppendRow(t *testing.T) {
 			},
 		}, "UTC", false, false)
 		require.NoError(t, err)
-		processor := newDMLProcessor(mounter, mockSchemaGetter, changefeedFilter, false, common.DefaultMode)
+		processor := newDMLProcessor(mounter, mockSchemaGetter, changefeedFilter, false, common.DefaultMode, false)
 
 		rawEvent := kvEvents[0]
 		deleteRow := insertToDeleteRow(rawEvent)
@@ -2065,7 +2046,7 @@ func TestDMLProcessorAppendRow(t *testing.T) {
 		}, "UTC", false, false)
 		require.NoError(t, err)
 		countingFilter := &countingDMLTypeFilter{Filter: changefeedFilter}
-		processor := newDMLProcessor(mounter, mockSchemaGetter, countingFilter, false, common.DefaultMode)
+		processor := newDMLProcessor(mounter, mockSchemaGetter, countingFilter, false, common.DefaultMode, false)
 
 		rawEvent := kvEvents[0]
 		deleteRow := insertToDeleteRow(rawEvent)
@@ -2094,11 +2075,7 @@ func TestDMLProcessorAppendRow(t *testing.T) {
 
 	// Test case 4: appendRow for update operation without unique key change
 	t.Run("AppendUpdateRowWithoutUKChange", func(t *testing.T) {
-<<<<<<< HEAD
-		processor := newDMLProcessor(testMounter, mockSchemaGetter, nil, false, common.DefaultMode)
-=======
-		processor := newDMLProcessor(mockMounter, mockSchemaGetter, nil, false, common.DefaultMode, false)
->>>>>>> 640d3d31e (filter: support ignore update only columns for kafka sink (#5194))
+		processor := newDMLProcessor(testMounter, mockSchemaGetter, nil, false, common.DefaultMode, false)
 
 		// Create a current DML event first
 		rawEvent := kvEvents[0]
@@ -2122,11 +2099,7 @@ func TestDMLProcessorAppendRow(t *testing.T) {
 
 	// Test case 5: appendRow for update operation with unique key change (split update)
 	t.Run("AppendUpdateRowWithUKChange", func(t *testing.T) {
-<<<<<<< HEAD
-		processor := newDMLProcessor(testMounter, mockSchemaGetter, nil, false, common.DefaultMode)
-=======
-		processor := newDMLProcessor(mockMounter, mockSchemaGetter, nil, false, common.DefaultMode, false)
->>>>>>> 640d3d31e (filter: support ignore update only columns for kafka sink (#5194))
+		processor := newDMLProcessor(testMounter, mockSchemaGetter, nil, false, common.DefaultMode, false)
 
 		// Create a current DML event first
 		rawEvent := kvEvents[0]
@@ -2154,11 +2127,7 @@ func TestDMLProcessorAppendRow(t *testing.T) {
 
 	// Test case 6: Test multiple appendRow calls
 	t.Run("MultipleAppendRows", func(t *testing.T) {
-<<<<<<< HEAD
-		processor := newDMLProcessor(testMounter, mockSchemaGetter, nil, false, common.DefaultMode)
-=======
-		processor := newDMLProcessor(mockMounter, mockSchemaGetter, nil, false, common.DefaultMode, false)
->>>>>>> 640d3d31e (filter: support ignore update only columns for kafka sink (#5194))
+		processor := newDMLProcessor(testMounter, mockSchemaGetter, nil, false, common.DefaultMode, false)
 
 		// Create a current DML event first
 		rawEvent := kvEvents[0]
@@ -2220,7 +2189,7 @@ func TestDMLProcessorAppendRow(t *testing.T) {
 			},
 		}, "UTC", false, false)
 		require.NoError(t, err)
-		processor := newDMLProcessor(mounter, mockSchemaGetter, changefeedFilter, false, common.DefaultMode)
+		processor := newDMLProcessor(mounter, mockSchemaGetter, changefeedFilter, false, common.DefaultMode, false)
 
 		insertSQL := "insert into test.t(id,a,b) values (103, 'a103', 'b103')"
 		updateSQL := "update test.t set b = 'b103_updated' where id = 103"
@@ -2247,7 +2216,7 @@ func TestDMLProcessorAppendRow(t *testing.T) {
 			},
 		}, "UTC", false, false)
 		require.NoError(t, err)
-		processor := newDMLProcessor(mounter, mockSchemaGetter, changefeedFilter, false, common.DefaultMode)
+		processor := newDMLProcessor(mounter, mockSchemaGetter, changefeedFilter, false, common.DefaultMode, false)
 
 		insertSQL := "insert into test.t(id,a,b) values (104, 'a104', 'b104')"
 		updateSQL := "update test.t set a = 'a104_updated' where id = 104"
@@ -2274,7 +2243,7 @@ func TestDMLProcessorAppendRow(t *testing.T) {
 			},
 		}, "UTC", false, false)
 		require.NoError(t, err)
-		processor := newDMLProcessor(mounter, mockSchemaGetter, changefeedFilter, false, common.DefaultMode)
+		processor := newDMLProcessor(mounter, mockSchemaGetter, changefeedFilter, false, common.DefaultMode, false)
 
 		insertSQL := "insert into test.t(id,a,b) values (105, 'a105', 'b105')"
 		updateSQL := "update test.t set a = 'a105_updated' where id = 105"
@@ -2305,7 +2274,7 @@ func TestDMLProcessorAppendRow(t *testing.T) {
 			},
 		}, "UTC", false, false)
 		require.NoError(t, err)
-		processor := newDMLProcessor(mounter, mockSchemaGetter, changefeedFilter, false, common.DefaultMode)
+		processor := newDMLProcessor(mounter, mockSchemaGetter, changefeedFilter, false, common.DefaultMode, false)
 
 		insertSQL := "insert into test.t(id,a,b) values (106, 'a106', 'b106')"
 		updateSQL := "update test.t set a = 'a106_updated' where id = 106"
@@ -2730,7 +2699,8 @@ func TestScanAndMergeEventsSingleUKUpdate(t *testing.T) {
 		scanner.schemaGetter,
 		stat.filter,
 		stat.info.IsOutputRawChangeEvent(),
-		scanner.mode)
+		scanner.mode,
+		stat.info.EnableIgnoreUpdateOnlyColumns())
 	processor.dispatcherStat = stat
 	scanCtx := &txnScanContext{
 		scanner:   scanner,
@@ -2835,7 +2805,8 @@ func TestScanAndMergeEventsSkipsDeletedTableTxn(t *testing.T) {
 		scanner.schemaGetter,
 		disp.filter,
 		disp.info.IsOutputRawChangeEvent(),
-		scanner.mode)
+		scanner.mode,
+		disp.info.EnableIgnoreUpdateOnlyColumns())
 	processor.dispatcherStat = disp
 	scanCtx := &txnScanContext{
 		scanner:   scanner,

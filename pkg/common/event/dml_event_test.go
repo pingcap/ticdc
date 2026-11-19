@@ -248,7 +248,7 @@ func TestDMLEventAppendSparseChecksums(t *testing.T) {
 					}
 					return count, tc.checksums[i], nil
 				}
-				require.NoError(t, input.AppendRow(raw, decode, nil))
+				require.NoError(t, input.AppendRow(raw, decode, nil, filter.DMLFilterContext{}))
 			}
 			require.EqualValues(t, 5, input.Length)
 			require.Len(t, input.RowTypes, 6, "updates contain two physical rows")
