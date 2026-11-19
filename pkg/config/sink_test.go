@@ -592,3 +592,23 @@ func TestShouldSendAllBootstrapAtStart(t *testing.T) {
 	sinkConfig.SendAllBootstrapAtStart = &should
 	require.True(t, sinkConfig.ShouldSendAllBootstrapAtStart())
 }
+
+func TestPulsarConfigMaskSensitiveData(t *testing.T) {
+	t.Parallel()
+
+	cfg := &PulsarConfig{
+		AuthenticationToken: util.AddressOf("token-secret"),
+		BasicPassword:       util.AddressOf("basic-secret"),
+		OAuth2: &OAuth2{
+			OAuth2PrivateKey: "private-key-secret",
+			OAuth2IssuerURL:  "https://client:issuer-secret@issuer.example.com",
+		},
+	}
+
+	cfg.MaskSensitiveData()
+
+	require.Equal(t, "******", *cfg.AuthenticationToken)
+	require.Equal(t, "******", *cfg.BasicPassword)
+	require.Equal(t, "******", cfg.OAuth2.OAuth2PrivateKey)
+	require.Equal(t, "https://client:xxxxx@issuer.example.com", cfg.OAuth2.OAuth2IssuerURL)
+}
