@@ -444,7 +444,7 @@ func (s *schemaStore) Close(ctx context.Context) error {
 
 // closeSchemaStoreGCKeeper uses a fresh bounded context so GC cleanup still
 // runs during shutdown even if the caller's context has already been canceled.
-func closeSchemaStoreGCKeeper(keyspaceID uint32, gcKeeper *schemaStoreGCKeeper) {
+func closeSchemaStoreGCKeeper(keyspaceID uint32, gcKeeper *schemaStoreGCKeeper) error {
 	cleanupCtx, cancel := context.WithTimeout(context.Background(), schemaStoreGCDeleteTimeout)
 	defer cancel()
 	err := gcKeeper.close(cleanupCtx)
@@ -454,6 +454,7 @@ func closeSchemaStoreGCKeeper(keyspaceID uint32, gcKeeper *schemaStoreGCKeeper) 
 			zap.String("serviceID", gcKeeper.serviceID()),
 			zap.Error(err))
 	}
+	return err
 }
 
 func (s *schemaStore) GetAllPhysicalTables(ctx context.Context, keyspaceMeta common.KeyspaceMeta, snapTs uint64, filter filter.Filter, txnOrderMatcher *ordering.TxnOrderMatcher) ([]commonEvent.Table, error) {

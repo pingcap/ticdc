@@ -11,19 +11,21 @@ SINK_TYPE=$1
 # Check that every inserted row reached the sink and that no lossy DDL
 # generated an extra row event.
 function check_lossy_ddl() {
-	rows=$(curl -s http://127.0.0.1:8300/metrics |
-		awk '/^ticdc_sink_batch_row_count_sum\{/ {sum += $2} END {printf "%d", sum}')
-	if [[ "$rows" -ne 23 ]]; then
-		echo "expect 23 rows in blackhole sink, got $rows"
-		return 1
-	fi
-
 	# The checkpoint advances only after the sink flushes an event, so reaching
 	# the TSO taken after prepare.sql also proves the DDLs were replicated.
 	checkpoint=$(cdc_cli_changefeed query -c lossy_ddl 2>&1 |
 		grep -v "Command to ticdc" | jq -r '.checkpoint_tso // 0')
 	if [[ "$checkpoint" -lt "$finish_ts" ]]; then
 		echo "checkpoint $checkpoint has not reached $finish_ts"
+		return 1
+	fi
+
+	# Read the row count only after the checkpoint passed, so a late extra row
+	# cannot slip in between the two checks.
+	rows=$(curl -s http://127.0.0.1:8300/metrics |
+		awk '/^ticdc_sink_batch_row_count_sum\{/ {sum += $2} END {printf "%d", sum}')
+	if [[ "$rows" -ne 23 ]]; then
+		echo "expect 23 rows in blackhole sink, got $rows"
 		return 1
 	fi
 }
