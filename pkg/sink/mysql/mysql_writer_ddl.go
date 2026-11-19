@@ -346,7 +346,6 @@ func (w *Writer) waitAsyncDDLDone(event *commonEvent.DDLEvent) {
 func (w *Writer) doQueryAsyncDDL(query string, args ...any) (bool, error) {
 	start := time.Now()
 	rows, err := w.db.QueryContext(w.ctx, query, args...)
-	log.Debug("query duration", zap.Any("duration", time.Since(start)), zap.Any("query", query))
 	if err != nil {
 		return false, errors.WrapError(errors.ErrMySQLTxnError, errors.WithMessage(err, fmt.Sprintf("failed to query ddl jobs table; Query is %s", query)))
 	}

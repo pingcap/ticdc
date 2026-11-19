@@ -106,10 +106,8 @@ func (c *consumer) readMessage(ctx context.Context) error {
 	for {
 		select {
 		case <-ctx.Done():
-			log.Info("terminating: context cancelled")
 			return errors.Trace(ctx.Err())
 		case consumerMsg := <-msgChan:
-			log.Debug("Received message", zap.Stringer("msgId", consumerMsg.ID()), zap.ByteString("content", consumerMsg.Payload()))
 			needCommit, writeErr := c.writer.WriteMessage(ctx, consumerMsg)
 			if writeErr != nil {
 				return writeErr
