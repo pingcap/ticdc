@@ -61,8 +61,8 @@ func TestLogLevelRouteRequiresAuthentication(t *testing.T) {
 		keyspaceManager := keyspace.NewMockManager(ctrl)
 		keyspaceManager.EXPECT().LoadKeyspace(gomock.Any(), "auth-keyspace").Return(
 			&keyspacepb.KeyspaceMeta{
-				Keyspace: &keyspacepb.KeyspaceMeta_Id{Id: 42},
-				Name:     "auth-keyspace",
+				Id:   42,
+				Name: "auth-keyspace",
 			}, nil,
 		)
 		appcontext.SetService[keyspace.Manager](appcontext.KeyspaceManager, keyspaceManager)
