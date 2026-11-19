@@ -384,7 +384,7 @@ func testCapture(ctx context.Context, client *CDCRESTClient) error {
 
 func testResignOwner(ctx context.Context, client *CDCRESTClient) error {
 	old := listCaptures(ctx, client)
-	resp := client.Post().WithURI("owner/resign").Do(ctx)
+	resp := client.Post().WithURI("owner/resign?keyspace=" + getKeyspaceName()).Do(ctx)
 	assertResponseIsOK(resp)
 	// sleep sometime to wait capture resign owner, then check the capture id again
 	// resign owner mustn't reset the capture

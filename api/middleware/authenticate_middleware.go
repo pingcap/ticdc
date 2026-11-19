@@ -42,6 +42,33 @@ func AuthenticateMiddleware(server server.Server) gin.HandlerFunc {
 	}
 }
 
+<<<<<<< HEAD
+=======
+// AuthenticateNodeMiddleware authenticates a node-level request. In next-gen
+// mode, the keyspace query parameter identifies the TiDB authentication realm.
+func AuthenticateNodeMiddleware(server server.Server) gin.HandlerFunc {
+	return func(ctx *gin.Context) {
+		security := config.GetGlobalServerConfig().Security
+		if security != nil && security.ClientUserRequired {
+			// Reject a request without credentials before the keyspace lookup,
+			// otherwise a missing keyspace parameter turns its 401 into a 400.
+			if _, _, ok := ctx.Request.BasicAuth(); !ok {
+				if !AuthenticateRequest(ctx, server) {
+					return
+				}
+			}
+			if _, ok := ctx.Get(ctxKeyspaceKey); !ok && !loadKeyspaceFromQuery(ctx) {
+				return
+			}
+		}
+		if !AuthenticateRequest(ctx, server) {
+			return
+		}
+		ctx.Next()
+	}
+}
+
+>>>>>>> baa4c219c (api: require authentication for management endpoints (#6921))
 // AuthenticateRequest authenticates a request when client user authentication
 // is enabled. It can be called from a handler after the target changefeed has
 // supplied its persisted keyspace ID.
