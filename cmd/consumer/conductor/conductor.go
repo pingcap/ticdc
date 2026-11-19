@@ -332,8 +332,8 @@ type Conductor struct {
 	validator source.Validator
 	notifier  source.SchemaNotifier
 
-	confirmable  chan struct{}
-	checkpoint   *atomic.Uint64
+	confirmable chan struct{}
+	checkpoint  *atomic.Uint64
 
 	partitionWatermarks []uint64
 	watermark           uint64

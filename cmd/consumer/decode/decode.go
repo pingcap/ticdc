@@ -159,7 +159,6 @@ func NewGroup(ctx context.Context, opts Options) *Group {
 	return group
 }
 
-
 // Close releases the upstream metadata connection.
 func (d *Group) Close() {
 	if d.upstreamDB == nil {

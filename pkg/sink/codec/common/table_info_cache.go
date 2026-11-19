@@ -40,7 +40,7 @@ func newAccessKey(schema, table string) accessKey {
 
 // TableIDAllocator is a fake table id allocator.
 type TableIDAllocator struct {
-	mu sync.RWMutex
+	mu              sync.RWMutex
 	tableIDs        map[accessKey]int64
 	currentTableID  int64
 	blockedTableIDs map[accessKey]map[int64]struct{}
