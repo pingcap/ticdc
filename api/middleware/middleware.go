@@ -252,37 +252,42 @@ func KeyspaceNameCheckerMiddleware() gin.HandlerFunc {
 // KeyspaceCheckerMiddleware checks if the request keyspace exists.
 func KeyspaceCheckerMiddleware() gin.HandlerFunc {
 	return func(c *gin.Context) {
-		// we not need to check keyspace for classic mode
-		// if the classic mode supports multiple keyspaces in future
-		// we need to remove this if block
-		if kerneltype.IsClassic() {
-			c.Next()
+		if !loadKeyspaceFromQuery(c) {
 			return
 		}
-
-		ks := c.Query(api.APIOpVarKeyspace)
-		if ks == "" {
-			c.IndentedJSON(http.StatusBadRequest, errors.ErrAPIInvalidParam)
-			c.Abort()
-			return
-		}
-
-		keyspaceManager := appcontext.GetService[keyspace.Manager](appcontext.KeyspaceManager)
-		meta, err := keyspaceManager.LoadKeyspace(c.Request.Context(), ks)
-		if errors.IsKeyspaceNotExistError(err) {
-			c.IndentedJSON(http.StatusBadRequest, errors.ErrAPIInvalidParam)
-			c.Abort()
-			return
-		} else if err != nil {
-			c.IndentedJSON(http.StatusInternalServerError, api.NewHTTPError(err))
-			c.Abort()
-			return
-		}
-
-		c.Set(ctxKeyspaceKey, meta)
-
 		c.Next()
 	}
+}
+
+func loadKeyspaceFromQuery(c *gin.Context) bool {
+	// we not need to check keyspace for classic mode
+	// if the classic mode supports multiple keyspaces in future
+	// we need to remove this if block
+	if kerneltype.IsClassic() {
+		return true
+	}
+
+	ks := c.Query(api.APIOpVarKeyspace)
+	if ks == "" {
+		c.IndentedJSON(http.StatusBadRequest, errors.ErrAPIInvalidParam)
+		c.Abort()
+		return false
+	}
+
+	keyspaceManager := appcontext.GetService[keyspace.Manager](appcontext.KeyspaceManager)
+	meta, err := keyspaceManager.LoadKeyspace(c.Request.Context(), ks)
+	if errors.IsKeyspaceNotExistError(err) {
+		c.IndentedJSON(http.StatusBadRequest, errors.ErrAPIInvalidParam)
+		c.Abort()
+		return false
+	} else if err != nil {
+		c.IndentedJSON(http.StatusInternalServerError, api.NewHTTPError(err))
+		c.Abort()
+		return false
+	}
+
+	c.Set(ctxKeyspaceKey, meta)
+	return true
 }
 
 func GetKeyspaceFromContext(c *gin.Context) *keyspacepb.KeyspaceMeta {

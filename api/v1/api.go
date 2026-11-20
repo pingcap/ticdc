@@ -55,11 +55,12 @@ func RegisterOpenAPIV1Routes(router *gin.Engine, api OpenAPIV1) {
 	v1.Use(middleware.LogMiddleware())
 	v1.Use(middleware.ErrorHandleMiddleware())
 
+	authenticateMiddleware := middleware.AuthenticateMiddleware(api.server)
+	nodeAuthenticateMiddleware := middleware.AuthenticateNodeMiddleware(api.server)
 	v1.GET("status", api.v2.ServerStatus)
-	v1.POST("log", api.v2.SetLogLevel)
+	v1.POST("log", nodeAuthenticateMiddleware, api.v2.SetLogLevel)
 
 	coordinatorMiddleware := middleware.ForwardToCoordinatorMiddleware(api.server)
-	authenticateMiddleware := middleware.AuthenticateMiddleware(api.server)
 	v1.GET("health", coordinatorMiddleware, setV1Header, api.v2.ServerHealth)
 
 	// changefeed API
