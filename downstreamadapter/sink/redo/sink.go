@@ -23,9 +23,7 @@ import (
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
-	"github.com/pingcap/ticdc/pkg/redo"
 	"github.com/pingcap/ticdc/pkg/redo/writer"
-	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/ticdc/pkg/writelease"
 	"github.com/pingcap/ticdc/utils/chann"
 	"go.uber.org/atomic"
@@ -49,13 +47,6 @@ type Sink struct {
 	isClosed *atomic.Bool
 
 	metricCollector *metricCollector
-}
-
-func Verify(ctx context.Context, changefeedID common.ChangeFeedID, cfg *config.ConsistentConfig) error {
-	if cfg == nil || !redo.IsConsistentEnabled(util.GetOrZero(cfg.Level)) {
-		return nil
-	}
-	return nil
 }
 
 // New creates a new redo sink.

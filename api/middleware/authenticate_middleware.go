@@ -42,26 +42,24 @@ func AuthenticateMiddleware(server server.Server) gin.HandlerFunc {
 	}
 }
 
-// AdminMiddleware authenticates the request and requires the client to be an
-// administrative user. It guards node level operations that change the server
-// behavior or bypass changefeed isolation, such as the log level, failpoints,
-// owner resignation and the unsafe APIs.
-func AdminMiddleware(server server.Server) gin.HandlerFunc {
+// AuthenticateNodeMiddleware authenticates a node-level request. In next-gen
+// mode, the keyspace query parameter identifies the TiDB authentication realm.
+func AuthenticateNodeMiddleware(server server.Server) gin.HandlerFunc {
 	return func(ctx *gin.Context) {
-		if !AuthenticateRequest(ctx, server) {
-			return
-		}
 		security := config.GetGlobalServerConfig().Security
-		if security == nil || !security.ClientUserRequired {
-			ctx.Next()
-			return
+		if security != nil && security.ClientUserRequired {
+			// Reject a request without credentials before the keyspace lookup,
+			// otherwise a missing keyspace parameter turns its 401 into a 400.
+			if _, _, ok := ctx.Request.BasicAuth(); !ok {
+				if !AuthenticateRequest(ctx, server) {
+					return
+				}
+			}
+			if _, ok := ctx.Get(ctxKeyspaceKey); !ok && !loadKeyspaceFromQuery(ctx) {
+				return
+			}
 		}
-		username, _, _ := ctx.Request.BasicAuth()
-		if !slices.Contains(security.ClientAdminUser, username) {
-			err := errors.ErrUnauthorized.GenWithStackByArgs(username,
-				"The user is not allowed to perform administrative operations.")
-			ctx.IndentedJSON(http.StatusForbidden, api.NewHTTPError(err))
-			ctx.Abort()
+		if !AuthenticateRequest(ctx, server) {
 			return
 		}
 		ctx.Next()

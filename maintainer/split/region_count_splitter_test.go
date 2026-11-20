@@ -17,6 +17,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"sort"
 	"testing"
 	"unsafe"
 
@@ -25,7 +26,6 @@ import (
 	"github.com/pingcap/ticdc/pkg/common"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	"github.com/pingcap/ticdc/pkg/config"
-	"github.com/pingcap/ticdc/pkg/spanz"
 	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/stretchr/testify/require"
 	"github.com/tikv/client-go/v2/tikv"
@@ -257,14 +257,39 @@ func TestSplitSpanRegionOutOfOrder(t *testing.T) {
 		t, []*heartbeatpb.TableSpan{{TableID: 1, StartKey: []byte("t1"), EndKey: []byte("t2")}}, spans)
 }
 
+// mockRegionStore keeps regions in span order for mockCache.
+type mockRegionStore struct {
+	regions []mockRegion
+}
+
+type mockRegion struct {
+	span heartbeatpb.TableSpan
+	id   uint64
+}
+
+func (s *mockRegionStore) ReplaceOrInsert(span heartbeatpb.TableSpan, id uint64) {
+	s.regions = append(s.regions, mockRegion{span: span, id: id})
+}
+
+func (s *mockRegionStore) Ascend(iter func(heartbeatpb.TableSpan, uint64) bool) {
+	sort.Slice(s.regions, func(i, j int) bool {
+		return s.regions[i].span.Less(&s.regions[j].span)
+	})
+	for _, r := range s.regions {
+		if !iter(r.span, r.id) {
+			return
+		}
+	}
+}
+
 // mockCache mocks tikv.RegionCache.
 type mockCache struct {
-	regions *spanz.BtreeMap[uint64]
+	regions *mockRegionStore
 }
 
 // NewMockRegionCache returns a new MockCache.
 func NewMockRegionCache(regions []heartbeatpb.TableSpan) *mockCache {
-	return &mockCache{regions: spanz.NewBtreeMap[uint64]()}
+	return &mockCache{regions: &mockRegionStore{}}
 }
 
 func (m *mockCache) LoadRegionsInKeyRange(

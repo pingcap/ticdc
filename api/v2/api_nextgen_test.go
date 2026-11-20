@@ -20,16 +20,87 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/gin-gonic/gin"
 	"github.com/golang/mock/gomock"
 	"github.com/pingcap/kvproto/pkg/pdpb"
+	"github.com/pingcap/log"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
+	"github.com/pingcap/ticdc/pkg/config"
+	"github.com/pingcap/ticdc/pkg/etcd"
 	"github.com/pingcap/ticdc/pkg/keyspace"
 	"github.com/pingcap/ticdc/pkg/server/mock"
 	"github.com/stretchr/testify/require"
+	"go.uber.org/zap/zapcore"
 )
+
+func TestLogLevelRouteRejectsUnauthenticatedRequestBeforeRealmLookup(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	originalConfig := config.GetGlobalServerConfig()
+	t.Cleanup(func() { config.StoreGlobalServerConfig(originalConfig) })
+	cfg := originalConfig.Clone()
+	cfg.Security.ClientUserRequired = true
+	cfg.Security.ClientAllowedUser = []string{"alice"}
+	config.StoreGlobalServerConfig(cfg)
+
+	originalLogLevel := log.GetLevel()
+	t.Cleanup(func() { log.SetLevel(originalLogLevel) })
+	log.SetLevel(zapcore.InfoLevel)
+
+	ctrl := gomock.NewController(t)
+	apiServer := mock.NewMockServer(ctrl)
+	etcdClient := etcd.NewMockCDCEtcdClient(ctrl)
+	apiServer.EXPECT().GetEtcdClient().Return(etcdClient)
+	etcdClient.EXPECT().GetEtcdClient().Return(nil)
+	router := gin.New()
+	RegisterOpenAPIV2Routes(router, NewOpenAPIV2(apiServer))
+
+	request := httptest.NewRequest(
+		http.MethodPost,
+		"/api/v2/log",
+		strings.NewReader(`{"log_level":"error"}`),
+	)
+	request.Header.Set("Content-Type", "application/json")
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, request)
+
+	require.Equal(t, http.StatusUnauthorized, response.Code, response.Body.String())
+	require.Contains(t, response.Body.String(), "please specify the user and password")
+	require.Equal(t, zapcore.InfoLevel, log.GetLevel())
+}
+
+func TestLogLevelRouteWithoutAuthenticationDoesNotRequireRealm(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	originalConfig := config.GetGlobalServerConfig()
+	t.Cleanup(func() { config.StoreGlobalServerConfig(originalConfig) })
+	cfg := originalConfig.Clone()
+	cfg.Security.ClientUserRequired = false
+	config.StoreGlobalServerConfig(cfg)
+
+	originalLogLevel := log.GetLevel()
+	t.Cleanup(func() { log.SetLevel(originalLogLevel) })
+	log.SetLevel(zapcore.InfoLevel)
+
+	ctrl := gomock.NewController(t)
+	router := gin.New()
+	RegisterOpenAPIV2Routes(router, NewOpenAPIV2(mock.NewMockServer(ctrl)))
+
+	request := httptest.NewRequest(
+		http.MethodPost,
+		"/api/v2/log",
+		strings.NewReader(`{"log_level":"error"}`),
+	)
+	request.Header.Set("Content-Type", "application/json")
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, request)
+
+	require.Equal(t, http.StatusOK, response.Code, response.Body.String())
+	require.Equal(t, zapcore.ErrorLevel, log.GetLevel())
+}
 
 func TestTableInspectionRoutesRejectInvalidKeyspace(t *testing.T) {
 	gin.SetMode(gin.TestMode)

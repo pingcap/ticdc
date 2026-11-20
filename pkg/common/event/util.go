@@ -962,14 +962,6 @@ func SplitQueries(queries string) ([]string, error) {
 	return res, nil
 }
 
-func BatchDML(dml *DMLEvent) *BatchDMLEvent {
-	return &BatchDMLEvent{
-		DMLEvents: []*DMLEvent{dml},
-		TableInfo: dml.TableInfo,
-		Rows:      dml.Rows,
-	}
-}
-
 // IsSplitable returns whether the table is eligible for split in all sinks
 // Only tables with a clustered primary key and no other unique key can be split in all sinks.
 func IsSplitable(tableInfo *common.TableInfo) bool {

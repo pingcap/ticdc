@@ -32,12 +32,6 @@ const (
 	SplitTypeRegionCount SplitType = "region_count"
 )
 
-type splitter interface {
-	split(
-		ctx context.Context, span *heartbeatpb.TableSpan, spansNum int,
-	) []*heartbeatpb.TableSpan
-}
-
 type Splitter struct {
 	regionCounterSplitter *regionCountSplitter
 	writeBytesSplitter    *writeBytesSplitter

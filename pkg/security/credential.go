@@ -121,11 +121,6 @@ type Credential struct {
 
 	ClientUserRequired bool     `toml:"client-user-required" json:"client-user-required"`
 	ClientAllowedUser  []string `toml:"client-allowed-user" json:"client-allowed-user"`
-	// ClientAdminUser lists the users allowed to call administrative APIs, such as
-	// setting the log level and redaction mode, operating failpoints, resigning the
-	// owner and using the unsafe APIs. It is only checked when ClientUserRequired is
-	// true, and it should be a subset of ClientAllowedUser.
-	ClientAdminUser []string `toml:"client-admin-user" json:"client-admin-user"`
 
 	// RedactInfoLog controls log redaction to prevent sensitive data from appearing in logs.
 	// Accepts boolean (true→ON, false→OFF) or string values ("off", "on", "marker").
@@ -292,15 +287,18 @@ func addVerifyPeerCertificate(tlsCfg *tls.Config, verifyCN []string) {
 		}
 		tlsCfg.ClientAuth = tls.RequireAndVerifyClientCert
 		tlsCfg.VerifyPeerCertificate = func(
-			rawCerts [][]byte, verifiedChains [][]*x509.Certificate,
+			_ [][]byte, verifiedChains [][]*x509.Certificate,
 		) error {
 			cns := make([]string, 0, len(verifiedChains))
-			for _, chains := range verifiedChains {
-				for _, chain := range chains {
-					cns = append(cns, chain.Subject.CommonName)
-					if _, match := checkCN[chain.Subject.CommonName]; match {
-						return nil
-					}
+			for _, chain := range verifiedChains {
+				if len(chain) == 0 {
+					continue
+				}
+				// The first certificate in a verified chain is the peer's leaf certificate.
+				cn := chain[0].Subject.CommonName
+				cns = append(cns, cn)
+				if _, match := checkCN[cn]; match {
+					return nil
 				}
 			}
 			return errors.Errorf("client certificate authentication failed. "+

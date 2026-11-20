@@ -101,6 +101,14 @@ func TestTryGetOrSetChangefeedStatusRejectsInvalidFilter(t *testing.T) {
 	status, err = broker.tryGetOrSetChangefeedStatus(info)
 	require.Error(t, err)
 	require.Nil(t, status)
+
+	info.filterConfig = &eventpb.FilterConfig{
+		FilterConfig:   &eventpb.InnerFilterConfig{Rules: []string{"*.*"}},
+		TxnOrderTables: []string{"invalid"},
+	}
+	status, err = broker.tryGetOrSetChangefeedStatus(info)
+	require.ErrorContains(t, err, "txn-order-tables")
+	require.Nil(t, status)
 }
 
 func popScanTask(t *testing.T, broker *eventBroker, workerIndex int) scanTask {

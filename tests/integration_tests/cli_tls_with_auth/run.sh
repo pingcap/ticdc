@@ -61,7 +61,6 @@ function run() {
    cert-allowed-cn = [\"fake_cn\"]
    client-user-required = true
    client-allowed-user = [\"ticdc\"]
-   client-admin-user = [\"ticdc\"]
   [debug]
    enable-kafka-franz-go = true
   " >$WORK_DIR/server.toml

@@ -116,6 +116,7 @@ func splitUpdateEvent(
 			StartTs:            updateEvent.Row.StartTs,
 			CommitTs:           updateEvent.Row.CommitTs,
 			Table:              updateEvent.Row.Table,
+			SourceTable:        updateEvent.Row.SourceTable,
 			PreColumns:         updateEvent.Row.PreColumns,
 			IndexColumns:       updateEvent.Row.IndexColumns,
 			IndexColumnLengths: updateEvent.Row.IndexColumnLengths,
@@ -128,6 +129,7 @@ func splitUpdateEvent(
 			StartTs:            updateEvent.Row.StartTs,
 			CommitTs:           updateEvent.Row.CommitTs,
 			Table:              updateEvent.Row.Table,
+			SourceTable:        updateEvent.Row.SourceTable,
 			Columns:            updateEvent.Row.Columns,
 			IndexColumns:       updateEvent.Row.IndexColumns,
 			IndexColumnLengths: updateEvent.Row.IndexColumnLengths,
@@ -159,7 +161,18 @@ func newRedoDMLMessage(row *commonEvent.RedoDMLEvent) *codeccommon.DMLMessage {
 		rowType = commonType.RowTypeUpdate
 	}
 	return codeccommon.NewDMLMessage(row.Row.Table.TableID, row.Row.Table.Schema,
-		row.Row.Table.Table, row.Row.CommitTs, rowType, row.ToDMLEvent)
+		row.Row.Table.Table, row.Row.CommitTs, rowType, func() *commonEvent.DMLEvent {
+			event := row.ToDMLEvent()
+			if source := row.Row.SourceTable; source != nil &&
+				(source.Schema != row.Row.Table.Schema || source.Table != row.Row.Table.Table) {
+				// Match ordering rules against the source while writing the recorded target.
+				info := event.TableInfo.CloneWithRouting(row.Row.Table.Schema, row.Row.Table.Table)
+				info.TableName.Schema, info.TableName.Table = source.Schema, source.Table
+				info.TableName.IsPartition = source.IsPartition
+				event.TableInfo = info
+			}
+			return event
+		})
 }
 
 type ddlTs struct {

@@ -293,10 +293,6 @@ func (c *ServerConfig) ValidateAndAdjust() error {
 				log.Error("client-allowed-user should not be empty when client-user-required is true")
 				return cerror.ErrInvalidServerOption.GenWithStack("client-allowed-user should not be empty when client-user-required is true")
 			}
-			if len(c.Security.ClientAdminUser) == 0 {
-				log.Warn("client-admin-user is empty, administrative APIs will be denied " +
-					"when client-user-required is true")
-			}
 			if !c.Security.IsTLSEnabled() {
 				log.Warn("client-allowed-user is true, but tls is not enabled." +
 					"It's highly recommended to enable TLS to secure the communication")
