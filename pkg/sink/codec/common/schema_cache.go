@@ -142,9 +142,9 @@ func (t *tableVersions) at(commitTs uint64) (uint64, *commonType.TableInfo) {
 	if t == nil {
 		return 0, nil
 	}
-	for i := len(t.entries) - 1; i >= 0; i-- {
-		if t.entries[i].version < commitTs {
-			return t.entries[i].version, t.entries[i].info
+	for _, entry := range slices.Backward(t.entries) {
+		if entry.version < commitTs {
+			return entry.version, entry.info
 		}
 	}
 	return 0, nil
@@ -154,11 +154,11 @@ func (t *tableVersions) get(version uint64) *commonType.TableInfo {
 	if t == nil {
 		return nil
 	}
-	for i := len(t.entries) - 1; i >= 0; i-- {
-		if t.entries[i].version == version {
-			return t.entries[i].info
+	for _, entry := range slices.Backward(t.entries) {
+		if entry.version == version {
+			return entry.info
 		}
-		if t.entries[i].version < version {
+		if entry.version < version {
 			return nil
 		}
 	}
