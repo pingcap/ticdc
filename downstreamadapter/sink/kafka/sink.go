@@ -25,7 +25,9 @@ import (
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/metrics"
-	"github.com/pingcap/ticdc/pkg/sink/codec/common"
+	"github.com/pingcap/ticdc/pkg/sink/codec"
+	codecCommon "github.com/pingcap/ticdc/pkg/sink/codec/common"
+	"github.com/pingcap/ticdc/pkg/sink/codec/schemamanager"
 	"github.com/pingcap/ticdc/pkg/sink/kafka"
 	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/ticdc/utils/chann"
@@ -67,10 +69,78 @@ func (s *sink) SinkType() commonType.SinkType {
 	return commonType.KafkaSinkType
 }
 
-func Verify(ctx context.Context, changefeedID commonType.ChangeFeedID, uri *url.URL, sinkConfig *config.SinkConfig, caseSensitive bool) error {
-	comp, _, err := newKafkaSinkComponent(ctx, changefeedID, uri, sinkConfig, caseSensitive)
-	defer comp.close()
-	return err
+
+func Verify(ctx context.Context, changefeedID common.ChangeFeedID, uri *url.URL, sinkConfig *config.SinkConfig) error {
+	protocol, err := helper.GetProtocol(util.GetOrZero(sinkConfig.Protocol))
+	if err != nil {
+		return err
+	}
+
+	topic, err := helper.GetTopic(uri)
+	if err != nil {
+		return err
+	}
+
+	options := kafka.NewOptions()
+	if err = options.Apply(changefeedID, uri, sinkConfig); err != nil {
+		return err
+	}
+	options.Topic = topic
+
+	encoderConfig, err := helper.GetEncoderConfig(
+		changefeedID, uri, protocol, sinkConfig,
+		options.MaxMessageBytes, options.MaxBatchedBytes,
+	)
+	if err != nil {
+		return err
+	}
+
+	claimCheck, err := claimcheck.New(ctx, encoderConfig.LargeMessageHandle, changefeedID)
+	if err != nil {
+		return err
+	}
+	defer claimCheck.Close()
+
+	isAvroLike := protocol == config.ProtocolAvro || protocol == config.ProtocolDebeziumAvro
+	if _, err = eventrouter.NewEventRouter(sinkConfig, topic, false, isAvroLike); err != nil {
+		return err
+	}
+
+	if _, err = columnselector.New(sinkConfig); err != nil {
+		return err
+	}
+
+	factory, err := createKafkaFactory(func() (kafka.Factory, error) {
+		return kafka.NewSaramaFactory(ctx, options, changefeedID)
+	})
+	if err != nil {
+		return err
+	}
+
+	adminClient, err := factory.AdminClient(ctx)
+	if err != nil {
+		return err
+	}
+	defer adminClient.Close()
+
+	err = topicmanager.EnsureTopic(ctx, changefeedID, topic, options.DeriveTopicConfig(), adminClient)
+	if err != nil {
+		return err
+	}
+
+	var schemaM schemamanager.SchemaManager
+	if isAvroLike {
+		schemaM, err = schemamanager.NewSchemaManager(ctx, encoderConfig)
+		if err != nil {
+			return err
+		}
+	}
+
+	_, err = codec.NewEventEncoder(encoderConfig, claimCheck, schemaM)
+	if err != nil {
+		return err
+	}
+	return nil
 }
 
 func New(
