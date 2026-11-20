@@ -49,6 +49,7 @@ type decoder struct {
 	config *common.Config
 
 	upstreamTiDB *sql.DB
+	cache        *common.TableInfoProvider
 
 	keyPayload   map[string]any
 	keySchema    map[string]any
@@ -67,6 +68,7 @@ func NewDecoder(
 		idx:          idx,
 		config:       config,
 		upstreamTiDB: db,
+		cache:        common.NewTableInfoProvider(),
 	}
 }
 
@@ -149,6 +151,7 @@ func (d *decoder) NextDDLEvent() *commonEvent.DDLEvent {
 			tableName = event.ExtraTableName
 		}
 	}
+	d.cache.AddDDL(schemaName, tableName, event.FinishedTs)
 	return event
 }
 
@@ -202,8 +205,8 @@ func (d *decoder) assembleDMLEventFromPayload(
 	valuePayload map[string]any,
 	valueSchema map[string]any,
 ) *commonEvent.DMLEvent {
-	tableInfo := queryTableInfoFromPayload(keyPayload, valuePayload, valueSchema)
 	commitTs := getCommitTsFromPayload(valuePayload)
+	tableInfo := d.queryTableInfoFromPayload(keyPayload, valuePayload, valueSchema)
 	startTs, hasStartTs := getStartTsFromPayload(valuePayload)
 	if !hasStartTs {
 		// Keep old messages consumable when start_ts is absent. Invalid values
@@ -315,13 +318,28 @@ func (d *decoder) clear() {
 	d.valueSchema = nil
 }
 
-func queryTableInfoFromPayload(
+func (d *decoder) queryTableInfoFromPayload(
 	keyPayload map[string]any,
 	valuePayload map[string]any,
 	valueSchema map[string]any,
 ) *commonType.TableInfo {
 	schemaName := getSchemaNameFromPayload(valuePayload)
 	tableName := getTableNameFromPayload(valuePayload)
+	version, tableInfo := d.cache.ReadAt(schemaName, tableName, getCommitTsFromPayload(valuePayload))
+	if tableInfo != nil {
+		return tableInfo
+	}
+	tableInfo = newTableInfoFromPayload(schemaName, tableName, keyPayload, valuePayload, valueSchema)
+	d.cache.Write(schemaName, tableName, version, tableInfo)
+	return tableInfo
+}
+
+func newTableInfoFromPayload(
+	schemaName, tableName string,
+	keyPayload map[string]any,
+	valuePayload map[string]any,
+	valueSchema map[string]any,
+) *commonType.TableInfo {
 	tidbTableInfo := new(timodel.TableInfo)
 	tidbTableInfo.ID = tableIDAllocator.Allocate(schemaName, tableName)
 	tableIDAllocator.AddBlockTableID(schemaName, tableName, tidbTableInfo.ID)

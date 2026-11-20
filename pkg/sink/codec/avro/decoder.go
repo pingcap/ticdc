@@ -53,6 +53,7 @@ type decoder struct {
 	topic  string
 
 	upstreamTiDB *sql.DB
+	cache        *common.TableInfoProvider
 
 	// valueSchemas supplies the column layout for subsequent key-only deletes.
 	valueSchemas map[[2]string]map[string]any
@@ -81,6 +82,7 @@ func NewDecoder(
 		schemaM:      schemaM,
 		codecs:       codecs,
 		upstreamTiDB: db,
+		cache:        common.NewTableInfoProvider(),
 		valueSchemas: make(map[[2]string]map[string]any),
 	}
 }
@@ -215,7 +217,7 @@ func (d *decoder) assembleDMLEventFromDecoded(
 	hasValue bool,
 	deleteCommitTs uint64,
 ) *commonEvent.DMLEvent {
-	event, err := assembleEvent(keyMap, valueMap, valueSchema, isDelete, hasValue)
+	event, err := assembleEvent(d.cache, keyMap, valueMap, valueSchema, isDelete, hasValue, deleteCommitTs)
 	if err != nil {
 		log.Panic("assemble event failed", zap.Error(err))
 	}
@@ -293,7 +295,8 @@ func (d *decoder) decodeDeleteCommitTs() uint64 {
 // Legacy deletes use key values with NULLs for non-key columns from the cached schema.
 // schema is corresponding to the valueMap, it can be used to decode the valueMap to construct columns.
 func assembleEvent(
-	keyMap, valueMap, schema map[string]any, isDelete bool, hasValue bool,
+	cache *common.TableInfoProvider, keyMap, valueMap, schema map[string]any,
+	isDelete bool, hasValue bool, deleteCommitTs uint64,
 ) (*commonEvent.DMLEvent, error) {
 	fields, ok := schema["fields"].([]any)
 	if !ok {
@@ -354,8 +357,12 @@ func assembleEvent(
 		commitTs = o.(int64)
 	}
 
+	if !hasValue {
+		commitTs = int64(deleteCommitTs)
+	}
+
 	event := new(commonEvent.DMLEvent)
-	event.TableInfo = queryTableInfo(schemaName, tableName, columns, keyMap)
+	event.TableInfo = queryTableInfo(cache, schemaName, tableName, uint64(commitTs), columns, keyMap)
 	event.StartTs = uint64(commitTs)
 	event.CommitTs = uint64(commitTs)
 	event.PhysicalTableID = event.TableInfo.TableName.TableID
@@ -497,8 +504,16 @@ func schemaAndTableName(schema map[string]any) (string, string) {
 	return parts[1], schema["name"].(string)
 }
 
-func queryTableInfo(schemaName, tableName string, columns []*timodel.ColumnInfo, keyMap map[string]any) *commonType.TableInfo {
-	tableInfo := newTableInfo(schemaName, tableName, columns, keyMap)
+func queryTableInfo(
+	cache *common.TableInfoProvider, schemaName, tableName string, commitTs uint64,
+	columns []*timodel.ColumnInfo, keyMap map[string]any,
+) *commonType.TableInfo {
+	version, tableInfo := cache.ReadAt(schemaName, tableName, commitTs)
+	if tableInfo != nil {
+		return tableInfo
+	}
+	tableInfo = newTableInfo(schemaName, tableName, columns, keyMap)
+	cache.Write(schemaName, tableName, version, tableInfo)
 	return tableInfo
 }
 
@@ -692,6 +707,7 @@ func (d *decoder) NextDDLEvent() *commonEvent.DDLEvent {
 		tableIDAllocator.AddBlockTableID(result.SchemaName, result.TableName, tableIDAllocator.Allocate(result.SchemaName, result.TableName))
 		result.BlockedTables = common.GetBlockedTables(tableIDAllocator, result)
 	}
+	d.cache.AddDDL(result.SchemaName, result.TableName, result.FinishedTs)
 	return result
 }
 
