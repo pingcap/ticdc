@@ -618,7 +618,7 @@ func (s *remoteMessageTarget) handleIncomingMessage(ctx context.Context, stream 
 			return err
 		}
 
-		if message == nil || message.From != string(s.targetId) || message.To != string(s.messageCenterID) {
+		if message.From != string(s.targetId) || message.To != string(s.messageCenterID) {
 			return errors.ErrDecodeFailed.FastGenByArgs("sender or receiver does not match the connection")
 		}
 

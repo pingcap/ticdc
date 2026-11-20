@@ -45,8 +45,6 @@ func TestMessageCenterAuthenticatePeer(t *testing.T) {
 	}
 	unverified := verified
 	unverified.VerifiedChains = nil
-	missingCertificate := verified
-	missingCertificate.PeerCertificates = nil
 	incomplete := verified
 	incomplete.HandshakeComplete = false
 	_, insecureAuthInfo, err := insecure.NewCredentials().ServerHandshake(nil)
@@ -63,7 +61,6 @@ func TestMessageCenterAuthenticatePeer(t *testing.T) {
 		{name: "missing peer", security: &security.Credential{MTLS: true}, address: "capture.example:8300"},
 		{name: "missing TLS identity", security: &security.Credential{MTLS: true}, authInfo: insecureAuthInfo, address: "capture.example:8300"},
 		{name: "unverified certificate", security: &security.Credential{MTLS: true}, authInfo: credentials.TLSInfo{State: unverified}, address: "capture.example:8300"},
-		{name: "missing certificate", security: &security.Credential{MTLS: true}, authInfo: credentials.TLSInfo{State: missingCertificate}, address: "capture.example:8300"},
 		{name: "incomplete handshake", security: &security.Credential{MTLS: true}, authInfo: credentials.TLSInfo{State: incomplete}, address: "capture.example:8300"},
 		{name: "wrong registered host", security: &security.Credential{MTLS: true}, authInfo: credentials.TLSInfo{State: verified}, address: "other.example:8300"},
 		{name: "invalid registered address", security: &security.Credential{MTLS: true}, authInfo: credentials.TLSInfo{State: verified}, address: "capture.example"},

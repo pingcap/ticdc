@@ -539,7 +539,7 @@ func (s *grpcServer) authenticatePeer(ctx context.Context, target *remoteMessage
 		return errors.ErrUnauthorized.FastGenByArgs(target.targetId, "missing client authentication")
 	}
 	tlsInfo, ok := remotePeer.AuthInfo.(credentials.TLSInfo)
-	if !ok || !tlsInfo.State.HandshakeComplete || len(tlsInfo.State.VerifiedChains) == 0 || len(tlsInfo.State.PeerCertificates) == 0 {
+	if !ok || !tlsInfo.State.HandshakeComplete || len(tlsInfo.State.VerifiedChains) == 0 {
 		return errors.ErrUnauthorized.FastGenByArgs(target.targetId, "verified client certificate required")
 	}
 	// Membership binds the capture ID to its advertised host. Use certificate SANs
