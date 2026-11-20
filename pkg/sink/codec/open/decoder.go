@@ -316,7 +316,7 @@ func buildColumns(
 // layout as ordinary messages. Cached columns never retain row values.
 func (b *decoder) snapshotColumns(ctx context.Context, key *messageKey, ts uint64, conditions map[string]any, columns map[string]column) map[string]column {
 	schema, table := key.Schema, key.Table
-	_, info := b.cachedTable(key)
+	_, info := b.cache.ReadAt(key.Schema, key.Table, key.Ts)
 	if info == nil {
 		holder := common.MustSnapshotQuery(ctx, b.upstreamTiDB, ts, schema, table, conditions)
 		columns = buildColumns(holder, columns)
@@ -409,10 +409,6 @@ func (b *decoder) assembleEventFromClaimCheckStorage(ctx context.Context, key *m
 
 // A row at a DDL commit ts still reads the previous version: it is flushed
 // before that DDL.
-func (b *decoder) cachedTable(key *messageKey) (uint64, *commonType.TableInfo) {
-	return b.cache.ReadAt(key.Schema, key.Table, key.Ts)
-}
-
 func isEnumOrSet(col *timodel.ColumnInfo) bool {
 	return col.GetType() == mysql.TypeEnum || col.GetType() == mysql.TypeSet
 }
@@ -430,7 +426,7 @@ func projection(info *commonType.TableInfo) string {
 }
 
 func (b *decoder) queryTableInfo(key *messageKey, value *messageRow) *commonType.TableInfo {
-	version, info := b.cachedTable(key)
+	version, info := b.cache.ReadAt(key.Schema, key.Table, key.Ts)
 	if info != nil {
 		id := info.TableName.TableID
 		key.Partition = &id

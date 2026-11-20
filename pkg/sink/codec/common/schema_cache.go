@@ -15,6 +15,7 @@ package common
 
 import (
 	"slices"
+	"sort"
 	"sync"
 
 	commonType "github.com/pingcap/ticdc/pkg/common"
@@ -26,11 +27,6 @@ import (
 type TableInfoProvider struct {
 	mu     sync.RWMutex
 	tables map[accessKey]*tableVersions
-}
-
-type entry struct {
-	version uint64
-	info    *commonType.TableInfo
 }
 
 // NewTableInfoProvider creates an empty versioned provider.
@@ -112,63 +108,66 @@ func (c *TableInfoProvider) table(schema, table string) *tableVersions {
 	return versions
 }
 
-// tableVersions holds the versions of one table in ascending order. A table has
-// only a few of them, so the lookups walk backwards: the newest version answers
-// almost every call.
+// tableVersions keeps the versions of one table in ascending order. A table has
+// a handful of them, so a binary search is enough and stays allocation free.
 type tableVersions struct {
 	entries []entry
 }
 
+type entry struct {
+	version uint64
+	info    *commonType.TableInfo
+}
+
+// at returns the version in effect at the commit ts: the newest one below it.
+// A version without table info is a boundary the decoder has not filled in yet.
 func (t *tableVersions) at(commitTs uint64) (uint64, *commonType.TableInfo) {
 	if t == nil {
 		return 0, nil
 	}
-	for _, entry := range slices.Backward(t.entries) {
-		if entry.version < commitTs {
-			return entry.version, entry.info
-		}
+	i := sort.Search(len(t.entries), func(i int) bool {
+		return t.entries[i].version >= commitTs
+	})
+	if i == 0 {
+		return 0, nil
 	}
-	return 0, nil
+	entry := t.entries[i-1]
+	return entry.version, entry.info
 }
 
 func (t *tableVersions) get(version uint64) *commonType.TableInfo {
 	if t == nil {
 		return nil
 	}
-	for _, entry := range slices.Backward(t.entries) {
-		if entry.version == version {
-			return entry.info
-		}
-		if entry.version < version {
-			return nil
-		}
+	i := sort.Search(len(t.entries), func(i int) bool {
+		return t.entries[i].version >= version
+	})
+	if i == len(t.entries) || t.entries[i].version != version {
+		return nil
 	}
-	return nil
+	return t.entries[i].info
 }
 
 func (t *tableVersions) set(version uint64, info *commonType.TableInfo) {
-	for i, e := range t.entries {
-		switch {
-		case e.version == version:
-			if info != nil {
-				t.entries[i].info = info
-			}
-			return
-		case e.version > version:
-			t.entries = slices.Insert(t.entries, i, entry{version: version, info: info})
-			return
+	i := sort.Search(len(t.entries), func(i int) bool {
+		return t.entries[i].version >= version
+	})
+	if i < len(t.entries) && t.entries[i].version == version {
+		if info != nil {
+			t.entries[i].info = info
 		}
+		return
 	}
-	t.entries = append(t.entries, entry{version: version, info: info})
+	t.entries = slices.Insert(t.entries, i, entry{version: version, info: info})
 }
 
 func (t *tableVersions) releaseBefore(watermark uint64) {
-	i := 0
-	for i < len(t.entries) && t.entries[i].version <= watermark {
-		i++
+	i := sort.Search(len(t.entries), func(i int) bool {
+		return t.entries[i].version > watermark
+	})
+	if i <= 1 {
+		return
 	}
-	if i > 1 {
-		clear(t.entries[:i-1])
-		t.entries = t.entries[i-1:]
-	}
+	clear(t.entries[:i-1])
+	t.entries = t.entries[i-1:]
 }
