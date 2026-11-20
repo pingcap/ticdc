@@ -231,7 +231,7 @@ func (m *mockEvent) Len() int32 {
 func newTestEventCollector(localServerID node.ID) *EventCollector {
 	mc := messaging.NewMessageCenter(context.TODO(), localServerID, config.NewDefaultMessageCenterConfig("127.0.0.1:18300"), nil)
 	appcontext.SetService(appcontext.MessageCenter, mc)
-	return New(localServerID)
+	return New(localServerID, nil)
 }
 
 func TestVerifyEventSequence(t *testing.T) {
@@ -1758,6 +1758,7 @@ func TestHandleBatchDMLEvent(t *testing.T) {
 			stat := newDispatcherStatForTest(mockDisp, nil)
 			stat.lastEventCommitTs.Store(tt.lastCommitTs)
 			stat.currentEpoch.Store(newDispatcherEpochState(tt.epoch, tt.lastSeq, stat.target.GetStartTs()))
+			markSessionReceiving(stat.session, "service1")
 			if tt.tableInfo != nil {
 				stat.tableInfo.Store(tt.tableInfo)
 			}
@@ -1784,6 +1785,7 @@ func TestHandleBatchDataEventsDoesNotAdvanceCommitTsWhenNoValidEvents(t *testing
 	stat := newDispatcherStatForTest(mockDisp, nil)
 	stat.lastEventCommitTs.Store(50)
 	stat.currentEpoch.Store(newDispatcherEpochState(10, 1, stat.target.GetStartTs()))
+	markSessionReceiving(stat.session, "service1")
 
 	events := []dispatcher.DispatcherEvent{
 		{
@@ -1876,12 +1878,13 @@ func TestCheckpointTsForEventServiceUsesCollectorObservedMaxTs(t *testing.T) {
 	require.Equal(t, uint64(100), stat.loadCurrentEpochState().maxEventTs.Load())
 	require.Equal(t, uint64(100), getHeartbeatCheckpoint())
 
-	stat.session.doReset(node.ID("event-service-1"), 150)
+	stat.session.doReset(node.ID("local"), 150)
 	require.Equal(t, uint64(150), stat.loadCurrentEpochState().maxEventTs.Load())
 	require.Equal(t, uint64(150), getHeartbeatCheckpoint())
 
 	handshake := commonEvent.NewHandshakeEvent(dispatcherID, 180, 1, &common.TableInfo{})
 	stat.handleHandshakeEvent(dispatcher.DispatcherEvent{
+		From:  createNodeID("local"),
 		Event: &handshake,
 	})
 	require.Equal(t, uint64(180), stat.loadCurrentEpochState().maxEventTs.Load())
@@ -1893,7 +1896,7 @@ func TestCheckpointTsForEventServiceUsesCollectorObservedMaxTs(t *testing.T) {
 	mockDisp.checkPointTs = 220
 	resolved := commonEvent.NewResolvedEvent(200, dispatcherID, 1)
 	resolved.Seq = 1
-	stat.handleDataEvents(dispatcher.DispatcherEvent{Event: resolved})
+	stat.handleDataEvents(dispatcher.DispatcherEvent{From: createNodeID("local"), Event: resolved})
 	require.Equal(t, uint64(200), stat.loadCurrentEpochState().maxEventTs.Load())
 	require.Equal(t, uint64(200), getHeartbeatCheckpoint())
 
@@ -1903,7 +1906,7 @@ func TestCheckpointTsForEventServiceUsesCollectorObservedMaxTs(t *testing.T) {
 		epoch:     1,
 		commitTs:  210,
 	}
-	stat.handleDataEvents(dispatcher.DispatcherEvent{Event: dml})
+	stat.handleDataEvents(dispatcher.DispatcherEvent{From: createNodeID("local"), Event: dml})
 	require.Equal(t, uint64(210), stat.loadCurrentEpochState().maxEventTs.Load())
 	require.Equal(t, uint64(210), getHeartbeatCheckpoint())
 }
@@ -2359,6 +2362,7 @@ func TestExchangeDMLRouting(t *testing.T) {
 					stat := newDispatcherStatForTest(mock, nil)
 					stat.currentEpoch.Store(newDispatcherEpochState(1, 0, 0))
 					from := createNodeID("service1")
+					markSessionReceiving(stat.session, *from)
 					handshake := commonEvent.NewHandshakeEvent(mock.id, 0, 1, tc.old)
 					stat.handleHandshakeEvent(dispatcher.NewDispatcherEvent(from, &handshake))
 					ddl := &commonEvent.DDLEvent{

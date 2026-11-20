@@ -37,11 +37,13 @@ message ReusableEventServiceRequest {
     heartbeatpb.DispatcherID ID = 1;
     heartbeatpb.TableSpan Span = 2;
     uint64 StartTs = 3;
+    uint64 RequestID = 4;
 }
 
 message ReusableEventServiceResponse {
     heartbeatpb.DispatcherID ID = 1;
     repeated string Nodes = 2;
+    uint64 RequestID = 3;
 }
 
 // A capture-wide snapshot, including ordinary and table trigger dispatchers.

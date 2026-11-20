@@ -26,6 +26,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/messaging/proto"
+	"github.com/pingcap/ticdc/pkg/tcpserver"
 	"go.uber.org/zap"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/keepalive"
@@ -38,6 +39,7 @@ type GrpcModule struct {
 
 func NewGrpcServer(lis net.Listener) common.SubModule {
 	option := []grpc.ServerOption{
+		grpc.Creds(tcpserver.NewGRPCServerCredentials()),
 		grpc.MaxRecvMsgSize(256 * 1024 * 1024), // 256MB
 	}
 

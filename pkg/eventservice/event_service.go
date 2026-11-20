@@ -14,7 +14,9 @@
 package eventservice
 
 import (
+	"bytes"
 	"context"
+	"fmt"
 	"sync"
 	"time"
 
@@ -28,6 +30,7 @@ import (
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	"github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/integrity"
 	"github.com/pingcap/ticdc/pkg/liveness"
 	"github.com/pingcap/ticdc/pkg/messaging"
@@ -259,6 +262,13 @@ func (s *eventService) handleMessage(ctx context.Context, msg *messaging.TargetM
 	case messaging.TypeDispatcherRequest:
 		infos := msgToDispatcherInfo(msg)
 		for _, info := range infos {
+			if err := validateDispatcherRequest(msg.From, info); err != nil {
+				log.Warn("reject invalid dispatcher request",
+					zap.Stringer("from", msg.From),
+					zap.Stringer("dispatcherID", info.GetID()),
+					zap.Error(err))
+				continue
+			}
 			select {
 			case <-ctx.Done():
 				return ctx.Err()
@@ -417,4 +427,48 @@ func msgToDispatcherInfo(msg *messaging.TargetMessage) []DispatcherInfo {
 		res = append(res, info)
 	}
 	return res
+}
+
+func validateDispatcherRequest(from node.ID, info DispatcherInfo) error {
+	if info.GetServerID() != from.String() {
+		return errors.ErrInvalidDispatcherRequest.GenWithStackByArgs(
+			fmt.Sprintf("dispatcher %s is owned by %q, but the request comes from %q",
+				info.GetID(), info.GetServerID(), from.String()))
+	}
+	switch info.GetActionType() {
+	case eventpb.ActionType_ACTION_TYPE_REGISTER, eventpb.ActionType_ACTION_TYPE_RESET:
+		return validateTableSpan(info.GetTableSpan())
+	}
+	return nil
+}
+
+// validateTableSpan checks that a span carries a valid table id and stays inside
+// the key range of that table, so a dispatcher can only subscribe to the table it
+// claims.
+func validateTableSpan(span *heartbeatpb.TableSpan) error {
+	if span == nil {
+		return errors.ErrInvalidDispatcherRequest.GenWithStackByArgs("table span is missing")
+	}
+	if span.Equal(common.KeyspaceDDLSpan(span.GetKeyspaceID())) {
+		return nil
+	}
+	tableID := span.GetTableID()
+	if tableID <= 0 {
+		return errors.ErrInvalidDispatcherRequest.GenWithStackByArgs(
+			fmt.Sprintf("invalid table id %d", tableID))
+	}
+	startKey, endKey, err := common.GetKeyspaceTableRange(span.GetKeyspaceID(), tableID)
+	if err != nil {
+		return errors.WrapError(errors.ErrInvalidDispatcherRequest, err, "get table range")
+	}
+	tableStart := common.ToComparableKey(startKey)
+	tableEnd := common.ToComparableKey(endKey)
+	if bytes.Compare(span.GetStartKey(), span.GetEndKey()) >= 0 ||
+		bytes.Compare(span.GetStartKey(), tableStart) < 0 ||
+		bytes.Compare(span.GetEndKey(), tableEnd) > 0 {
+		return errors.ErrInvalidDispatcherRequest.GenWithStackByArgs(
+			fmt.Sprintf("span %s is out of the key range of table %d",
+				common.FormatTableSpan(span), tableID))
+	}
+	return nil
 }

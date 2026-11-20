@@ -153,8 +153,9 @@ func (c *logCoordinator) Run(ctx context.Context) error {
 		case req := <-c.requestChan.Out():
 			nodes := c.getCandidateNodes(req)
 			response := &logservicepb.ReusableEventServiceResponse{
-				ID:    req.req.GetID(),
-				Nodes: nodes,
+				ID:        req.req.GetID(),
+				Nodes:     nodes,
+				RequestID: req.req.GetRequestID(),
 			}
 			err := c.messageCenter.SendEvent(messaging.NewSingleTargetMessage(req.target, logCoordinatorClientTopic, response))
 			if err != nil {
