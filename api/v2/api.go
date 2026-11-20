@@ -40,9 +40,14 @@ func RegisterOpenAPIV2Routes(router *gin.Engine, api OpenAPIV2) {
 
 	authenticateMiddleware := middleware.AuthenticateMiddleware(api.server)
 	nodeAuthenticateMiddleware := middleware.AuthenticateNodeMiddleware(api.server)
+	keyspaceCheckerMiddleware := middleware.KeyspaceCheckerMiddleware()
+	keyspaceNameCheckerMiddleware := middleware.KeyspaceNameCheckerMiddleware()
+	coordinatorMiddleware := middleware.ForwardToCoordinatorMiddleware(api.server)
+
 	v2.GET("status", api.ServerStatus)
 	v2.POST("log", nodeAuthenticateMiddleware, api.SetLogLevel)
-	v2.POST("log/redact", api.SetRedactMode)
+	v2.POST("log/redact", nodeAuthenticateMiddleware,
+		middleware.ChangefeedOperationMiddleware("set_redact_mode"), api.SetRedactMode)
 	// For compatibility with the old API.
 	// TiDB Operator relies on this API to determine whether the TiCDC node is healthy.
 	router.GET("/status", api.ServerStatus)
@@ -52,8 +57,9 @@ func RegisterOpenAPIV2Routes(router *gin.Engine, api OpenAPIV2) {
 	debugGroup := router.Group("/debug")
 	debugGroup.Use(middleware.LogMiddleware())
 	debugGroup.Use(middleware.ErrorHandleMiddleware())
-	debugGroup.POST("/failpoints", api.EnableFailpoint)
-	debugGroup.DELETE("/failpoints", api.DisableFailpoint)
+	debugGroup.Use(nodeAuthenticateMiddleware, keyspaceCheckerMiddleware)
+	debugGroup.POST("/failpoints", middleware.ChangefeedOperationMiddleware("enable_failpoint"), api.EnableFailpoint)
+	debugGroup.DELETE("/failpoints", middleware.ChangefeedOperationMiddleware("disable_failpoint"), api.DisableFailpoint)
 	debugGroup.GET("/failpoints", api.ListFailpoints)
 	debugGroup.GET("/puller", api.GetPullerDebugInfo)
 	debugGroup.GET(
@@ -61,9 +67,6 @@ func RegisterOpenAPIV2Routes(router *gin.Engine, api OpenAPIV2) {
 		api.GetPullerDebugRegion,
 	)
 
-	coordinatorMiddleware := middleware.ForwardToCoordinatorMiddleware(api.server)
-	keyspaceCheckerMiddleware := middleware.KeyspaceCheckerMiddleware()
-	keyspaceNameCheckerMiddleware := middleware.KeyspaceNameCheckerMiddleware()
 	v2.GET("health", coordinatorMiddleware, api.ServerHealth)
 
 	// changefeed apis
@@ -108,7 +111,8 @@ func RegisterOpenAPIV2Routes(router *gin.Engine, api OpenAPIV2) {
 
 	// owner apis
 	ownerGroup := v2.Group("/owner")
-	ownerGroup.Use(coordinatorMiddleware)
+	ownerGroup.Use(nodeAuthenticateMiddleware, keyspaceCheckerMiddleware, coordinatorMiddleware,
+		middleware.ChangefeedOperationMiddleware("resign_owner"))
 	ownerGroup.POST("/resign", api.ResignOwner)
 
 	// common APIs
@@ -116,8 +120,14 @@ func RegisterOpenAPIV2Routes(router *gin.Engine, api OpenAPIV2) {
 
 	// unsafe apis
 	unsafeGroup := v2.Group("/unsafe")
-	unsafeGroup.Use(coordinatorMiddleware, keyspaceCheckerMiddleware, authenticateMiddleware)
-	unsafeGroup.GET("/metadata", api.CDCMetaData)
-	unsafeGroup.POST("/resolve_lock", api.ResolveLock)
-	unsafeGroup.DELETE("/service_gc_safepoint", api.DeleteServiceGcSafePoint)
+	unsafeGroup.Use(nodeAuthenticateMiddleware, keyspaceCheckerMiddleware, coordinatorMiddleware)
+	// The operation middleware is registered after the coordinator middleware so that
+	// only the node that executes the operation records it.
+	unsafeGroup.GET("/metadata", middleware.ChangefeedOperationMiddleware("get_unsafe_metadata"),
+		api.CDCMetaData)
+	unsafeGroup.POST("/resolve_lock", middleware.ChangefeedOperationMiddleware("resolve_lock"),
+		api.ResolveLock)
+	unsafeGroup.DELETE("/service_gc_safepoint",
+		middleware.ChangefeedOperationMiddleware("delete_service_gc_safepoint"),
+		api.DeleteServiceGcSafePoint)
 }
