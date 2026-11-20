@@ -240,12 +240,9 @@ func (cfg *ChangefeedConfig) String() string {
 	if cloned.SinkConfig != nil {
 		cloned.SinkConfig.MaskSensitiveData()
 	}
-<<<<<<< HEAD
 	if cloned.Consistent != nil {
 		cloned.Consistent.MaskSensitiveData()
 	}
-=======
->>>>>>> 3c2580634 (config: mask sink URI credentials in logs (#6347))
 	res, err := json.Marshal(cloned)
 	if err != nil {
 		log.Error("failed to marshal changefeed config", zap.Error(err))
