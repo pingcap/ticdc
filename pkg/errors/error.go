@@ -860,6 +860,11 @@ var (
 		"data key not found: %s",
 		errors.RFCCodeText("CDC:ErrDataKeyNotFound"),
 	)
+
+	ErrInvalidMessage = errors.Normalize(
+		"invalid message: %s",
+		errors.RFCCodeText("CDC:ErrInvalidMessage"),
+	)
 )
 
 // ErrorType defines the type of application errors
