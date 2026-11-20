@@ -47,6 +47,7 @@ type decoder struct {
 	config    *common.Config
 
 	upstreamTiDB *sql.DB
+	cache        *common.TableInfoProvider
 
 	keyPayload   map[string]any
 	keySchema    map[string]any
@@ -64,6 +65,7 @@ func NewDecoder(
 		allocator:    allocator,
 		config:       config,
 		upstreamTiDB: db,
+		cache:        common.NewTableInfoProvider(),
 	}
 }
 
@@ -137,6 +139,7 @@ func (d *decoder) NextDDLEvent() *commonEvent.DDLEvent {
 	event.Query = d.valuePayload["ddl"].(string)
 	actionType := common.GetDDLActionType(event.Query)
 	event.Type = byte(actionType)
+	d.cache.AddDDL(schemaName, tableName, event.FinishedTs)
 
 	d.allocator.AddBlockTableID(event.SchemaName, event.TableName, d.allocator.Allocate(event.SchemaName, event.TableName))
 	event.BlockedTables = common.GetBlockedTables(d.allocator, event)
@@ -190,7 +193,7 @@ func (d *decoder) assembleDMLEventFromPayload(
 	valuePayload map[string]any,
 	valueSchema map[string]any,
 ) *commonEvent.DMLEvent {
-	tableInfo := queryTableInfoFromPayload(d.allocator, keyPayload, valuePayload, valueSchema)
+	tableInfo := d.queryTableInfoFromPayload(keyPayload, valuePayload, valueSchema)
 	commitTs := getCommitTsFromPayload(valuePayload)
 	startTs, hasStartTs := getStartTsFromPayload(valuePayload)
 	if !hasStartTs {
@@ -303,14 +306,29 @@ func (d *decoder) clear() {
 	d.valueSchema = nil
 }
 
-func queryTableInfoFromPayload(
-	allocator *common.TableIDAllocator,
+func (d *decoder) queryTableInfoFromPayload(
 	keyPayload map[string]any,
 	valuePayload map[string]any,
 	valueSchema map[string]any,
 ) *commonType.TableInfo {
 	schemaName := getSchemaNameFromPayload(valuePayload)
 	tableName := getTableNameFromPayload(valuePayload)
+	version, tableInfo := d.cache.ReadAt(schemaName, tableName, getCommitTsFromPayload(valuePayload))
+	if tableInfo != nil {
+		return tableInfo
+	}
+	tableInfo = d.newTableInfoFromPayload(schemaName, tableName, keyPayload, valuePayload, valueSchema)
+	d.cache.Write(schemaName, tableName, version, tableInfo)
+	return tableInfo
+}
+
+func (d *decoder) newTableInfoFromPayload(
+	schemaName, tableName string,
+	keyPayload map[string]any,
+	valuePayload map[string]any,
+	valueSchema map[string]any,
+) *commonType.TableInfo {
+	allocator := d.allocator
 	tidbTableInfo := new(timodel.TableInfo)
 	tidbTableInfo.ID = allocator.Allocate(schemaName, tableName)
 	allocator.AddBlockTableID(schemaName, tableName, tidbTableInfo.ID)

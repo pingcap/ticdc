@@ -108,7 +108,7 @@ func TestDecodeIntegerPrimaryKeyWithUpstreamChecksum(t *testing.T) {
 		WillReturnRows(sqlmock.NewRows([]string{"checksum"}).AddRow(checksum))
 	mock.ExpectClose()
 
-	dec := &decoder{upstreamTiDB: db, allocator: common.NewTableIDAllocator()}
+	dec := &decoder{upstreamTiDB: db, allocator: common.NewTableIDAllocator(), cache: common.NewTableInfoProvider()}
 	event := dec.assembleDMLEventFromDecoded(
 		map[string]any{"id": int64(42)},
 		map[string]any{
@@ -150,7 +150,7 @@ func TestDecodeTimestampChecksumUsesLocalTimeZone(t *testing.T) {
 			map[string]any{"name": "ts", "type": map[string]any{"connect.parameters": map[string]any{"tidb_type": "TIMESTAMP"}}},
 		},
 	}
-	source, err := assembleEvent(common.NewTableIDAllocator(), key, value, schema, false, true)
+	source, err := assembleEvent(common.NewTableIDAllocator(), common.NewTableInfoProvider(), key, value, schema, false, true, 0)
 	require.NoError(t, err)
 	t.Cleanup(source.PostFlush)
 	data := rowcodec.RowData{}
@@ -167,7 +167,7 @@ func TestDecodeTimestampChecksumUsesLocalTimeZone(t *testing.T) {
 	_, offset := time.Date(2020, 2, 20, 2, 20, 20, 0, local).Zone()
 	cfg := common.NewConfig(config.ProtocolAvro)
 	cfg.TimeZone = time.FixedZone("consumer", offset+3600)
-	dec := &decoder{config: cfg, allocator: common.NewTableIDAllocator()}
+	dec := &decoder{config: cfg, allocator: common.NewTableIDAllocator(), cache: common.NewTableInfoProvider()}
 	event := dec.assembleDMLEventFromDecoded(key, value, schema, false, true, 0)
 	require.NotNil(t, event)
 	t.Cleanup(event.PostFlush)
@@ -320,7 +320,7 @@ func TestAvroChecksumAfterColumnTypeChange(t *testing.T) {
 }
 
 func TestChecksumFailureStopsDecode(t *testing.T) {
-	dec := &decoder{allocator: common.NewTableIDAllocator()}
+	dec := &decoder{allocator: common.NewTableIDAllocator(), cache: common.NewTableInfoProvider()}
 	require.PanicsWithValue(t, "verify row checksum failed", func() {
 		dec.assembleDMLEventFromDecoded(
 			map[string]any{"id": int64(1)},
@@ -365,9 +365,9 @@ func TestUpdateWithoutBeforeValue(t *testing.T) {
 	}
 	key := map[string]any{"id": int64(1)}
 	makeEvent := func(op string, ts, value int64) *commonEvent.DMLEvent {
-		e, err := assembleEvent(common.NewTableIDAllocator(), key, map[string]any{
+		e, err := assembleEvent(common.NewTableIDAllocator(), common.NewTableInfoProvider(), key, map[string]any{
 			"id": int64(1), "v": value, tidbOp: op, tidbCommitTs: ts,
-		}, schema, false, true)
+		}, schema, false, true, 0)
 		require.NoError(t, err)
 		return e
 	}
@@ -396,7 +396,7 @@ func TestUpdateWithoutBeforeValueRequiresKey(t *testing.T) {
 		"fields": []any{map[string]any{"name": "id", "type": map[string]any{"connect.parameters": map[string]any{"tidb_type": "INT"}}}},
 	}
 	for _, key := range []map[string]any{nil, {"id": nil}, {"missing": int64(1)}} {
-		_, err := assembleEvent(common.NewTableIDAllocator(), key, map[string]any{"id": int64(1), tidbOp: updateOperation, tidbCommitTs: int64(100)}, schema, false, true)
+		_, err := assembleEvent(common.NewTableIDAllocator(), common.NewTableInfoProvider(), key, map[string]any{"id": int64(1), tidbOp: updateOperation, tidbCommitTs: int64(100)}, schema, false, true, 0)
 		require.ErrorContains(t, err, "handle")
 	}
 }
