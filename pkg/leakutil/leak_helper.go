@@ -49,13 +49,6 @@ func AddCleanup(cleanup func()) {
 	cleanups = append(cleanups, cleanup)
 }
 
-// VerifyNone verifies that no unexpected leaks occur
-// Note that this function is incompatible with `t.Parallel()`
-func VerifyNone(t *testing.T, options ...goleak.Option) {
-	options = append(options, defaultOpts...)
-	goleak.VerifyNone(t, options...)
-}
-
 // SetUpLeakTest ignore unexpected common etcd and opencensus stack functions for goleak
 // options can be used to implement other ignore items
 func SetUpLeakTest(m *testing.M, options ...goleak.Option) {

@@ -14,7 +14,6 @@
 package retry
 
 import (
-	"math"
 	"math/rand"
 	"time"
 
@@ -45,14 +44,6 @@ type ErrorRetry struct {
 // NewDefaultErrorRetry creates a new ErrorRetry with default values.
 func NewDefaultErrorRetry() *ErrorRetry {
 	return NewErrorRetry(defaultErrorMaxRetryDuration,
-		defaultErrGCInterval,
-		defaultBackoffBaseInS,
-		defaultBackoffMaxInS)
-}
-
-// NewInfiniteErrorRetry creates a new ErrorRetry with infinite duration.
-func NewInfiniteErrorRetry() *ErrorRetry {
-	return NewErrorRetry(time.Duration(math.MaxInt64),
 		defaultErrGCInterval,
 		defaultBackoffBaseInS,
 		defaultBackoffMaxInS)

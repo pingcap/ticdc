@@ -654,11 +654,6 @@ func (c *CDCEtcdClientImpl) GetUpstreamInfo(ctx context.Context,
 	return info, errors.Trace(err)
 }
 
-// GcServiceIDForTest returns the gc service ID for tests
-func GcServiceIDForTest() string {
-	return fmt.Sprintf("ticdc-%s-%d", "default", 0)
-}
-
 // getFreeListenURLs get free ports and localhost as url.
 func getFreeListenURLs(n int) (urls []*url.URL, retErr error) {
 	for i := 0; i < n; i++ {
