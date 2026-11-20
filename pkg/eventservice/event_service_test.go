@@ -619,7 +619,7 @@ func (m *mockEventStore) GetIterator(
 
 	v, ok := m.spansMap.Load(span)
 	if !ok {
-		log.Panic("span not found", zap.Any("span", span), zap.Stringer("dispatcherID", dispatcherID))
+		log.Panic("span not found", zap.Stringer("dispatcherID", dispatcherID))
 	}
 
 	spanStats := v.(*mockSpanStats)
@@ -680,8 +680,7 @@ func (m *mockEventStore) RegisterDispatcher(
 		return false
 	}
 	log.Info("subscribe table span", zap.Any("dispatcherID", dispatcherID),
-		zap.Uint64("startTs", startTS),
-		zap.Any("span", common.FormatTableSpan(span)))
+		zap.Uint64("startTs", startTS))
 	spanStats := &mockSpanStats{
 		startTs:            startTS,
 		resolvedTsNotifier: notifier,

@@ -146,7 +146,7 @@ function test_owner_retryable_error() {
 	# However we have injected two failpoints, the second capture owner runs
 	# with error and before it exits resign owner also failed, so the second
 	# capture will restart and the first capture campaigns to be owner again.
-	curl -X POST http://127.0.0.1:8300/api/v2/owner/resign
+	curl -X POST "http://127.0.0.1:8300/api/v2/owner/resign?keyspace=$KEYSPACE_NAME"
 	ensure $MAX_RETRIES "ETCDCTL_API=3 etcdctl get /tidb/cdc/default/__cdc_meta__/owner --prefix | grep  '$owner_id'"
 	echo "test_owner_retryable_error pass"
 	export GO_FAILPOINTS=''

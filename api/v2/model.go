@@ -15,6 +15,7 @@ package v2
 
 import (
 	"encoding/json"
+	"slices"
 	"time"
 
 	"github.com/pingcap/ticdc/pkg/api"
@@ -480,6 +481,15 @@ func (c *ReplicaConfig) toInternalReplicaConfigWithOriginConfig(
 					Token:           util.GetOrZero(c.Sink.KafkaConfig.GlueSchemaRegistryConfig.Token),
 				}
 			}
+			var awsMSKIAMConfig *config.AWSMSKIAMConfig
+			if c.Sink.KafkaConfig.AWSMSKIAM != nil {
+				awsMSKIAMConfig = &config.AWSMSKIAMConfig{
+					Region:          c.Sink.KafkaConfig.AWSMSKIAM.Region,
+					RoleARN:         c.Sink.KafkaConfig.AWSMSKIAM.RoleARN,
+					RoleSessionName: c.Sink.KafkaConfig.AWSMSKIAM.RoleSessionName,
+					ExternalID:      c.Sink.KafkaConfig.AWSMSKIAM.ExternalID,
+				}
+			}
 
 			kafkaConfig = &config.KafkaConfig{
 				PartitionNum:                 c.Sink.KafkaConfig.PartitionNum,
@@ -511,6 +521,8 @@ func (c *ReplicaConfig) toInternalReplicaConfigWithOriginConfig(
 				SASLOAuthScopes:              c.Sink.KafkaConfig.SASLOAuthScopes,
 				SASLOAuthGrantType:           c.Sink.KafkaConfig.SASLOAuthGrantType,
 				SASLOAuthAudience:            c.Sink.KafkaConfig.SASLOAuthAudience,
+				SASLOAuthProvider:            c.Sink.KafkaConfig.SASLOAuthProvider,
+				AWSMSKIAM:                    awsMSKIAMConfig,
 				EnableTLS:                    c.Sink.KafkaConfig.EnableTLS,
 				CA:                           c.Sink.KafkaConfig.CA,
 				Cert:                         c.Sink.KafkaConfig.Cert,
@@ -538,6 +550,7 @@ func (c *ReplicaConfig) toInternalReplicaConfigWithOriginConfig(
 				ReadTimeout:                  c.Sink.MySQLConfig.ReadTimeout,
 				Timeout:                      c.Sink.MySQLConfig.Timeout,
 				AsyncDDLTimeout:              c.Sink.MySQLConfig.AsyncDDLTimeout,
+				TxnOrderTables:               c.Sink.MySQLConfig.TxnOrderTables,
 				EnableBatchDML:               c.Sink.MySQLConfig.EnableBatchDML,
 				EnableMultiStatement:         c.Sink.MySQLConfig.EnableMultiStatement,
 				EnableCachePreparedStatement: c.Sink.MySQLConfig.EnableCachePreparedStatement,
@@ -847,6 +860,15 @@ func ToAPIReplicaConfig(c *config.ReplicaConfig) *ReplicaConfig {
 					Token:           new(cloned.Sink.KafkaConfig.GlueSchemaRegistryConfig.Token),
 				}
 			}
+			var awsMSKIAMConfig *AWSMSKIAMConfig
+			if cloned.Sink.KafkaConfig.AWSMSKIAM != nil {
+				awsMSKIAMConfig = &AWSMSKIAMConfig{
+					Region:          cloned.Sink.KafkaConfig.AWSMSKIAM.Region,
+					RoleARN:         cloned.Sink.KafkaConfig.AWSMSKIAM.RoleARN,
+					RoleSessionName: cloned.Sink.KafkaConfig.AWSMSKIAM.RoleSessionName,
+					ExternalID:      cloned.Sink.KafkaConfig.AWSMSKIAM.ExternalID,
+				}
+			}
 
 			kafkaConfig = &KafkaConfig{
 				PartitionNum:                 cloned.Sink.KafkaConfig.PartitionNum,
@@ -878,6 +900,8 @@ func ToAPIReplicaConfig(c *config.ReplicaConfig) *ReplicaConfig {
 				SASLOAuthScopes:              cloned.Sink.KafkaConfig.SASLOAuthScopes,
 				SASLOAuthGrantType:           cloned.Sink.KafkaConfig.SASLOAuthGrantType,
 				SASLOAuthAudience:            cloned.Sink.KafkaConfig.SASLOAuthAudience,
+				SASLOAuthProvider:            cloned.Sink.KafkaConfig.SASLOAuthProvider,
+				AWSMSKIAM:                    awsMSKIAMConfig,
 				EnableTLS:                    cloned.Sink.KafkaConfig.EnableTLS,
 				CA:                           cloned.Sink.KafkaConfig.CA,
 				Cert:                         cloned.Sink.KafkaConfig.Cert,
@@ -905,6 +929,7 @@ func ToAPIReplicaConfig(c *config.ReplicaConfig) *ReplicaConfig {
 				ReadTimeout:                  cloned.Sink.MySQLConfig.ReadTimeout,
 				Timeout:                      cloned.Sink.MySQLConfig.Timeout,
 				AsyncDDLTimeout:              cloned.Sink.MySQLConfig.AsyncDDLTimeout,
+				TxnOrderTables:               slices.Clone(c.Sink.MySQLConfig.TxnOrderTables),
 				EnableBatchDML:               cloned.Sink.MySQLConfig.EnableBatchDML,
 				EnableMultiStatement:         cloned.Sink.MySQLConfig.EnableMultiStatement,
 				EnableCachePreparedStatement: cloned.Sink.MySQLConfig.EnableCachePreparedStatement,
@@ -1697,6 +1722,8 @@ type KafkaConfig struct {
 	SASLOAuthScopes              []string                  `json:"sasl_oauth_scopes,omitempty" toml:"sasl-oauth-scopes,omitempty"`
 	SASLOAuthGrantType           *string                   `json:"sasl_oauth_grant_type,omitempty" toml:"sasl-oauth-grant-type,omitempty"`
 	SASLOAuthAudience            *string                   `json:"sasl_oauth_audience,omitempty" toml:"sasl-oauth-audience,omitempty"`
+	SASLOAuthProvider            *string                   `json:"sasl_oauth_provider,omitempty" toml:"sasl-oauth-provider,omitempty"`
+	AWSMSKIAM                    *AWSMSKIAMConfig          `json:"aws_msk_iam,omitempty" toml:"aws-msk-iam,omitempty"`
 	EnableTLS                    *bool                     `json:"enable_tls,omitempty" toml:"enable-tls,omitempty"`
 	CA                           *string                   `json:"ca,omitempty" toml:"ca,omitempty"`
 	Cert                         *string                   `json:"cert,omitempty" toml:"cert,omitempty"`
@@ -1708,24 +1735,26 @@ type KafkaConfig struct {
 	OutputRawChangeEvent         *bool                     `json:"output_raw_change_event,omitempty" toml:"output-raw-change-event,omitempty"`
 }
 
-// MySQLConfig represents a MySQL sink configuration
+// MySQLConfig represents a MySQL sink configuration.
+// Nil TxnOrderTables preserves stored rules on update. An empty list disables ordering.
 type MySQLConfig struct {
-	WorkerCount                  *int    `json:"worker_count,omitempty" toml:"worker-count,omitempty"`
-	MaxTxnRow                    *int    `json:"max_txn_row,omitempty" toml:"max-txn-row,omitempty"`
-	MaxMultiUpdateRowSize        *int    `json:"max_multi_update_row_size,omitempty" toml:"max-multi-update-row-size,omitempty"`
-	MaxMultiUpdateRowCount       *int    `json:"max_multi_update_row_count,omitempty" toml:"max-multi-update-row-count,omitempty"`
-	TiDBTxnMode                  *string `json:"tidb_txn_mode,omitempty" toml:"tidb-txn-mode,omitempty"`
-	SSLCa                        *string `json:"ssl_ca,omitempty" toml:"ssl-ca,omitempty"`
-	SSLCert                      *string `json:"ssl_cert,omitempty" toml:"ssl-cert,omitempty"`
-	SSLKey                       *string `json:"ssl_key,omitempty" toml:"ssl-key,omitempty"`
-	TimeZone                     *string `json:"time_zone,omitempty" toml:"time-zone,omitempty"`
-	WriteTimeout                 *string `json:"write_timeout,omitempty" toml:"write-timeout,omitempty"`
-	ReadTimeout                  *string `json:"read_timeout,omitempty" toml:"read-timeout,omitempty"`
-	Timeout                      *string `json:"timeout,omitempty" toml:"timeout,omitempty"`
-	AsyncDDLTimeout              *string `json:"async_ddl_timeout,omitempty" toml:"async-ddl-timeout,omitempty"`
-	EnableBatchDML               *bool   `json:"enable_batch_dml,omitempty" toml:"enable-batch-dml,omitempty"`
-	EnableMultiStatement         *bool   `json:"enable_multi_statement,omitempty" toml:"enable-multi-statement,omitempty"`
-	EnableCachePreparedStatement *bool   `json:"enable_cache_prepared_statement,omitempty" toml:"enable-cache-prepared-statement,omitempty"`
+	WorkerCount                  *int     `json:"worker_count,omitempty" toml:"worker-count,omitempty"`
+	MaxTxnRow                    *int     `json:"max_txn_row,omitempty" toml:"max-txn-row,omitempty"`
+	MaxMultiUpdateRowSize        *int     `json:"max_multi_update_row_size,omitempty" toml:"max-multi-update-row-size,omitempty"`
+	MaxMultiUpdateRowCount       *int     `json:"max_multi_update_row_count,omitempty" toml:"max-multi-update-row-count,omitempty"`
+	TiDBTxnMode                  *string  `json:"tidb_txn_mode,omitempty" toml:"tidb-txn-mode,omitempty"`
+	SSLCa                        *string  `json:"ssl_ca,omitempty" toml:"ssl-ca,omitempty"`
+	SSLCert                      *string  `json:"ssl_cert,omitempty" toml:"ssl-cert,omitempty"`
+	SSLKey                       *string  `json:"ssl_key,omitempty" toml:"ssl-key,omitempty"`
+	TimeZone                     *string  `json:"time_zone,omitempty" toml:"time-zone,omitempty"`
+	WriteTimeout                 *string  `json:"write_timeout,omitempty" toml:"write-timeout,omitempty"`
+	ReadTimeout                  *string  `json:"read_timeout,omitempty" toml:"read-timeout,omitempty"`
+	Timeout                      *string  `json:"timeout,omitempty" toml:"timeout,omitempty"`
+	AsyncDDLTimeout              *string  `json:"async_ddl_timeout,omitempty" toml:"async-ddl-timeout,omitempty"`
+	EnableBatchDML               *bool    `json:"enable_batch_dml,omitempty" toml:"enable-batch-dml,omitempty"`
+	EnableMultiStatement         *bool    `json:"enable_multi_statement,omitempty" toml:"enable-multi-statement,omitempty"`
+	EnableCachePreparedStatement *bool    `json:"enable_cache_prepared_statement,omitempty" toml:"enable-cache-prepared-statement,omitempty"`
+	TxnOrderTables               []string `json:"txn_order_tables,omitzero" toml:"txn-order-tables,omitempty"`
 }
 
 // CloudStorageConfig represents a cloud storage sink configuration
@@ -1763,6 +1792,14 @@ type GlueSchemaRegistryConfig struct {
 	// SecretAccessKey of the schema registry
 	SecretAccessKey *string `json:"secret_access_key,omitempty" toml:"secret-access-key,omitempty"`
 	Token           *string `json:"token,omitempty" toml:"token,omitempty"`
+}
+
+// AWSMSKIAMConfig represents an Amazon MSK IAM authentication configuration.
+type AWSMSKIAMConfig struct {
+	Region          string `json:"region" toml:"region"`
+	RoleARN         string `json:"role_arn,omitempty" toml:"role-arn,omitempty"`
+	RoleSessionName string `json:"role_session_name,omitempty" toml:"role-session-name,omitempty"`
+	ExternalID      string `json:"external_id,omitempty" toml:"external-id,omitempty"`
 }
 
 // OpenProtocolConfig represents the configurations for open protocol encoding

@@ -144,7 +144,7 @@ func TestDDLReplicationKeyFiltering(t *testing.T) {
 				{"table dispatcher", rawEvent.TableID, tc.tableEvent},
 			} {
 				t.Run(caller.name, func(t *testing.T) {
-					event, ok, err := buildDDLEvent(rawEvent, tableFilter, caller.tableID)
+					event, ok, err := buildDDLEvent(rawEvent, tableFilter, nil, caller.tableID)
 					require.NoError(t, err)
 					require.Equal(t, caller.want, ok)
 					if !ok {
@@ -239,7 +239,7 @@ func TestDDLReplicationKeyTransitions(t *testing.T) {
 				for _, forceReplicate := range []bool{false, true} {
 					f, err := filter.NewFilter(&config.FilterConfig{Rules: []string{"test.*"}}, "", false, forceReplicate)
 					require.NoError(t, err)
-					events, err := storage.fetchTableTriggerDDLEvents(f, create.BinlogInfo.FinishedTS, 10)
+					events, err := storage.fetchTableTriggerDDLEvents(f, nil, create.BinlogInfo.FinishedTS, 10)
 					require.NoError(t, err)
 					if forceReplicate || tc.retainsKey {
 						require.Empty(t, events)
@@ -256,7 +256,7 @@ func TestDDLReplicationKeyTransitions(t *testing.T) {
 						require.Nil(t, events[1].NeedDroppedTables)
 					}
 					for _, id := range physicalIDs {
-						tableEvents, err := storage.fetchTableDDLEvents(common.NewDispatcherID(), id, f, create.BinlogInfo.FinishedTS, acquire.BinlogInfo.FinishedTS)
+						tableEvents, err := storage.fetchTableDDLEvents(common.NewDispatcherID(), id, f, nil, create.BinlogInfo.FinishedTS, acquire.BinlogInfo.FinishedTS)
 						require.NoError(t, err)
 						if forceReplicate || tc.retainsKey {
 							require.Len(t, tableEvents, 2)
@@ -362,7 +362,7 @@ func TestDDLTableBecomesEligible(t *testing.T) {
 				for _, forceReplicate := range []bool{false, true} {
 					tableFilter, err := filter.NewFilter(&config.FilterConfig{Rules: []string{"test.*"}}, "", false, forceReplicate)
 					require.NoError(t, err)
-					events, err := storage.fetchTableTriggerDDLEvents(tableFilter, createJob.BinlogInfo.FinishedTS, 10)
+					events, err := storage.fetchTableTriggerDDLEvents(tableFilter, nil, createJob.BinlogInfo.FinishedTS, 10)
 					require.NoError(t, err)
 					if !tableFilter.IsEligibleTable(common.WrapTableInfo("test", alterJob.BinlogInfo.TableInfo)) {
 						require.Empty(t, events)
@@ -403,7 +403,7 @@ func TestDDLTableBecomesEligible(t *testing.T) {
 						if forceReplicate {
 							// Existing dispatchers must receive the ALTER exactly once without adding tables again.
 							tableEvents, err := storage.fetchTableDDLEvents(common.NewDispatcherID(), id, tableFilter,
-								createJob.BinlogInfo.FinishedTS, alterJob.BinlogInfo.FinishedTS)
+								nil, createJob.BinlogInfo.FinishedTS, alterJob.BinlogInfo.FinishedTS)
 							require.NoError(t, err)
 							require.Len(t, tableEvents, 1)
 							require.Empty(t, tableEvents[0].NeedAddedTables)
@@ -415,7 +415,7 @@ func TestDDLTableBecomesEligible(t *testing.T) {
 						require.NoError(t, err)
 						require.True(t, tableFilter.IsEligibleTable(info))
 						tableEvents, err := storage.fetchTableDDLEvents(common.NewDispatcherID(), id, tableFilter,
-							alterJob.BinlogInfo.FinishedTS, likeJob.BinlogInfo.FinishedTS)
+							nil, alterJob.BinlogInfo.FinishedTS, likeJob.BinlogInfo.FinishedTS)
 						require.NoError(t, err)
 						require.Len(t, tableEvents, 1)
 						require.Equal(t, events[0].BlockedTables, tableEvents[0].BlockedTables)

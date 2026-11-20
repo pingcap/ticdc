@@ -204,7 +204,7 @@ func (m *mockDispatcherManager) onDispatchRequest(
 			log.Warn("dispatcher already exists",
 				zap.String("from", msg.From.String()),
 				zap.String("self", m.self.String()),
-				zap.String("dispatcher", common.NewDispatcherIDFromPB(request.Config.DispatcherID).String()))
+				zap.String("dispatcherID", common.NewDispatcherIDFromPB(request.Config.DispatcherID).String()))
 			return
 		}
 		status := &heartbeatpb.TableSpanStatus{

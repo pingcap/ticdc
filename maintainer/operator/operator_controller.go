@@ -30,6 +30,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/scheduler/operator"
 	"github.com/pingcap/ticdc/server/watcher"
 	"go.uber.org/zap"
+	"golang.org/x/time/rate"
 )
 
 const (
@@ -48,6 +49,7 @@ type Controller struct {
 	changefeedID    common.ChangeFeedID
 	batchSize       int
 	messageCenter   messaging.MessageCenter
+	sendWarnLimiter *rate.Limiter
 	spanController  *span.Controller
 	nodeManager     *watcher.NodeManager
 	maintainerEpoch atomic.Uint64
@@ -91,6 +93,7 @@ func NewOperatorController(
 		mode:               mode,
 		allowedOperatorIDs: make(map[common.DispatcherID]struct{}),
 		lastWarnTime:       make(map[common.DispatcherID]time.Time),
+		sendWarnLimiter:    rate.NewLimiter(rate.Every(30*time.Second), 1),
 	}
 }
 
@@ -180,12 +183,17 @@ func (oc *Controller) scheduleOperator(op operator.Operator[common.DispatcherID,
 		return
 	}
 
-	_ = oc.messageCenter.SendCommand(msg)
-	log.Debug("send command to dispatcher",
-		zap.String("role", oc.role),
-		zap.Stringer("changefeedID", oc.changefeedID),
-		zap.String("operator", op.String()),
-		zap.Any("msg", msg.Message))
+	if err := oc.messageCenter.SendCommand(msg); err != nil && oc.sendWarnLimiter.Allow() {
+		log.Warn("send command to dispatcher failed, operator will retry",
+			zap.String("role", oc.role),
+			zap.Stringer("changefeedID", oc.changefeedID),
+			zap.String("dispatcherID", op.ID().String()),
+			zap.String("operator", op.String()),
+			zap.Stringer("nodeID", msg.To),
+			zap.String("topic", msg.Topic),
+			zap.Duration("minRetryInterval", minSendMessageInterval),
+			zap.Error(err))
+	}
 }
 
 // RemoveTasksBySchemaID remove all tasks by schema id.
@@ -405,7 +413,7 @@ func (oc *Controller) pollQueueingOperator() (
 		if shouldWarn {
 			log.Warn("operator is still in running queue",
 				zap.Stringer("changefeedID", oc.changefeedID),
-				zap.String("operator", opID.String()),
+				zap.String("dispatcherID", opID.String()),
 				zap.String("operator", op.String()),
 				zap.Any("timeSinceCreated", time.Since(item.CreatedAt)))
 		}
@@ -449,7 +457,7 @@ func (oc *Controller) finalizeOperator(
 	log.Info("operator finished",
 		zap.String("role", oc.role),
 		zap.Stringer("changefeedID", oc.changefeedID),
-		zap.String("operatorID", opID.String()),
+		zap.String("dispatcherID", opID.String()),
 		zap.String("operator", op.String()))
 }
 
@@ -491,7 +499,7 @@ func (oc *Controller) removeReplicaSet(op *removeDispatcherOperator) {
 		log.Info("replica set is removed, replace the old one",
 			zap.String("role", oc.role),
 			zap.Stringer("changefeedID", oc.changefeedID),
-			zap.String("replicaSet", old.OP.ID().String()),
+			zap.String("dispatcherID", old.OP.ID().String()),
 			zap.String("operator", old.OP.String()))
 		old.OP.OnTaskRemoved()
 		oc.finalizeOperator(old, op.ID())
@@ -555,7 +563,7 @@ func (oc *Controller) NewMoveOperator(replicaSet *replica.SpanReplication, origi
 func checkMergeOperator(affectedReplicaSets []*replica.SpanReplication) bool {
 	if len(affectedReplicaSets) < 2 {
 		log.Info("affectedReplicaSets is less than 2, skip merge",
-			zap.Any("affectedReplicaSets", affectedReplicaSets))
+			zap.Int("affectedReplicaSetCount", len(affectedReplicaSets)))
 		return false
 	}
 
@@ -569,12 +577,16 @@ func checkMergeOperator(affectedReplicaSets []*replica.SpanReplication) bool {
 	for idx := 1; idx < len(affectedSpans); idx++ {
 		currentTableSpan := affectedSpans[idx]
 		if !common.IsTableSpanConsecutive(prevTableSpan, currentTableSpan) {
-			log.Info("affectedReplicaSets is not consecutive, skip merge", zap.String("prevTableSpan", common.FormatTableSpan(prevTableSpan)), zap.String("currentTableSpan", common.FormatTableSpan(currentTableSpan)))
+			log.Info("affectedReplicaSets is not consecutive, skip merge",
+				zap.Stringer("previousDispatcherID", affectedReplicaSets[idx-1].ID),
+				zap.Stringer("dispatcherID", affectedReplicaSets[idx].ID))
 			return false
 		}
 		prevTableSpan = currentTableSpan
 		if affectedReplicaSets[idx].GetNodeID() != nodeID {
-			log.Info("affectedReplicaSets is not in the same node, skip merge", zap.Any("affectedReplicaSets", affectedReplicaSets))
+			log.Info("affectedReplicaSets is not in the same node, skip merge",
+				zap.Int("affectedReplicaSetCount", len(affectedReplicaSets)),
+				zap.Stringer("dispatcherID", affectedReplicaSets[idx].ID))
 			return false
 		}
 	}
@@ -595,7 +607,7 @@ func (oc *Controller) addMergeOccupyOperators(
 		log.Error("failed to add occupy dispatcher operator",
 			zap.Stringer("changefeedID", oc.changefeedID),
 			zap.Int64("group", replicaSet.GetGroupID()),
-			zap.String("span", common.FormatTableSpan(replicaSet.Span)),
+			zap.Stringer("dispatcherID", replicaSet.ID),
 			zap.String("operator", occupyOperator.String()))
 		oc.cancelMergeOccupyOperators(operators)
 		return nil, false
@@ -631,7 +643,7 @@ func (oc *Controller) AddMergeOperator(
 	if !ret {
 		log.Error("failed to add merge dispatcher operator",
 			zap.Stringer("changefeedID", oc.changefeedID),
-			zap.Any("mergeSpans", affectedReplicaSets),
+			zap.Int("mergeSpanCount", len(affectedReplicaSets)),
 			zap.String("operator", mergeOperator.String()))
 		oc.cancelMergeOccupyOperators(operators)
 		oc.spanController.RemoveReplicatingSpan(mergeOperator.newReplicaSet)
@@ -673,7 +685,7 @@ func (oc *Controller) AddRestoredMergeOperator(
 	if !ret {
 		log.Error("failed to add merge dispatcher operator when restoring merge",
 			zap.Stringer("changefeedID", oc.changefeedID),
-			zap.Any("mergeSpans", affectedReplicaSets),
+			zap.Int("mergeSpanCount", len(affectedReplicaSets)),
 			zap.String("operator", mergeOperator.String()))
 		oc.cancelMergeOccupyOperators(operators)
 		return nil

@@ -340,9 +340,7 @@ func (c *Controller) removeTerminalSpanCoveredByMergedSpan(
 			log.Info("remove terminal span covered by merged span",
 				zap.String("changefeed", c.changefeedID.Name()),
 				zap.String("dispatcherID", stm.ID.String()),
-				zap.String("coveringDispatcherID", candidate.ID.String()),
-				zap.String("span", common.FormatTableSpan(stm.Span)),
-				zap.String("coveringSpan", common.FormatTableSpan(candidate.Span)))
+				zap.String("coveringDispatcherID", candidate.ID.String()))
 			spanController.RemoveReplicatingSpan(stm)
 			return true
 		}

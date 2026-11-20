@@ -110,6 +110,12 @@ func ChangefeedOperationMiddleware(operation string) gin.HandlerFunc {
 
 		statusCode := c.Writer.Status()
 		lastError := c.Errors.Last()
+		// ErrorHandleMiddleware writes the error response after this middleware
+		// returns, so sample the status it is about to write. A handler that
+		// already wrote a response keeps its status.
+		if lastError != nil && statusCode < http.StatusBadRequest && !c.Writer.Written() {
+			statusCode = errorResponseStatus(lastError.Err)
+		}
 		result := "success"
 		if statusCode >= http.StatusBadRequest || lastError != nil {
 			result = "failed"
@@ -123,6 +129,8 @@ func ChangefeedOperationMiddleware(operation string) gin.HandlerFunc {
 			info.changefeed = c.Param(api.APIOpVarChangefeedID)
 		}
 
+		// The name is the one the caller supplied, the same as LogMiddleware
+		// records. It is verified only when client user authentication is on.
 		username, _, _ := c.Request.BasicAuth()
 		if username == "" {
 			username = "anonymous"
