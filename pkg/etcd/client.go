@@ -445,6 +445,8 @@ func CreateRawEtcdClient(securityConf *security.Credential, grpcDialOption grpc.
 	}
 	eps := syncUrls(client)
 	checker.update(eps)
+	// Initialize the gauge so the series exists before the first endpoint change.
+	etcdStateGauge.WithLabelValues("endpoints").Set(float64(len(eps)))
 
 	// Create a goroutine to check the health of etcd endpoints periodically.
 	go func(client *clientv3.Client) {
