@@ -41,7 +41,7 @@ func (c *muxCredentials) ServerHandshake(rawConn net.Conn) (net.Conn, credential
 	if tlsConn, ok := conn.(*tls.Conn); ok {
 		state := tlsConn.ConnectionState()
 		if !state.HandshakeComplete {
-			return nil, nil, errors.ErrUnauthorized.FastGenByArgs("client", "TLS handshake is incomplete")
+			return nil, nil, errors.ErrUnauthorized.FastGenByArgs(rawConn.RemoteAddr().String(), "TLS handshake is incomplete")
 		}
 		return rawConn, credentials.TLSInfo{
 			State:         state,

@@ -425,6 +425,10 @@ func (s *grpcServer) id() node.ID {
 // handleConnect registers the client as a target in the message center.
 // So the message center can receive messages from the client.
 func (s *grpcServer) handleConnect(stream proto.MessageService_StreamMessagesServer) error {
+	var connAddr string
+	if remotePeer, ok := peer.FromContext(stream.Context()); ok && remotePeer.Addr != nil {
+		connAddr = remotePeer.Addr.String()
+	}
 	// The first message is an handshake message.
 	msg, err := stream.Recv()
 	if err != nil {
@@ -433,7 +437,13 @@ func (s *grpcServer) handleConnect(stream proto.MessageService_StreamMessagesSer
 
 	handshake, err := decodeHandshakeMessage(msg)
 	if err != nil {
-		log.Warn("failed to unmarshal handshake message", zap.Error(err))
+		log.Warn("handshake failed since cannot decode message",
+			zap.Stringer("localID", s.messageCenter.id),
+			zap.String("localAddr", s.messageCenter.addr),
+			zap.String("connAddr", connAddr),
+			zap.String("sender", msg.From),
+			zap.String("receiver", msg.To),
+			zap.Error(err))
 		return err
 	}
 
@@ -506,7 +516,7 @@ func decodeHandshakeMessage(msg *proto.Message) (*HandshakeMessage, error) {
 		}
 	}
 	if msg.From == "" {
-		return nil, errors.ErrInvalidMessage.FastGenByArgs("missing sender")
+		return nil, errors.ErrInvalidMessage.FastGen("handshake message has no sender for receiver %s", msg.To)
 	}
 
 	handshake := &HandshakeMessage{}
@@ -518,7 +528,7 @@ func decodeHandshakeMessage(msg *proto.Message) (*HandshakeMessage, error) {
 	}
 	// A peer may only open the streams this node knows how to serve.
 	if handshake.StreamType != streamTypeEvent && handshake.StreamType != streamTypeCommand {
-		return nil, errors.ErrInvalidMessage.FastGenByArgs(handshake.StreamType)
+		return nil, errors.ErrInvalidMessage.FastGen("unsupported stream type %s", handshake.StreamType)
 	}
 	return handshake, nil
 }

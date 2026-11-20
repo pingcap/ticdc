@@ -862,7 +862,7 @@ var (
 	)
 
 	ErrInvalidMessage = errors.Normalize(
-		"invalid message: %s",
+		"invalid message",
 		errors.RFCCodeText("CDC:ErrInvalidMessage"),
 	)
 )
