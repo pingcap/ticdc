@@ -18,7 +18,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"net/url"
 	"strings"
 	"time"
 
@@ -40,26 +39,17 @@ type tikvEncryptionHTTPClient struct {
 	httpTimeout time.Duration
 }
 
-func NewTiKVEncryptionHTTPClient(
-	pdClient pd.Client, credential *security.Credential, allowInsecureMeta bool,
-) (TiKVEncryptionClient, error) {
-	hasTLS := credential != nil && credential.CAPath != ""
-	if !hasTLS && !allowInsecureMeta {
-		return nil, errors.ErrEncryptionFailed.
-			GenWithStackByArgs("TLS is required to fetch encryption metadata from TiKV")
-	}
-	if !hasTLS {
-		log.Warn("encryption metadata transport is insecure")
-	}
+func NewTiKVEncryptionHTTPClient(pdClient pd.Client, credential *security.Credential) (TiKVEncryptionClient, error) {
 	httpClient, err := httputil.NewClient(credential)
 	if err != nil {
 		return nil, err
 	}
 
-	httpScheme := "https"
-	if !hasTLS {
-		httpScheme = "http"
+	httpScheme := "http"
+	if credential != nil && credential.IsTLSEnabled() {
+		httpScheme = "https"
 	}
+
 	return &tikvEncryptionHTTPClient{
 		pdClient:    pdClient,
 		httpClient:  httpClient,
@@ -106,10 +96,7 @@ func (c *tikvEncryptionHTTPClient) GetKeyspaceEncryptionMeta(ctx context.Context
 }
 
 func (c *tikvEncryptionHTTPClient) getEncryptionMetaFromStore(ctx context.Context, storeID uint64, statusAddr string, keyspaceID uint32) (*EncryptionMeta, error) {
-	storeURL, err := c.buildStatusURL(statusAddr, keyspaceID)
-	if err != nil {
-		return nil, err
-	}
+	storeURL := c.buildStatusURL(statusAddr, keyspaceID)
 	contentType := ""
 
 	reqCtx, cancel := context.WithTimeout(ctx, c.httpTimeout)
@@ -187,14 +174,12 @@ func (c *tikvEncryptionHTTPClient) getEncryptionMetaFromStore(ctx context.Contex
 	}
 
 	if meta.KeyspaceId != 0 && meta.KeyspaceId != keyspaceID {
-		log.Error("encryption meta keyspace ID mismatch",
+		log.Warn("encryption meta keyspace ID mismatch",
 			zap.Uint64("storeID", storeID),
 			zap.String("statusAddr", statusAddr),
 			zap.Uint32("requestedKeyspaceID", keyspaceID),
 			zap.Uint32("metaKeyspaceID", meta.KeyspaceId),
 			zap.String("url", storeURL))
-		return nil, errors.ErrEncryptionFailed.
-			GenWithStackByArgs("encryption metadata keyspace ID mismatch")
 	}
 
 	masterKeyCiphertextLen := 0
@@ -219,28 +204,11 @@ func (c *tikvEncryptionHTTPClient) getEncryptionMetaFromStore(ctx context.Contex
 	return meta, nil
 }
 
-func (c *tikvEncryptionHTTPClient) buildStatusURL(statusAddr string, keyspaceID uint32) (string, error) {
-	if !strings.Contains(statusAddr, "://") {
-		statusAddr = c.httpScheme + "://" + statusAddr
+func (c *tikvEncryptionHTTPClient) buildStatusURL(statusAddr string, keyspaceID uint32) string {
+	if strings.Contains(statusAddr, "://") {
+		return fmt.Sprintf("%s/encryption/get-meta?keyspace_id=%d", strings.TrimRight(statusAddr, "/"), keyspaceID)
 	}
-	parsed, err := url.Parse(statusAddr)
-	if err != nil || parsed.Host == "" {
-		return "", errors.ErrEncryptionFailed.
-			GenWithStackByArgs("invalid TiKV status address")
-	}
-	if parsed.Scheme != c.httpScheme {
-		return "", errors.ErrEncryptionFailed.
-			GenWithStackByArgs("TiKV encryption metadata endpoint must use HTTPS")
-	}
-	if parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" {
-		return "", errors.ErrEncryptionFailed.
-			GenWithStackByArgs("invalid TiKV status address")
-	}
-	parsed.Path = strings.TrimRight(parsed.Path, "/") + "/encryption/get-meta"
-	query := parsed.Query()
-	query.Set("keyspace_id", fmt.Sprintf("%d", keyspaceID))
-	parsed.RawQuery = query.Encode()
-	return parsed.String(), nil
+	return fmt.Sprintf("%s://%s/encryption/get-meta?keyspace_id=%d", c.httpScheme, statusAddr, keyspaceID)
 }
 
 type encryptionMetaResponse struct {

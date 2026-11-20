@@ -123,7 +123,7 @@ func (d *fakeClosableDecryptor) Close() error {
 	return nil
 }
 
-func TestKMSClientDecryptMasterKeyAWSIgnoresMetadataEndpointAndCachesClient(t *testing.T) {
+func TestKMSClientDecryptMasterKeyAWSUsesResolvedRegionEndpointAndCachesClient(t *testing.T) {
 	t.Parallel()
 
 	const (
@@ -140,7 +140,7 @@ func TestKMSClientDecryptMasterKeyAWSIgnoresMetadataEndpointAndCachesClient(t *t
 	awsFactory := func(ctx context.Context, cfg awsClientConfig) (awsDecryptor, error) {
 		calls++
 		require.Equal(t, region, cfg.Region)
-		require.Empty(t, cfg.Endpoint)
+		require.Equal(t, endpoint, cfg.Endpoint)
 		return decryptor, nil
 	}
 
@@ -159,7 +159,7 @@ func TestKMSClientDecryptMasterKeyAWSIgnoresMetadataEndpointAndCachesClient(t *t
 	require.Equal(t, 1, calls, "expected client to be cached")
 }
 
-func TestKMSClientDecryptMasterKeyGCPIgnoresMetadataEndpointAndCachesClient(t *testing.T) {
+func TestKMSClientDecryptMasterKeyGCPUsesResolvedEndpointAndCachesClient(t *testing.T) {
 	t.Parallel()
 
 	const (
@@ -174,7 +174,7 @@ func TestKMSClientDecryptMasterKeyGCPIgnoresMetadataEndpointAndCachesClient(t *t
 	decryptor := &fakeClosableDecryptor{fakeDecryptor: fakeDecryptor{plaintextResp: plaintext}}
 	gcpFactory := func(ctx context.Context, cfg gcpClientConfig) (gcpDecryptor, error) {
 		calls++
-		require.Empty(t, cfg.Endpoint)
+		require.Equal(t, endpoint, cfg.Endpoint)
 		return decryptor, nil
 	}
 

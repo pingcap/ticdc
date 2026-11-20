@@ -107,11 +107,11 @@ func NewClient(cfg *config.EncryptionConfig, opts ...ClientOption) (KMSClient, e
 	return c, nil
 }
 
-func (c *client) DecryptMasterKey(ctx context.Context, ciphertext []byte, keyID string, vendor string, region string, _ string) ([]byte, error) {
+func (c *client) DecryptMasterKey(ctx context.Context, ciphertext []byte, keyID string, vendor string, region string, endpoint string) ([]byte, error) {
 	normalizedVendor := normalizeVendor(vendor)
 	switch normalizedVendor {
 	case vendorAWS:
-		awsCfg := c.resolveAWS(region)
+		awsCfg := c.resolveAWS(region, endpoint)
 		if awsCfg.Region == "" {
 			log.Warn("aws kms region is empty",
 				zap.String("vendor", vendor),
@@ -142,7 +142,7 @@ func (c *client) DecryptMasterKey(ctx context.Context, ciphertext []byte, keyID 
 		}
 		return plaintext, nil
 	case vendorGCP:
-		gcpCfg := c.resolveGCP()
+		gcpCfg := c.resolveGCP(endpoint)
 		decryptor, err := c.getGCPDecryptor(ctx, gcpCfg)
 		if err != nil {
 			log.Warn("failed to create gcp kms client",
@@ -227,9 +227,10 @@ func (c *client) validateConfig() error {
 	return nil
 }
 
-func (c *client) resolveAWS(metaRegion string) awsClientConfig {
+func (c *client) resolveAWS(metaRegion, metaEndpoint string) awsClientConfig {
 	resolved := awsClientConfig{
-		Region: metaRegion,
+		Region:   metaRegion,
+		Endpoint: metaEndpoint,
 	}
 
 	if c.cfg == nil || c.cfg.KMS == nil || c.cfg.KMS.AWS == nil {
@@ -249,8 +250,10 @@ func (c *client) resolveAWS(metaRegion string) awsClientConfig {
 	return resolved
 }
 
-func (c *client) resolveGCP() gcpClientConfig {
-	resolved := gcpClientConfig{}
+func (c *client) resolveGCP(metaEndpoint string) gcpClientConfig {
+	resolved := gcpClientConfig{
+		Endpoint: metaEndpoint,
+	}
 
 	if c.cfg == nil || c.cfg.KMS == nil || c.cfg.KMS.GCP == nil {
 		return resolved

@@ -19,6 +19,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -735,6 +736,9 @@ func TestRemoveExpiredFilesWithoutPartition(t *testing.T) {
 		"schema1/table2/5/2021-01-02/CDC000002.csv",
 		"schema1/table2/5/2021-01-02/CDC000003.csv",
 		"schema1/table2/5/2021-01-02/" + defaultIndexFileName, // index
+		// Date-like substrings in identifiers must not be used as the retention date.
+		"schema_2019-01-01/table1/5/2021-01-02/CDC000001.csv",
+		"schema1/orders_2019-01-01/5/2021-01-02/CDC000001.csv",
 	}
 	for _, file := range filesNotExpired {
 		err := storage.WriteFile(ctx, file, []byte("test"))
@@ -745,4 +749,18 @@ func TestRemoveExpiredFilesWithoutPartition(t *testing.T) {
 	checkpointTs := oracle.GoTimeToTS(currTime)
 	err = RemoveExpiredFiles(ctx, commonType.ChangeFeedID{}, storage, cfg, checkpointTs)
 	require.NoError(t, err)
+	for _, file := range append(filesWithoutPartition, filesWithPartition...) {
+		exists, err := storage.FileExists(ctx, file)
+		require.NoError(t, err)
+		if strings.Contains(file, "/meta/schema_") {
+			require.True(t, exists, file)
+		} else {
+			require.False(t, exists, file)
+		}
+	}
+	for _, file := range filesNotExpired {
+		exists, err := storage.FileExists(ctx, file)
+		require.NoError(t, err)
+		require.True(t, exists, file)
+	}
 }
