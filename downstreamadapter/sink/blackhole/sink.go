@@ -54,6 +54,10 @@ func (s *Sink) SetWriteGate(_ *writelease.Gate) {
 }
 
 func (s *Sink) AddDMLEvent(event *commonEvent.DMLEvent) {
+	// NOTE: don't change the log, integration test `lossy_ddl` and `log_redaction` depend on it.
+	// ref: https://github.com/pingcap/ticdc/blob/da834db76e0662ff15ef12645d1f37bfa6506d83/tests/integration_tests/lossy_ddl/run.sh#L23
+	// Use zap.Stringer to call String() method which applies log redaction
+	log.Debug("BlackHoleSink: WriteEvents", zap.Stringer("dml", event))
 	s.eventCh.Push(event)
 }
 
@@ -65,6 +69,9 @@ func (s *Sink) WriteBlockEvent(event commonEvent.BlockEvent) error {
 	switch event.GetType() {
 	case commonEvent.TypeDDLEvent:
 		e := event.(*commonEvent.DDLEvent)
+		// NOTE: don't change the log, integration test `lossy_ddl` depends on it.
+		// ref: https://github.com/pingcap/ticdc/blob/da834db76e0662ff15ef12645d1f37bfa6506d83/tests/integration_tests/lossy_ddl/run.sh#L17
+		log.Debug("BlackHoleSink: DDL Event", zap.String("ddl", e.GetDDLQuery()))
 		err := s.statistics.RecordDDLExecution(e.GetDDLType().String(), func() error {
 			return nil
 		})
