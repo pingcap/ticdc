@@ -2542,7 +2542,7 @@ func TestApplyDDLJobs(t *testing.T) {
 					t.Fatalf("tableTriggerDDLHistory not equal")
 				}
 				for _, testCase := range tt.physicalTableQueryTestCases {
-					allPhysicalTables, err := pStorage.getAllPhysicalTables(testCase.snapTs, testCase.tableFilter)
+					allPhysicalTables, err := pStorage.getAllPhysicalTables(testCase.snapTs, testCase.tableFilter, nil)
 					require.Nil(t, err)
 					sort.Slice(allPhysicalTables, func(i, j int) bool {
 						// SchemaID and TableID should be enough?
@@ -2718,7 +2718,7 @@ func TestApplyDDLJobs(t *testing.T) {
 					return true
 				}
 				for _, testCase := range tt.fetchTableDDLEventsTestCase {
-					events, err := pStorage.fetchTableDDLEvents(common.NewDispatcherID(), testCase.tableID, testCase.tableFilter, testCase.startTs, testCase.endTs)
+					events, err := pStorage.fetchTableDDLEvents(common.NewDispatcherID(), testCase.tableID, testCase.tableFilter, nil, testCase.startTs, testCase.endTs)
 					require.Nil(t, err)
 					if !checkDDLEvents(testCase.result, events) {
 						log.Warn("fetchTableDDLEvents result wrong",
@@ -2733,7 +2733,7 @@ func TestApplyDDLJobs(t *testing.T) {
 					}
 				}
 				for _, testCase := range tt.fetchTableTriggerDDLEvents {
-					events, err := pStorage.fetchTableTriggerDDLEvents(testCase.tableFilter, testCase.startTs, testCase.limit)
+					events, err := pStorage.fetchTableTriggerDDLEvents(testCase.tableFilter, nil, testCase.startTs, testCase.limit)
 					require.Nil(t, err)
 					if !checkDDLEvents(testCase.result, events) {
 						log.Warn("fetchTableTriggerDDLEvents result wrong",
@@ -4712,7 +4712,7 @@ func TestExchangeTableInfo(t *testing.T) {
 				{200, 100, partitionSchema, "pt", true},
 				{101, 101, "normal_db", "nt", false},
 			} {
-				ddl, ok, err := buildTableDDLEvent(raw, nil, tc.physical)
+				ddl, ok, err := buildTableDDLEvent(raw, nil, nil, tc.physical)
 				require.NoError(t, err)
 				require.True(t, ok)
 				require.Equal(t, &commonEvent.TableStateChange{
@@ -4733,7 +4733,7 @@ func TestExchangeTableInfo(t *testing.T) {
 
 			// The table trigger event has no physical table, so it keeps the
 			// event-level table info and carries no state change.
-			trigger, ok, err := buildDDLEvent(raw, nil, 0)
+			trigger, ok, err := buildDDLEvent(raw, nil, nil, 0)
 			require.NoError(t, err)
 			require.True(t, ok)
 			require.Nil(t, trigger.TableStateChange)
@@ -4821,7 +4821,7 @@ func TestBuildTableDDLEventTableStateChange(t *testing.T) {
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			ddl, ok, err := buildTableDDLEvent(tc.rawEvent, nil, tc.physicalTableID)
+			ddl, ok, err := buildTableDDLEvent(tc.rawEvent, nil, nil, tc.physicalTableID)
 			require.NoError(t, err)
 			require.True(t, ok)
 			require.Equal(t, &commonEvent.TableStateChange{
@@ -5113,7 +5113,7 @@ func TestBuildSchemaAndViewDDLEvents(t *testing.T) {
 			newEligibleTableInfoForTest(200, "t"), view,
 		}, 1000)
 		require.NoError(t, storage.handleDDLJob(job))
-		events, err := storage.fetchTableTriggerDDLEvents(nil, 999, 10)
+		events, err := storage.fetchTableTriggerDDLEvents(nil, nil, 999, 10)
 		require.NoError(t, err)
 		require.Len(t, events, 1)
 		require.Len(t, events[0].MultipleTableInfos, 2)
@@ -5165,7 +5165,7 @@ func TestBuildSchemaAndViewDDLEvents(t *testing.T) {
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			ddlEvent, ok, err := buildDDLEvent(&tc.raw, nil, 0)
+			ddlEvent, ok, err := buildDDLEvent(&tc.raw, nil, nil, 0)
 			require.NoError(t, err)
 			require.True(t, ok)
 			require.NotNil(t, ddlEvent.BlockedTables)
@@ -5185,7 +5185,7 @@ func TestBuildSchemaAndViewDDLEvents(t *testing.T) {
 			}
 
 			_, ok, err = buildDDLEvent(
-				&tc.raw, buildTableFilterByNameForTest("unrelated", "table"), 0)
+				&tc.raw, buildTableFilterByNameForTest("unrelated", "table"), nil, 0)
 			require.NoError(t, err)
 			require.False(t, ok)
 		})
@@ -5211,7 +5211,7 @@ func TestAddIndexPersistsIndexIDsInDDLEvent(t *testing.T) {
 	require.NoError(t, storage.handleDDLJob(job))
 
 	events, err := storage.fetchTableDDLEvents(
-		common.NewDispatcherID(), job.TableID, nil,
+		common.NewDispatcherID(), job.TableID, nil, nil,
 		job.BinlogInfo.FinishedTS-1, job.BinlogInfo.FinishedTS)
 	require.NoError(t, err)
 	require.Len(t, events, 1)
@@ -5268,7 +5268,7 @@ func TestHandleDDLJobSkipRules(t *testing.T) {
 
 func assertPhysicalTableIDs(t *testing.T, storage *persistentStorage, ts uint64, expected []int64) {
 	t.Helper()
-	tables, err := storage.getAllPhysicalTables(ts, nil)
+	tables, err := storage.getAllPhysicalTables(ts, nil, nil)
 	require.NoError(t, err)
 	actual := make([]int64, 0, len(tables))
 	for _, table := range tables {

@@ -32,6 +32,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/filter"
+	"github.com/pingcap/ticdc/pkg/ordering"
 	"github.com/pingcap/ticdc/pkg/txnutil/gc"
 	"github.com/pingcap/tidb/pkg/kv"
 	"github.com/pingcap/tidb/pkg/meta/model"
@@ -285,7 +286,7 @@ func (p *persistentStorage) close() error {
 
 // getAllPhysicalTables returns all physical tables in the snapshot
 // caller must ensure current resolve ts is larger than snapTs
-func (p *persistentStorage) getAllPhysicalTables(snapTs uint64, tableFilter filter.Filter) ([]commonEvent.Table, error) {
+func (p *persistentStorage) getAllPhysicalTables(snapTs uint64, tableFilter filter.Filter, txnOrderMatcher *ordering.TxnOrderMatcher) ([]commonEvent.Table, error) {
 	storageSnap := p.db.NewSnapshot()
 	defer storageSnap.Close()
 
@@ -306,7 +307,7 @@ func (p *persistentStorage) getAllPhysicalTables(snapTs uint64, tableFilter filt
 		log.Debug("getAllPhysicalTables finish",
 			zap.Any("duration(s)", time.Since(start).Seconds()))
 	}()
-	return loadAllPhysicalTablesAtTs(storageSnap, gcTs, snapTs, tableFilter)
+	return loadAllPhysicalTablesAtTs(storageSnap, gcTs, snapTs, tableFilter, txnOrderMatcher)
 }
 
 // only return when table info is initialized
@@ -424,7 +425,7 @@ func (p *persistentStorage) getMaxEventCommitTs(tableID int64, ts uint64) uint64
 
 // TODO: not all ddl in p.tablesDDLHistory should be sent to the dispatcher, verify dispatcher will set the right range
 // fetch table ddl events in the range (start, end]
-func (p *persistentStorage) fetchTableDDLEvents(dispatcherID common.DispatcherID, tableID int64, tableFilter filter.Filter, start, end uint64) ([]commonEvent.DDLEvent, error) {
+func (p *persistentStorage) fetchTableDDLEvents(dispatcherID common.DispatcherID, tableID int64, tableFilter filter.Filter, txnOrderMatcher *ordering.TxnOrderMatcher, start, end uint64) ([]commonEvent.DDLEvent, error) {
 	// TODO: check a dispatcher won't fetch the ddl events that create it(create table/rename table)
 	p.mu.RLock()
 	// fast check
@@ -462,7 +463,7 @@ func (p *persistentStorage) fetchTableDDLEvents(dispatcherID common.DispatcherID
 	events := make([]commonEvent.DDLEvent, 0, len(allTargetTs))
 	for _, ts := range allTargetTs {
 		rawEvent := readPersistedDDLEvent(storageSnap, ts)
-		ddlEvent, ok, err := buildTableDDLEvent(&rawEvent, tableFilter, tableID)
+		ddlEvent, ok, err := buildTableDDLEvent(&rawEvent, tableFilter, txnOrderMatcher, tableID)
 		if err != nil {
 			return nil, errors.Trace(err)
 		}
@@ -488,7 +489,7 @@ func (p *persistentStorage) fetchTableDDLEvents(dispatcherID common.DispatcherID
 	return events, nil
 }
 
-func (p *persistentStorage) fetchTableTriggerDDLEvents(tableFilter filter.Filter, start uint64, limit int) ([]commonEvent.DDLEvent, error) {
+func (p *persistentStorage) fetchTableTriggerDDLEvents(tableFilter filter.Filter, txnOrderMatcher *ordering.TxnOrderMatcher, start uint64, limit int) ([]commonEvent.DDLEvent, error) {
 	// fast check
 	p.mu.RLock()
 	if len(p.tableTriggerDDLHistory) == 0 || start >= p.tableTriggerDDLHistory[len(p.tableTriggerDDLHistory)-1] {
@@ -533,7 +534,7 @@ func (p *persistentStorage) fetchTableTriggerDDLEvents(tableFilter filter.Filter
 		for _, ts := range allTargetTs {
 			rawEvent := readPersistedDDLEvent(storageSnap, ts)
 			// the tableID of buildDDLEvent is not used in this function, set it to 0
-			ddlEvent, ok, err := buildDDLEvent(&rawEvent, tableFilter, common.DDLSpanTableID)
+			ddlEvent, ok, err := buildDDLEvent(&rawEvent, tableFilter, txnOrderMatcher, common.DDLSpanTableID)
 			if err != nil {
 				return nil, errors.Trace(err)
 			}
@@ -938,8 +939,84 @@ func getDDLHandler(rawEvent *PersistedDDLEvent) *persistStorageDDLHandler {
 
 // NOTE: tableID identifies the dispatcher for exchange partition, rename tables,
 // and eligibility-changing DDLs. Table trigger callers use common.DDLSpanTableID.
-func buildDDLEvent(rawEvent *PersistedDDLEvent, tableFilter filter.Filter, tableID int64) (commonEvent.DDLEvent, bool, error) {
-	return getDDLHandler(rawEvent).buildDDLEventFunc(rawEvent, tableFilter, tableID)
+func buildDDLEvent(rawEvent *PersistedDDLEvent, tableFilter filter.Filter, txnOrderMatcher *ordering.TxnOrderMatcher, tableID int64) (commonEvent.DDLEvent, bool, error) {
+	ddl, ok, err := getDDLHandler(rawEvent).buildDDLEventFunc(rawEvent, tableFilter, tableID)
+	if err == nil && ok {
+		if validationErr := applyTxnOrderDDLPolicy(rawEvent, tableFilter, txnOrderMatcher, ddl.NeedAddedTables); validationErr != nil {
+			// Deliver permanent validation failures through the dispatcher error path.
+			ddl.Err = errors.WrapChangefeedUnretryableErr(validationErr).Error()
+		}
+	}
+	return ddl, ok, err
+}
+
+// applyTxnOrderDDLPolicy validates post-DDL schemas and keeps ordered additions unsplit.
+func applyTxnOrderDDLPolicy(rawEvent *PersistedDDLEvent, tableFilter filter.Filter, txnOrderMatcher *ordering.TxnOrderMatcher, addedTables []commonEvent.Table) error {
+	if txnOrderMatcher == nil {
+		return nil
+	}
+	exchangePartition := model.ActionType(rawEvent.Type) == model.ActionExchangeTablePartition
+	var orderedIDs map[int64]struct{}
+	if len(addedTables) != 0 && !exchangePartition {
+		orderedIDs = make(map[int64]struct{}, len(addedTables))
+	}
+	verify := func(schema string, info *model.TableInfo) error {
+		if info == nil || !txnOrderMatcher.Match(schema, info.Name.O) {
+			return nil
+		}
+		if info.GetPartitionInfo() == nil {
+			if orderedIDs != nil {
+				orderedIDs[info.ID] = struct{}{}
+			}
+			return nil
+		}
+		tableInfo := common.WrapTableInfo(schema, info)
+		if tableFilter != nil && (tableFilter.ShouldIgnoreTable(schema, info.Name.O) || !tableFilter.IsEligibleTable(tableInfo)) {
+			return nil
+		}
+		return verifyTxnOrderTable(txnOrderMatcher, tableInfo)
+	}
+	schema := rawEvent.SchemaName
+	if exchangePartition {
+		schema = rawEvent.ExtraSchemaName
+	}
+	if err := verify(schema, rawEvent.TableInfo); err != nil {
+		return err
+	}
+	for i, info := range rawEvent.MultipleTableInfos {
+		// Intermediate rename steps do not describe a table in the final schema.
+		if info != nil && info.ID == InvalidTableID {
+			continue
+		}
+		schema := rawEvent.SchemaName
+		if len(rawEvent.SchemaNames) > i {
+			schema = rawEvent.SchemaNames[i]
+		}
+		if err := verify(schema, info); err != nil {
+			return err
+		}
+	}
+	for i := range addedTables {
+		added := &addedTables[i]
+		if exchangePartition {
+			// EXCHANGE PARTITION can assign the normal table a former partition ID.
+			info, _ := extractTableInfoFuncForExchangeTablePartition(rawEvent, added.TableID)
+			if info != nil && txnOrderMatcher.Match(info.GetSchemaName(), info.GetTableName()) {
+				added.Splitable = false
+			}
+		} else if _, ordered := orderedIDs[added.TableID]; ordered {
+			added.Splitable = false
+		}
+	}
+	return nil
+}
+
+func verifyTxnOrderTable(matcher *ordering.TxnOrderMatcher, tableInfo *common.TableInfo) error {
+	if tableInfo.IsPartitionTable() && matcher.Match(tableInfo.GetSchemaName(), tableInfo.GetTableName()) {
+		return errors.ErrInvalidReplicaConfig.GenWithStackByArgs(
+			"sink.mysql-config.txn-order-tables does not support partitioned table " + tableInfo.TableName.String())
+	}
+	return nil
 }
 
 // buildTableDDLEvent builds the DDL event fetched for one physical table
@@ -951,13 +1028,12 @@ func buildDDLEvent(rawEvent *PersistedDDLEvent, tableFilter filter.Filter, table
 // that info as DDLEvent.TableInfo, so the event collector can replace the
 // dispatcher's cached table info with the event's own table info without
 // knowing the DDL type.
-func buildTableDDLEvent(rawEvent *PersistedDDLEvent, tableFilter filter.Filter, tableID int64) (commonEvent.DDLEvent, bool, error) {
-	handler := getDDLHandler(rawEvent)
-	ddlEvent, ok, err := handler.buildDDLEventFunc(rawEvent, tableFilter, tableID)
+func buildTableDDLEvent(rawEvent *PersistedDDLEvent, tableFilter filter.Filter, txnOrderMatcher *ordering.TxnOrderMatcher, tableID int64) (commonEvent.DDLEvent, bool, error) {
+	ddlEvent, ok, err := buildDDLEvent(rawEvent, tableFilter, txnOrderMatcher, tableID)
 	if err != nil || !ok {
 		return ddlEvent, ok, err
 	}
-	tableInfo, _ := handler.extractTableInfoFunc(rawEvent, tableID)
+	tableInfo, _ := getDDLHandler(rawEvent).extractTableInfoFunc(rawEvent, tableID)
 	change := &commonEvent.TableStateChange{
 		PhysicalTableID: tableID,
 		Kind:            commonEvent.TableStateUnchanged,

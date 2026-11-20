@@ -31,6 +31,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/filter"
 	"github.com/pingcap/ticdc/pkg/keyspace"
 	"github.com/pingcap/ticdc/pkg/metrics"
+	"github.com/pingcap/ticdc/pkg/ordering"
 	"github.com/pingcap/ticdc/pkg/pdutil"
 	"github.com/pingcap/ticdc/pkg/txnutil/gc"
 	"github.com/tikv/client-go/v2/oracle"
@@ -41,7 +42,7 @@ import (
 type SchemaStore interface {
 	common.SubModule
 
-	GetAllPhysicalTables(ctx context.Context, keyspaceMeta common.KeyspaceMeta, snapTs uint64, filter filter.Filter) ([]commonEvent.Table, error)
+	GetAllPhysicalTables(ctx context.Context, keyspaceMeta common.KeyspaceMeta, snapTs uint64, filter filter.Filter, txnOrderMatcher *ordering.TxnOrderMatcher) ([]commonEvent.Table, error)
 
 	RegisterTable(ctx context.Context, keyspaceMeta common.KeyspaceMeta, tableID int64, startTs uint64) error
 
@@ -53,15 +54,19 @@ type SchemaStore interface {
 	// info cache.
 	GetTableInfo(ctx context.Context, keyspaceMeta common.KeyspaceMeta, tableID int64, ts uint64) (*common.TableInfo, error)
 
+	// GetTableInfoAtTs supports unregistered tables and returns a retryable error
+	// while the requested timestamp is unresolved.
+	GetTableInfoAtTs(ctx context.Context, keyspaceMeta common.KeyspaceMeta, tableID int64, ts uint64) (*common.TableInfo, error)
+
 	// TODO: how to respect tableFilter
 	GetTableDDLEventState(keyspaceMeta common.KeyspaceMeta, tableID int64) (DDLEventState, error)
 
 	// FetchTableDDLEvents returns the next ddl events which finishedTs are within the range (start, end]
 	// The caller must ensure end <= current resolvedTs
 	// TODO: add a parameter limit
-	FetchTableDDLEvents(keyspaceMeta common.KeyspaceMeta, dispatcherID common.DispatcherID, tableID int64, tableFilter filter.Filter, start, end uint64) ([]commonEvent.DDLEvent, error)
+	FetchTableDDLEvents(keyspaceMeta common.KeyspaceMeta, dispatcherID common.DispatcherID, tableID int64, tableFilter filter.Filter, txnOrderMatcher *ordering.TxnOrderMatcher, start, end uint64) ([]commonEvent.DDLEvent, error)
 
-	FetchTableTriggerDDLEvents(keyspaceMeta common.KeyspaceMeta, dispatcherID common.DispatcherID, tableFilter filter.Filter, start uint64, limit int) ([]commonEvent.DDLEvent, uint64, error)
+	FetchTableTriggerDDLEvents(keyspaceMeta common.KeyspaceMeta, dispatcherID common.DispatcherID, tableFilter filter.Filter, txnOrderMatcher *ordering.TxnOrderMatcher, start uint64, limit int) ([]commonEvent.DDLEvent, uint64, error)
 
 	// RegisterKeyspace register a keyspace to fetch table ddl
 	RegisterKeyspace(ctx context.Context, keyspaceMeta common.KeyspaceMeta) error
@@ -360,7 +365,7 @@ func closeSchemaStoreGCKeeper(keyspaceID uint32, gcKeeper *schemaStoreGCKeeper) 
 	return err
 }
 
-func (s *schemaStore) GetAllPhysicalTables(ctx context.Context, keyspaceMeta common.KeyspaceMeta, snapTs uint64, filter filter.Filter) ([]commonEvent.Table, error) {
+func (s *schemaStore) GetAllPhysicalTables(ctx context.Context, keyspaceMeta common.KeyspaceMeta, snapTs uint64, filter filter.Filter, txnOrderMatcher *ordering.TxnOrderMatcher) ([]commonEvent.Table, error) {
 	store, err := s.getKeyspaceSchemaStore(ctx, keyspaceMeta)
 	if err != nil {
 		return nil, err
@@ -369,7 +374,7 @@ func (s *schemaStore) GetAllPhysicalTables(ctx context.Context, keyspaceMeta com
 	if err := store.waitResolvedTs(ctx, 0, snapTs, 10*time.Second); err != nil {
 		return nil, err
 	}
-	return store.dataStorage.getAllPhysicalTables(snapTs, filter)
+	return store.dataStorage.getAllPhysicalTables(snapTs, filter, txnOrderMatcher)
 }
 
 func (s *schemaStore) RegisterTable(ctx context.Context, keyspaceMeta common.KeyspaceMeta, tableID int64, startTs uint64) error {
@@ -416,6 +421,21 @@ func (s *schemaStore) GetTableInfo(ctx context.Context, keyspaceMeta common.Keys
 	return store.dataStorage.getTableInfo(tableID, ts)
 }
 
+func (s *schemaStore) GetTableInfoAtTs(ctx context.Context, keyspaceMeta common.KeyspaceMeta, tableID int64, ts uint64) (*common.TableInfo, error) {
+	store, err := s.getKeyspaceSchemaStore(ctx, keyspaceMeta)
+	if err != nil {
+		return nil, err
+	}
+
+	// Bootstrap runs on the maintainer event loop. Let it retry rather than
+	// block the loop while the local schema store catches up to a span.
+	if resolvedTs := store.resolvedTs.Load(); resolvedTs < ts {
+		return nil, errors.ErrChangefeedRetryable.GenWithStack(
+			"schema store has not resolved table %d at checkpoint %d (resolved %d)", tableID, ts, resolvedTs)
+	}
+	return store.dataStorage.getTableInfoAtTs(tableID, ts)
+}
+
 func (s *schemaStore) GetTableDDLEventState(keyspaceMeta common.KeyspaceMeta, tableID int64) (DDLEventState, error) {
 	store, err := s.getKeyspaceSchemaStore(context.Background(), keyspaceMeta)
 	if err != nil {
@@ -432,7 +452,7 @@ func (s *schemaStore) GetTableDDLEventState(keyspaceMeta common.KeyspaceMeta, ta
 
 // FetchTableDDLEvents returns the ddl events which finishedTs are within the range (start, end]
 func (s *schemaStore) FetchTableDDLEvents(
-	keyspaceMeta common.KeyspaceMeta, dispatcherID common.DispatcherID, tableID int64, tableFilter filter.Filter, start, end uint64,
+	keyspaceMeta common.KeyspaceMeta, dispatcherID common.DispatcherID, tableID int64, tableFilter filter.Filter, txnOrderMatcher *ordering.TxnOrderMatcher, start, end uint64,
 ) ([]commonEvent.DDLEvent, error) {
 	store, err := s.getKeyspaceSchemaStore(context.Background(), keyspaceMeta)
 	if err != nil {
@@ -450,7 +470,7 @@ func (s *schemaStore) FetchTableDDLEvents(
 			zap.Uint64("currentResolvedTs", currentResolvedTs))
 		return nil, errors.New(fmt.Sprintf("end %d should not be greater than current resolved ts %d", end, currentResolvedTs))
 	}
-	events, err := store.dataStorage.fetchTableDDLEvents(dispatcherID, tableID, tableFilter, start, end)
+	events, err := store.dataStorage.fetchTableDDLEvents(dispatcherID, tableID, tableFilter, txnOrderMatcher, start, end)
 	if err != nil {
 		return nil, err
 	}
@@ -458,7 +478,7 @@ func (s *schemaStore) FetchTableDDLEvents(
 }
 
 // FetchTableTriggerDDLEvents returns the next ddl events which finishedTs are within the range (start, end]
-func (s *schemaStore) FetchTableTriggerDDLEvents(keyspaceMeta common.KeyspaceMeta, dispatcherID common.DispatcherID, tableFilter filter.Filter, start uint64, limit int) ([]commonEvent.DDLEvent, uint64, error) {
+func (s *schemaStore) FetchTableTriggerDDLEvents(keyspaceMeta common.KeyspaceMeta, dispatcherID common.DispatcherID, tableFilter filter.Filter, txnOrderMatcher *ordering.TxnOrderMatcher, start uint64, limit int) ([]commonEvent.DDLEvent, uint64, error) {
 	store, err := s.getKeyspaceSchemaStore(context.Background(), keyspaceMeta)
 	if err != nil {
 		return nil, 0, err
@@ -470,7 +490,7 @@ func (s *schemaStore) FetchTableTriggerDDLEvents(keyspaceMeta common.KeyspaceMet
 		return nil, currentResolvedTs, nil
 	}
 
-	events, err := store.dataStorage.fetchTableTriggerDDLEvents(tableFilter, start, limit)
+	events, err := store.dataStorage.fetchTableTriggerDDLEvents(tableFilter, txnOrderMatcher, start, limit)
 	if err != nil {
 		return nil, 0, err
 	}

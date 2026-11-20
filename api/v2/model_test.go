@@ -33,6 +33,27 @@ func TestSinkConfigDateSeparator(t *testing.T) {
 	require.ErrorContains(t, err, "CDC:ErrStorageSinkInvalidConfig")
 }
 
+func TestMySQLTxnOrderTablesUpdate(t *testing.T) {
+	storedRules := []string{"app.orders"}
+	for _, rules := range [][]string{nil, {}, {"app.ledger"}} {
+		cfg := &ReplicaConfig{Sink: &SinkConfig{MySQLConfig: &MySQLConfig{TxnOrderTables: rules}}}
+		converted := ToAPIReplicaConfig(cfg.ToInternalReplicaConfig())
+		require.Equal(t, rules, converted.Sink.MySQLConfig.TxnOrderTables)
+		info, err := (&ChangeFeedInfo{Config: converted}).Clone()
+		require.NoError(t, err)
+		require.Equal(t, rules, info.Config.Sink.MySQLConfig.TxnOrderTables)
+		body, err := json.Marshal(info.Config)
+		require.NoError(t, err)
+		stored := &ReplicaConfig{Sink: &SinkConfig{MySQLConfig: &MySQLConfig{TxnOrderTables: storedRules}}}
+		require.NoError(t, json.Unmarshal(body, stored))
+		want := rules
+		if rules == nil {
+			want = storedRules
+		}
+		require.Equal(t, want, stored.Sink.MySQLConfig.TxnOrderTables)
+	}
+}
+
 func TestChangeFeedInfoCloneWithMaskedSensitiveData(t *testing.T) {
 	info := &ChangeFeedInfo{
 		ID:      "test",
@@ -320,6 +341,7 @@ func TestReplicaConfigConversionMySQLAsyncDDLTimeout(t *testing.T) {
 		Sink: &SinkConfig{
 			MySQLConfig: &MySQLConfig{
 				AsyncDDLTimeout: util.AddressOf("45m"),
+				TxnOrderTables:  []string{"app.orders", "app.ledger_*"},
 			},
 		},
 	}
@@ -327,8 +349,10 @@ func TestReplicaConfigConversionMySQLAsyncDDLTimeout(t *testing.T) {
 	internalCfg := apiCfg.ToInternalReplicaConfig()
 	require.NotNil(t, internalCfg.Sink.MySQLConfig)
 	require.Equal(t, "45m", util.GetOrZero(internalCfg.Sink.MySQLConfig.AsyncDDLTimeout))
+	require.Equal(t, apiCfg.Sink.MySQLConfig.TxnOrderTables, internalCfg.Sink.MySQLConfig.TxnOrderTables)
 
 	apiCfgBack := ToAPIReplicaConfig(internalCfg)
 	require.NotNil(t, apiCfgBack.Sink.MySQLConfig)
 	require.Equal(t, "45m", util.GetOrZero(apiCfgBack.Sink.MySQLConfig.AsyncDDLTimeout))
+	require.Equal(t, apiCfg.Sink.MySQLConfig.TxnOrderTables, apiCfgBack.Sink.MySQLConfig.TxnOrderTables)
 }

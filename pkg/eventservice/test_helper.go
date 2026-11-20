@@ -21,7 +21,9 @@ import (
 	"github.com/pingcap/ticdc/logservice/schemastore"
 	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/filter"
+	"github.com/pingcap/ticdc/pkg/ordering"
 	"github.com/pingcap/tidb/pkg/kv"
 )
 
@@ -120,7 +122,26 @@ func (m *mockSchemaStore) GetTableInfo(_ context.Context, _ common.KeyspaceMeta,
 	return nil, nil
 }
 
-func (m *mockSchemaStore) GetAllPhysicalTables(_ context.Context, _ common.KeyspaceMeta, _ uint64, _ filter.Filter) ([]commonEvent.Table, error) {
+func (m *mockSchemaStore) GetTableInfoAtTs(_ context.Context, _ common.KeyspaceMeta, tableID int64, ts uint64) (*common.TableInfo, error) {
+	if m.getTableInfoError != nil {
+		return nil, m.getTableInfoError
+	}
+	if info, ok := m.TableInfo[tableID]; ok && info.deleteVersion <= ts {
+		return nil, &schemastore.TableDeletedError{}
+	}
+	ddls := m.DDLEvents[tableID]
+	end := sort.Search(len(ddls), func(i int) bool {
+		return ddls[i].FinishedTs > ts
+	})
+	for i := end - 1; i >= 0; i-- {
+		if info := ddls[i].TableInfo; info != nil {
+			return info, nil
+		}
+	}
+	return nil, errors.ErrSchemaStorageTableMiss.GenWithStackByArgs(tableID)
+}
+
+func (m *mockSchemaStore) GetAllPhysicalTables(_ context.Context, _ common.KeyspaceMeta, _ uint64, _ filter.Filter, _ *ordering.TxnOrderMatcher) ([]commonEvent.Table, error) {
 	return m.Tables, nil
 }
 
@@ -148,7 +169,7 @@ func (m *mockSchemaStore) UnregisterTable(_ common.KeyspaceMeta, _ int64) error 
 }
 
 // GetNextDDLEvents returns the next ddl event which finishedTs is within the range (start, end]
-func (m *mockSchemaStore) FetchTableDDLEvents(keyspaceMeta common.KeyspaceMeta, dispatcherID common.DispatcherID, tableID int64, tableFilter filter.Filter, start, end uint64) ([]commonEvent.DDLEvent, error) {
+func (m *mockSchemaStore) FetchTableDDLEvents(_ common.KeyspaceMeta, _ common.DispatcherID, tableID int64, _ filter.Filter, _ *ordering.TxnOrderMatcher, start, end uint64) ([]commonEvent.DDLEvent, error) {
 	events := m.DDLEvents[tableID]
 	if len(events) == 0 {
 		return nil, nil
@@ -165,11 +186,11 @@ func (m *mockSchemaStore) FetchTableDDLEvents(keyspaceMeta common.KeyspaceMeta, 
 	return events[l:r], nil
 }
 
-func (m *mockSchemaStore) FetchTableTriggerDDLEvents(keyspaceMeta common.KeyspaceMeta, dispatcherID common.DispatcherID, tableFilter filter.Filter, start uint64, limit int) ([]commonEvent.DDLEvent, uint64, error) {
+func (m *mockSchemaStore) FetchTableTriggerDDLEvents(keyspaceMeta common.KeyspaceMeta, dispatcherID common.DispatcherID, tableFilter filter.Filter, txnOrderMatcher *ordering.TxnOrderMatcher, start uint64, limit int) ([]commonEvent.DDLEvent, uint64, error) {
 	if m.tableTriggerResolvedTs <= start {
 		return nil, m.tableTriggerResolvedTs, nil
 	}
-	events, err := m.FetchTableDDLEvents(keyspaceMeta, dispatcherID, common.DDLSpanTableID, tableFilter, start, m.tableTriggerResolvedTs)
+	events, err := m.FetchTableDDLEvents(keyspaceMeta, dispatcherID, common.DDLSpanTableID, tableFilter, txnOrderMatcher, start, m.tableTriggerResolvedTs)
 	if err != nil {
 		return nil, 0, err
 	}

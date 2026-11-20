@@ -29,6 +29,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/filter"
 	"github.com/pingcap/ticdc/pkg/integrity"
 	"github.com/pingcap/ticdc/pkg/metrics"
+	"github.com/pingcap/ticdc/pkg/ordering"
 	"github.com/pingcap/tidb/pkg/util/chunk"
 	"go.uber.org/zap"
 )
@@ -42,7 +43,7 @@ type eventGetter interface {
 // schemaGetter is the interface for getting schema info and ddl events
 // The implementation of schemaGetter is schemastore.SchemaStore
 type schemaGetter interface {
-	FetchTableDDLEvents(keyspace common.KeyspaceMeta, dispatcherID common.DispatcherID, tableID int64, filter filter.Filter, startTs, endTs uint64) ([]event.DDLEvent, error)
+	FetchTableDDLEvents(keyspace common.KeyspaceMeta, dispatcherID common.DispatcherID, tableID int64, filter filter.Filter, txnOrderMatcher *ordering.TxnOrderMatcher, startTs, endTs uint64) ([]event.DDLEvent, error)
 	GetTableInfo(ctx context.Context, keyspace common.KeyspaceMeta, tableID int64, ts uint64) (*common.TableInfo, error)
 }
 
@@ -164,6 +165,7 @@ func (s *eventScanner) scan(
 		dispatcherStat.info.IsOutputRawChangeEvent(),
 		s.mode,
 		dispatcherStat.info.EnableIgnoreUpdateOnlyColumns())
+	scanCtx.processor.txnOrderMatcher = dispatcherStat.txnOrderMatcher
 	scanCtx.processor.ctx = ctx
 	scanCtx.processor.dispatcherStat = dispatcherStat
 	checkpoint, err := dispatcherStat.snapshotOriginalScan()
@@ -240,6 +242,7 @@ func (s *eventScanner) fetchDDLEvents(stat *dispatcherStat, dataRange common.Dat
 		dispatcherID,
 		dataRange.Span.TableID,
 		stat.filter,
+		stat.txnOrderMatcher,
 		dataRange.CommitTsStart,
 		dataRange.CommitTsEnd,
 	)
@@ -251,9 +254,25 @@ func (s *eventScanner) fetchDDLEvents(stat *dispatcherStat, dataRange common.Dat
 
 	result := make([]event.Event, 0, len(ddlEvents))
 	for _, item := range ddlEvents {
+		// A rename can select a table that was previously allowed to have split spans.
+		if stat.isSplitSpan && item.Err == "" && item.TableStateChange != nil &&
+			item.TableStateChange.Kind == event.TableStateUpdated && matchesTxnOrder(stat.txnOrderMatcher, stat.filter, item.TableInfo) &&
+			(stat.filter == nil || stat.filter.IsEligibleTable(item.TableInfo)) {
+			return nil, txnOrderSplitSpanError(item.TableInfo)
+		}
 		result = append(result, &item)
 	}
 	return result, nil
+}
+
+func matchesTxnOrder(matcher *ordering.TxnOrderMatcher, tableFilter filter.Filter, info *common.TableInfo) bool {
+	return matcher != nil && info != nil && matcher.Match(info.GetSchemaName(), info.GetTableName()) &&
+		(tableFilter == nil || !tableFilter.ShouldIgnoreTable(info.GetSchemaName(), info.GetTableName()))
+}
+
+func txnOrderSplitSpanError(info *common.TableInfo) error {
+	return cerrors.ErrInvalidReplicaConfig.GenWithStackByArgs(
+		"sink.mysql-config.txn-order-tables does not support split spans for table " + info.TableName.String())
 }
 
 // closeIterator closes the event iterator and records metrics.
@@ -847,6 +866,7 @@ type dmlProcessor struct {
 	schemaGetter schemaGetter
 
 	filter                   filter.Filter
+	txnOrderMatcher          *ordering.TxnOrderMatcher
 	filterContext            filter.DMLFilterContext
 	dispatcherStat           *dispatcherStat
 	spillDir                 string
@@ -911,6 +931,16 @@ func (p *dmlProcessor) startTxn(
 	commitTs uint64,
 	shouldSplitTxn bool,
 ) error {
+	if matchesTxnOrder(p.txnOrderMatcher, p.filter, tableInfo) {
+		if tableInfo.IsPartitionTable() {
+			return cerrors.ErrInvalidReplicaConfig.GenWithStackByArgs(
+				"sink.mysql-config.txn-order-tables does not support partitioned table " + tableInfo.TableName.String())
+		}
+		if p.dispatcherStat != nil && p.dispatcherStat.isSplitSpan {
+			return txnOrderSplitSpanError(tableInfo)
+		}
+		shouldSplitTxn = false
+	}
 	if p.currentTxn != nil {
 		log.Panic("there is a transaction not flushed yet")
 	}

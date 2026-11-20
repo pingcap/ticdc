@@ -20,6 +20,7 @@ import (
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
+	"github.com/pingcap/ticdc/pkg/ordering"
 	"github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/tidb/pkg/tablecodec"
 	"github.com/pingcap/tidb/pkg/types"
@@ -42,9 +43,13 @@ func init() {
 }
 
 // ConflictKeys implements causality.txnEvent interface.
-func ConflictKeys(event *commonEvent.DMLEvent) map[uint64]struct{} {
+func ConflictKeys(event *commonEvent.DMLEvent, txnOrderMatcher *ordering.TxnOrderMatcher) map[uint64]struct{} {
 	if event.Len() == 0 {
 		return nil
+	}
+	if txnOrderMatcher != nil && txnOrderMatcher.Match(event.TableInfo.GetSchemaName(), event.TableInfo.GetTableName()) {
+		// Reserve the high bit to keep table IDs separate from 32-bit row hashes.
+		return map[uint64]struct{}{uint64(event.PhysicalTableID) | (1 << 63): {}}
 	}
 
 	hashRes := make(map[uint64]struct{}, event.Len())

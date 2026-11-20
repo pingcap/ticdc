@@ -50,7 +50,7 @@ run_mockgen -source pkg/etcd/client.go -destination pkg/etcd/client_mock.go -pac
 
 # Server mock generation queries pkg/etcd, whose mocks must be complete.
 wait_for_batch
-run_mockgen -source pkg/server/server.go -destination pkg/server/mock/server_mock.go -package mock
+run_mockgen -source pkg/server/server.go -destination pkg/server/mock/server_mock.go -package mock -imports pd=github.com/tikv/pd/client
 run_mockgen -source pkg/api/v2/tso.go -destination pkg/api/v2/mock/tso_mock.go -package mock
 run_mockgen -source pkg/api/v2/unsafe.go -destination pkg/api/v2/mock/unsafe_mock.go -package mock
 run_mockgen -source pkg/api/v2/status.go -destination pkg/api/v2/mock/status_mock.go -package mock

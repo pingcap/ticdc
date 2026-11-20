@@ -17,6 +17,7 @@ import (
 	"bytes"
 	"context"
 	"sort"
+	"strconv"
 	"time"
 
 	"github.com/pingcap/log"
@@ -32,6 +33,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/filter"
 	"github.com/pingcap/ticdc/pkg/node"
+	"github.com/pingcap/ticdc/pkg/ordering"
 	"github.com/pingcap/ticdc/pkg/routing"
 	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/ticdc/utils"
@@ -101,6 +103,14 @@ func (c *Controller) FinishBootstrap(
 	// Step 2: Load tables from schema store
 	// Share the filter and schema store across snapshot and DDL history queries in both modes.
 	// Use an empty timezone because table filtering does not need it.
+	var txnOrderTables []string
+	if isMysqlCompatibleBackend {
+		txnOrderTables = c.replicaConfig.Sink.GetTxnOrderTables("mysql")
+	}
+	txnOrderMatcher, err := ordering.NewTxnOrderMatcher(txnOrderTables, util.GetOrZero(c.replicaConfig.CaseSensitive))
+	if err != nil {
+		return nil, err
+	}
 	f, err := filter.NewFilter(c.replicaConfig.Filter, "", util.GetOrZero(c.replicaConfig.CaseSensitive), util.GetOrZero(c.replicaConfig.ForceReplicate))
 	if err != nil {
 		log.Error("load table from scheme store failed",
@@ -109,7 +119,7 @@ func (c *Controller) FinishBootstrap(
 		return nil, err
 	}
 	schemaStore := appcontext.GetService[schemastore.SchemaStore](appcontext.SchemaStore)
-	tables, err := c.loadTables(ctx, startTs, schemaStore, f)
+	tables, err := c.loadTables(ctx, startTs, schemaStore, f, txnOrderMatcher)
 	if err != nil {
 		log.Error("load table from scheme store failed",
 			zap.String("changefeed", c.changefeedID.Name()),
@@ -123,7 +133,7 @@ func (c *Controller) FinishBootstrap(
 		redoSchemaInfos    map[int64]*heartbeatpb.SchemaInfo
 	)
 	if c.enableRedo {
-		redoTables, err = c.loadTables(ctx, redoStartTs, schemaStore, f)
+		redoTables, err = c.loadTables(ctx, redoStartTs, schemaStore, f, txnOrderMatcher)
 		if err != nil {
 			log.Error("load table from scheme store failed",
 				zap.String("changefeed", c.changefeedID.Name()),
@@ -133,13 +143,13 @@ func (c *Controller) FinishBootstrap(
 	}
 
 	// Step 3: Build working task map from bootstrap responses and Process tables and build schema info
-	addedTables, err := c.loadBootstrapAddedTables(allNodesResp, tables, startTs, common.DefaultMode, schemaStore, f)
+	addedTables, err := c.loadBootstrapAddedTables(allNodesResp, tables, startTs, common.DefaultMode, schemaStore, f, txnOrderMatcher)
 	if err != nil {
 		return nil, err
 	}
 	var redoAddedTables map[int64]bootstrapAddedTable
 	if c.enableRedo {
-		redoAddedTables, err = c.loadBootstrapAddedTables(allNodesResp, redoTables, redoStartTs, common.RedoMode, schemaStore, f)
+		redoAddedTables, err = c.loadBootstrapAddedTables(allNodesResp, redoTables, redoStartTs, common.RedoMode, schemaStore, f, txnOrderMatcher)
 		if err != nil {
 			return nil, err
 		}
@@ -148,13 +158,29 @@ func (c *Controller) FinishBootstrap(
 		common.DefaultMode: addedTables,
 		common.RedoMode:    redoAddedTables,
 	}
-	workingTaskMap, schemaInfos, err := c.buildTaskInfo(allNodesResp, tables, addedTables, isMysqlCompatibleBackend, common.DefaultMode)
+	tableSplitMaps := map[int64]map[int64]bool{
+		common.DefaultMode: buildBootstrapTableSplitMap(tables, addedTables),
+	}
+	if c.enableRedo {
+		tableSplitMaps[common.RedoMode] = buildBootstrapTableSplitMap(redoTables, redoAddedTables)
+	}
+	if txnOrderMatcher != nil {
+		if err := c.verifyTxnOrderBootstrapSpans(ctx, allNodesResp, tableSplitMaps[common.DefaultMode], common.DefaultMode, schemaStore, txnOrderMatcher); err != nil {
+			return nil, err
+		}
+		if c.enableRedo {
+			if err := c.verifyTxnOrderBootstrapSpans(ctx, allNodesResp, tableSplitMaps[common.RedoMode], common.RedoMode, schemaStore, txnOrderMatcher); err != nil {
+				return nil, err
+			}
+		}
+	}
+	workingTaskMap, schemaInfos, err := c.buildTaskInfo(allNodesResp, tables, addedTables, tableSplitMaps[common.DefaultMode], isMysqlCompatibleBackend, common.DefaultMode)
 	if err != nil {
 		return nil, errors.Trace(err)
 	}
 
 	if c.enableRedo {
-		redoWorkingTaskMap, redoSchemaInfos, err = c.buildTaskInfo(allNodesResp, redoTables, redoAddedTables, isMysqlCompatibleBackend, common.RedoMode)
+		redoWorkingTaskMap, redoSchemaInfos, err = c.buildTaskInfo(allNodesResp, redoTables, redoAddedTables, tableSplitMaps[common.RedoMode], isMysqlCompatibleBackend, common.RedoMode)
 		if err != nil {
 			return nil, errors.Trace(err)
 		}
@@ -163,13 +189,7 @@ func (c *Controller) FinishBootstrap(
 	// Restore merge operators after task state is rebuilt from bootstrap spans/operators.
 	// Merge restoration needs the per-dispatcher task map from buildTaskInfo, but must run
 	// before we discard any leftover working tasks as dropped-table artifacts.
-	mergeTableSplitMaps := map[int64]map[int64]bool{
-		common.DefaultMode: buildBootstrapTableSplitMap(tables, addedTables),
-	}
-	if c.enableRedo {
-		mergeTableSplitMaps[common.RedoMode] = buildBootstrapTableSplitMap(redoTables, redoAddedTables)
-	}
-	if err := c.restoreCurrentMergeOperators(allNodesResp, mergeTableSplitMaps); err != nil {
+	if err := c.restoreCurrentMergeOperators(allNodesResp, tableSplitMaps); err != nil {
 		return nil, errors.Trace(err)
 	}
 
@@ -379,14 +399,13 @@ func (c *Controller) buildTaskInfo(
 	allNodesResp map[node.ID]*heartbeatpb.MaintainerBootstrapResponse,
 	tables []commonEvent.Table,
 	addedTables map[int64]bootstrapAddedTable,
+	tableSplitMap map[int64]bool,
 	isMysqlCompatibleBackend bool,
 	mode int64) (
 	map[int64]utils.Map[*heartbeatpb.TableSpan, *replica.SpanReplication],
 	map[int64]*heartbeatpb.SchemaInfo,
 	error,
 ) {
-	// Build table splitability map for later use
-	tableSplitMap := buildBootstrapTableSplitMap(tables, addedTables)
 	workingTaskMap := c.buildWorkingTaskMap(allNodesResp, tableSplitMap, mode)
 	// Restore current working operators first so spanController reflects "in-flight scheduling intent"
 	// captured by dispatcher managers. This avoids bootstrap creating duplicate tasks for a dispatcherID
@@ -456,6 +475,7 @@ func (c *Controller) loadBootstrapAddedTables(
 	mode int64,
 	schemaStore schemastore.SchemaStore,
 	f filter.Filter,
+	txnOrderMatcher *ordering.TxnOrderMatcher,
 ) (map[int64]bootstrapAddedTable, error) {
 	knownTables := buildTableSplitMap(tables)
 	candidates := make(map[int64]uint64)
@@ -490,11 +510,14 @@ func (c *Controller) loadBootstrapAddedTables(
 	addedTables := make(map[int64]bootstrapAddedTable)
 	// Keep tracking each candidate after an add: a later drop can invalidate it.
 	for cursor := startTs; cursor < endTs; {
-		events, resolvedTs, err := schemaStore.FetchTableTriggerDDLEvents(c.keyspaceMeta, dispatcherID, f, cursor, 100)
+		events, resolvedTs, err := schemaStore.FetchTableTriggerDDLEvents(c.keyspaceMeta, dispatcherID, f, txnOrderMatcher, cursor, 100)
 		if err != nil {
 			return nil, err
 		}
 		for _, event := range events {
+			if err := event.GetError(); err != nil {
+				return nil, err
+			}
 			if dropped := event.NeedDroppedTables; dropped != nil {
 				switch dropped.InfluenceType {
 				case commonEvent.InfluenceTypeNormal:
@@ -584,8 +607,72 @@ func (c *Controller) createSpanReplication(spanInfo *heartbeatpb.BootstrapTableS
 	)
 }
 
-func (c *Controller) loadTables(ctx context.Context, startTs uint64, schemaStore schemastore.SchemaStore, f filter.Filter) ([]commonEvent.Table, error) {
-	return schemaStore.GetAllPhysicalTables(ctx, c.keyspaceMeta, startTs, f)
+func (c *Controller) loadTables(ctx context.Context, startTs uint64, schemaStore schemastore.SchemaStore, f filter.Filter, txnOrderMatcher *ordering.TxnOrderMatcher) ([]commonEvent.Table, error) {
+	return schemaStore.GetAllPhysicalTables(ctx, c.keyspaceMeta, startTs, f, txnOrderMatcher)
+}
+
+func (c *Controller) verifyTxnOrderBootstrapSpans(
+	ctx context.Context,
+	responses map[node.ID]*heartbeatpb.MaintainerBootstrapResponse,
+	tableSplitMap map[int64]bool,
+	mode int64,
+	schemaStore schemastore.SchemaStore,
+	txnOrderMatcher *ordering.TxnOrderMatcher,
+) error {
+	verify := func(span *heartbeatpb.TableSpan, ts uint64) error {
+		if common.IsCompleteSpan(span) {
+			return nil
+		}
+		info, err := schemaStore.GetTableInfoAtTs(ctx, c.keyspaceMeta, span.TableID, ts)
+		if err != nil {
+			var deleted *schemastore.TableDeletedError
+			if errors.As(err, &deleted) {
+				return nil
+			}
+			return err
+		}
+		if txnOrderMatcher.Match(info.GetSchemaName(), info.GetTableName()) {
+			return errors.WrapChangefeedUnretryableErr(errors.ErrInvalidReplicaConfig.GenWithStackByArgs(
+				"sink.mysql-config.txn-order-tables does not support split spans, table ID " + strconv.FormatInt(span.TableID, 10)))
+		}
+		return nil
+	}
+	for _, response := range responses {
+		for _, span := range response.Spans {
+			if span == nil || span.ID == nil || span.Span == nil || span.Mode != mode || span.CheckpointTs == 0 {
+				continue
+			}
+			if _, known := tableSplitMap[span.Span.TableID]; !known || common.NewDispatcherIDFromPB(span.ID).IsZero() {
+				continue
+			}
+			if err := verify(span.Span, span.CheckpointTs); err != nil {
+				return err
+			}
+		}
+		if len(response.Operators) == 0 {
+			continue
+		}
+		spansByID := indexBootstrapSpans(response.Spans, mode)
+		for _, op := range response.Operators {
+			cfg := op.GetConfig()
+			if op.GetScheduleAction() != heartbeatpb.ScheduleAction_Create ||
+				cfg == nil || cfg.Mode != mode || cfg.Span == nil || cfg.DispatcherID == nil {
+				continue
+			}
+			id := common.NewDispatcherIDFromPB(cfg.DispatcherID)
+			// An existing dispatcher is validated at its checkpoint above.
+			if id.IsZero() || spansByID[id] != nil {
+				continue
+			}
+			if _, known := tableSplitMap[cfg.Span.TableID]; !known {
+				continue
+			}
+			if err := verify(cfg.Span, cfg.StartTs); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
 }
 
 func getSchemaInfo(table commonEvent.Table, isMysqlCompatibleBackend bool) *heartbeatpb.SchemaInfo {

@@ -96,7 +96,7 @@ func TestGetAllPhysicalTablesSkipsViews(t *testing.T) {
 		require.NoError(t, snapshot.Close())
 	}()
 
-	tables, err := loadAllPhysicalTablesAtTs(snapshot, snapshotTs, snapshotTs, nil)
+	tables, err := loadAllPhysicalTablesAtTs(snapshot, snapshotTs, snapshotTs, nil, nil)
 	require.NoError(t, err)
 	require.Equal(t, []commonEvent.Table{
 		{

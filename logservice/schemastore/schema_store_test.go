@@ -41,7 +41,7 @@ func TestSchemaReadsRespectCallerCancellation(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	_, err := store.GetAllPhysicalTables(ctx, common.DefaultKeyspace, 1, nil)
+	_, err := store.GetAllPhysicalTables(ctx, common.DefaultKeyspace, 1, nil, nil)
 	require.ErrorIs(t, err, context.Canceled)
 	require.ErrorIs(t, store.RegisterTable(ctx, common.DefaultKeyspace, 1, 1), context.Canceled)
 	_, err = store.GetTableInfo(ctx, common.DefaultKeyspace, 1, 1)
@@ -173,7 +173,7 @@ func TestIgnoreDDLByCommitTs(t *testing.T) {
 		return store.resolvedTs.Load() >= 1030
 	}, 5*time.Second, 10*time.Millisecond)
 
-	tables, err := pstorage.getAllPhysicalTables(1030, nil)
+	tables, err := pstorage.getAllPhysicalTables(1030, nil, nil)
 	require.NoError(t, err)
 
 	// Only table t1 and t3 should exist. t2 should be ignored.
@@ -281,17 +281,17 @@ func TestRenameTableFromSystemSchema(t *testing.T) {
 				buildTableFilterByNameForTest("test", "a"),
 				buildTableFilterByNameForTest("*", "*"),
 			} {
-				events, err := pstorage.fetchTableTriggerDDLEvents(tableFilter, 1000, 10)
+				events, err := pstorage.fetchTableTriggerDDLEvents(tableFilter, nil, 1000, 10)
 				require.NoError(t, err)
 				require.Len(t, events, 1)
 				require.Contains(t, events[0].Err, "ErrSyncRenameTableFailed")
 			}
-			events, err := pstorage.fetchTableTriggerDDLEvents(buildTableFilterByNameForTest("other", "*"), 1000, 10)
+			events, err := pstorage.fetchTableTriggerDDLEvents(buildTableFilterByNameForTest("other", "*"), nil, 1000, 10)
 			require.NoError(t, err)
 			require.Empty(t, events)
 
 			// Snapshot reconstruction and restart must also handle the missing old table.
-			tables, err := pstorage.getAllPhysicalTables(1010, buildTableFilterByNameForTest("test", "a"))
+			tables, err := pstorage.getAllPhysicalTables(1010, buildTableFilterByNameForTest("test", "a"), nil)
 			require.NoError(t, err)
 			var actualIDs []int64
 			for _, table := range tables {
@@ -328,7 +328,7 @@ func TestGetAllPhysicalTablesReturnsSnapshotLostByGCError(t *testing.T) {
 	pstorage.gcTs = 100
 	pstorage.mu.Unlock()
 
-	_, err := pstorage.getAllPhysicalTables(99, nil)
+	_, err := pstorage.getAllPhysicalTables(99, nil, nil)
 	require.Error(t, err)
 	require.True(t, cerror.ErrSnapshotLostByGC.Equal(err))
 	require.Contains(t, err.Error(), "checkpoint-ts 99 is earlier than or equal to GC safepoint at 100")
