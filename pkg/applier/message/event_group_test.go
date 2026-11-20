@@ -11,7 +11,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package util
+package message
 
 import (
 	"fmt"
@@ -36,14 +36,37 @@ import (
 	"go.uber.org/zap/zapcore"
 )
 
-func newTestDMLMessage(commitTs uint64) *codeccommon.DMLMessage {
-	return codeccommon.NewDMLMessageFromEvent(newTestDMLEvent(commitTs, common.RowTypeInsert))
+type dmlMessageDecoderStub struct {
+	messages []*DMLMessage
 }
 
-func attachTestDMLMessageData(message *codeccommon.DMLMessage) *codeccommon.DMLMessage {
-	messageData := codeccommon.NewDMLMessageData(nil, nil,
-		func([]byte) ([]*codeccommon.DMLMessage, error) {
-			return []*codeccommon.DMLMessage{message}, nil
+func (d *dmlMessageDecoderStub) AddKeyValue(_, _ []byte) {}
+
+func (d *dmlMessageDecoderStub) HasNext() (codeccommon.MessageType, bool) {
+	return codeccommon.MessageTypeRow, len(d.messages) > 0
+}
+
+func (d *dmlMessageDecoderStub) NextResolvedEvent() uint64 { return 0 }
+
+func (d *dmlMessageDecoderStub) NextDMLEvent() *commonEvent.DMLEvent {
+	if len(d.messages) == 0 {
+		return nil
+	}
+	message := d.messages[0]
+	d.messages = d.messages[1:]
+	return message.ToDMLEvent()
+}
+
+func (d *dmlMessageDecoderStub) NextDDLEvent() *commonEvent.DDLEvent { return nil }
+
+func newTestDMLMessage(commitTs uint64) *DMLMessage {
+	return NewDMLMessageFromEvent(newTestDMLEvent(commitTs, common.RowTypeInsert))
+}
+
+func attachTestDMLMessageData(message *DMLMessage) *DMLMessage {
+	messageData := newDMLMessageData(nil, nil,
+		func([]byte) ([]*DMLMessage, error) {
+			return []*DMLMessage{message}, nil
 		},
 	)
 	messageData.AttachDMLMessage(message)
@@ -51,11 +74,11 @@ func attachTestDMLMessageData(message *codeccommon.DMLMessage) *codeccommon.DMLM
 }
 
 func attachTestDMLMessageDataWithPayload(
-	message *codeccommon.DMLMessage, key, value []byte,
-) *codeccommon.DMLMessage {
-	messageData := codeccommon.NewDMLMessageData(key, value,
-		func([]byte) ([]*codeccommon.DMLMessage, error) {
-			return []*codeccommon.DMLMessage{message}, nil
+	message *DMLMessage, key, value []byte,
+) *DMLMessage {
+	messageData := newDMLMessageData(key, value,
+		func([]byte) ([]*DMLMessage, error) {
+			return []*DMLMessage{message}, nil
 		},
 	)
 	messageData.AttachDMLMessage(message)
@@ -216,8 +239,8 @@ func newMergeTestDMLEvent(commitTs uint64, tableInfo *common.TableInfo, value in
 	}
 }
 
-func newMergeTestDMLMessage(event *commonEvent.DMLEvent) *codeccommon.DMLMessage {
-	return codeccommon.NewDMLMessage(event.GetTableID(), event.TableInfo.GetSchemaName(), event.TableInfo.GetTableName(),
+func newMergeTestDMLMessage(event *commonEvent.DMLEvent) *DMLMessage {
+	return NewDMLMessage(event.GetTableID(), event.TableInfo.GetSchemaName(), event.TableInfo.GetTableName(),
 		event.GetCommitTs(), event.RowTypes[0], func() *commonEvent.DMLEvent { return event })
 }
 
@@ -234,7 +257,7 @@ func TestAppendOrMergeDMLEvent(t *testing.T) {
 		first.AddPostFlushFunc(func() { flushed = append(flushed, 1) })
 		second.AddPostFlushFunc(func() { flushed = append(flushed, 2) })
 
-		events := DMLMessagesToEvents([]*codeccommon.DMLMessage{
+		events := DMLMessagesToEvents([]*DMLMessage{
 			newMergeTestDMLMessage(first),
 			newMergeTestDMLMessage(second),
 		})
@@ -254,7 +277,7 @@ func TestAppendOrMergeDMLEvent(t *testing.T) {
 		first := newMergeTestDMLEvent(100, tableInfo, 1)
 		second := newMergeTestDMLEvent(101, tableInfo, 2)
 
-		events := DMLMessagesToEvents([]*codeccommon.DMLMessage{
+		events := DMLMessagesToEvents([]*DMLMessage{
 			newMergeTestDMLMessage(first),
 			newMergeTestDMLMessage(second),
 		})
@@ -300,7 +323,7 @@ func TestAppendOrMergeDMLEventSparseChecksums(t *testing.T) {
 			first.RowKeys = [][]byte{[]byte("first")}
 			last.RowKeys = [][]byte{[]byte("last")}
 			inputs := []*commonEvent.DMLEvent{first, update, last}
-			messages := make([]*codeccommon.DMLMessage, len(inputs))
+			messages := make([]*DMLMessage, len(inputs))
 			for i, input := range inputs {
 				input.Version = commonEvent.DMLEventVersion1
 				if tc.checksums[i] != nil {
@@ -346,9 +369,9 @@ func TestAppendOrMergeDMLEventSparseChecksums(t *testing.T) {
 func TestEventsGroupSharesRawMessageData(t *testing.T) {
 	first := newTestDMLMessage(10)
 	second := newTestDMLMessage(10)
-	messageData := codeccommon.NewDMLMessageData(nil, []byte("raw message"),
-		func([]byte) ([]*codeccommon.DMLMessage, error) {
-			return []*codeccommon.DMLMessage{first, second}, nil
+	messageData := newDMLMessageData(nil, []byte("raw message"),
+		func([]byte) ([]*DMLMessage, error) {
+			return []*DMLMessage{first, second}, nil
 		},
 	)
 
@@ -372,7 +395,7 @@ func TestEventsGroupSharesRawMessageData(t *testing.T) {
 func TestEventsGroupRestoresSharedSpillInputOnce(t *testing.T) {
 	// A single canal-json input can contain thousands of DML messages. Restoring
 	// each ordinal must not re-decode the complete input.
-	inputMessages := []*codeccommon.DMLMessage{
+	inputMessages := []*DMLMessage{
 		newTestDMLMessage(30),
 		newTestDMLMessage(10),
 		newTestDMLMessage(20),
@@ -385,7 +408,7 @@ func TestEventsGroupRestoresSharedSpillInputOnce(t *testing.T) {
 			decoderCount++
 			require.Equal(t, key, restoredKey)
 			require.Equal(t, value, restoredValue)
-			return &dmlMessageDecoderStub{messages: []*codeccommon.DMLMessage{
+			return &dmlMessageDecoderStub{messages: []*DMLMessage{
 				newTestDMLMessage(30),
 				newTestDMLMessage(10),
 				newTestDMLMessage(20),
@@ -414,16 +437,16 @@ func TestEventsGroupReadsLargeSharedPayloadOnceAcrossBatches(t *testing.T) {
 	store := newSpillStore(config)
 	t.Cleanup(func() { require.NoError(t, store.Cleanup()) })
 	group := NewEventsGroup(0, 1, store)
-	originalMessages := make([]*codeccommon.DMLMessage, messageCount)
-	restoredMessages := make([]*codeccommon.DMLMessage, messageCount)
+	originalMessages := make([]*DMLMessage, messageCount)
+	restoredMessages := make([]*DMLMessage, messageCount)
 	for i := range messageCount {
 		commitTs := uint64(i + 1)
 		originalMessages[i] = newTestDMLMessage(commitTs)
 		restoredMessages[i] = newTestDMLMessage(commitTs)
 	}
 	decodeCount := 0
-	messageData := codeccommon.NewDMLMessageData(nil, []byte("one large object payload"),
-		func([]byte) ([]*codeccommon.DMLMessage, error) {
+	messageData := newDMLMessageData(nil, []byte("one large object payload"),
+		func([]byte) ([]*DMLMessage, error) {
 			decodeCount++
 			return restoredMessages, nil
 		})
@@ -479,10 +502,10 @@ func TestEventsGroupsSharePayloadUntilEveryGroupAcks(t *testing.T) {
 	first := newTestDMLMessage(1)
 	second := newTestDMLMessage(2)
 	decodeCount := 0
-	messageData := codeccommon.NewDMLMessageData(nil, []byte("shared across groups"),
-		func([]byte) ([]*codeccommon.DMLMessage, error) {
+	messageData := newDMLMessageData(nil, []byte("shared across groups"),
+		func([]byte) ([]*DMLMessage, error) {
 			decodeCount++
-			return []*codeccommon.DMLMessage{first, second}, nil
+			return []*DMLMessage{first, second}, nil
 		})
 	messageData.AttachDMLMessage(first)
 	require.NoError(t, firstGroup.AppendMessage(first))
@@ -589,9 +612,9 @@ func TestEventsGroupKeepsSharedPayloadInOneSegment(t *testing.T) {
 	group := NewEventsGroup(0, 1, store)
 	first := newTestDMLMessage(1)
 	second := newTestDMLMessage(2)
-	messageData := codeccommon.NewDMLMessageData(nil, []byte("shared payload"),
-		func([]byte) ([]*codeccommon.DMLMessage, error) {
-			return []*codeccommon.DMLMessage{first, second}, nil
+	messageData := newDMLMessageData(nil, []byte("shared payload"),
+		func([]byte) ([]*DMLMessage, error) {
+			return []*DMLMessage{first, second}, nil
 		})
 
 	messageData.AttachDMLMessage(first)
@@ -633,8 +656,8 @@ func TestEventsGroupRestoreErrorDoesNotReleasePendingData(t *testing.T) {
 	t.Cleanup(func() { require.NoError(t, store.Cleanup()) })
 	group := NewEventsGroup(0, 1, store)
 	wantErr := errors.New("restore failed")
-	messageData := codeccommon.NewDMLMessageData([]byte("key"), []byte("value"),
-		func([]byte) ([]*codeccommon.DMLMessage, error) {
+	messageData := newDMLMessageData([]byte("key"), []byte("value"),
+		func([]byte) ([]*DMLMessage, error) {
 			return nil, wantErr
 		})
 	message := newTestDMLMessage(1)
@@ -746,14 +769,14 @@ func TestEventsGroupTracksResolvedAndAppliedFrontiers(t *testing.T) {
 func TestEventsGroupRestoresPersistedSourcePosition(t *testing.T) {
 	group := NewEventsGroup(3, 1)
 	message := newTestDMLMessage(10)
-	messageData := codeccommon.NewDMLMessageData(nil, nil,
-		func([]byte) ([]*codeccommon.DMLMessage, error) {
-			return []*codeccommon.DMLMessage{message}, nil
+	messageData := newDMLMessageData(nil, nil,
+		func([]byte) ([]*DMLMessage, error) {
+			return []*DMLMessage{message}, nil
 		})
 	messageData.SourcePosition = 42
 	messageData.AttachDMLMessage(message)
 	var restoredPosition int64
-	group.SetPostRestore(func(message *codeccommon.DMLMessage, position int64) *codeccommon.DMLMessage {
+	group.SetPostRestore(func(message *DMLMessage, position int64) *DMLMessage {
 		restoredPosition = position
 		return message
 	})
@@ -797,12 +820,12 @@ func TestSpillStoreRestoreCacheHasByteAndEntryBounds(t *testing.T) {
 func TestEventsGroupKeepsPerEventMetadataOnDisk(t *testing.T) {
 	group := NewEventsGroup(0, 1)
 	const messageCount = 2048
-	messages := make([]*codeccommon.DMLMessage, 0, messageCount)
+	messages := make([]*DMLMessage, 0, messageCount)
 	for i := 1; i <= messageCount; i++ {
 		messages = append(messages, newTestDMLMessage(uint64(i)))
 	}
-	messageData := codeccommon.NewDMLMessageData(nil, nil,
-		func([]byte) ([]*codeccommon.DMLMessage, error) { return messages, nil })
+	messageData := newDMLMessageData(nil, nil,
+		func([]byte) ([]*DMLMessage, error) { return messages, nil })
 	for _, message := range messages {
 		messageData.AttachDMLMessage(message)
 		require.NoError(t, group.AppendMessage(message))
@@ -840,7 +863,7 @@ func TestEventsGroupResolveIntoAppendsAndCleansResolvedSpillRecords(t *testing.T
 
 	spillPath := group.store.activeSegment.file.Path()
 
-	var dst []*codeccommon.DMLMessage
+	var dst []*DMLMessage
 	dst, err := group.ResolveInto(2, dst)
 	require.NoError(t, err)
 
@@ -871,7 +894,7 @@ func TestEventsGroupResolveIntoNoopWhenNothingResolved(t *testing.T) {
 	require.NoError(t, group.AppendMessage(attachTestDMLMessageData(m1)))
 	require.NoError(t, group.AppendMessage(attachTestDMLMessageData(m2)))
 
-	dst := make([]*codeccommon.DMLMessage, 0, 1)
+	dst := make([]*DMLMessage, 0, 1)
 	dst, err := group.ResolveInto(5, dst)
 	require.NoError(t, err)
 
@@ -892,7 +915,7 @@ func TestEventsGroupResolveIntoClearsAllWhenFullyResolved(t *testing.T) {
 	require.NoError(t, group.AppendMessage(attachTestDMLMessageData(m2)))
 
 	spillPath := group.store.activeSegment.file.Path()
-	var dst []*codeccommon.DMLMessage
+	var dst []*DMLMessage
 	dst, err := group.ResolveInto(100, dst)
 	require.NoError(t, err)
 
@@ -916,7 +939,7 @@ func TestEventsGroupResolveIntoSortsOutOfOrderResolvedMessages(t *testing.T) {
 	require.NoError(t, group.AppendMessage(attachTestDMLMessageData(m2)))
 	require.NoError(t, group.AppendMessage(attachTestDMLMessageData(m3)))
 
-	var dst []*codeccommon.DMLMessage
+	var dst []*DMLMessage
 	dst, err := group.ResolveInto(25, dst)
 	require.NoError(t, err)
 
@@ -938,7 +961,7 @@ func TestEventsGroupResolveIntoKeepsSameCommitTsStable(t *testing.T) {
 	require.NoError(t, group.AppendMessage(attachTestDMLMessageData(m2)))
 	require.NoError(t, group.AppendMessage(attachTestDMLMessageData(m3)))
 
-	var dst []*codeccommon.DMLMessage
+	var dst []*DMLMessage
 	dst, err := group.ResolveInto(20, dst)
 	require.NoError(t, err)
 
@@ -991,7 +1014,7 @@ func TestEventsGroupRestoresSpilledEventRowsAndTableInfo(t *testing.T) {
 	event.Checksum = []*integrity.Checksum{{Current: 1, Previous: 2, Corrupted: true, Version: 3}}
 
 	group := NewEventsGroup(0, 1)
-	message := codeccommon.NewDMLMessageFromEvent(event)
+	message := NewDMLMessageFromEvent(event)
 	require.NoError(t, group.AppendMessage(attachTestDMLMessageData(message)))
 
 	messages, err := group.GetAllMessages()
@@ -1029,7 +1052,7 @@ func TestEventsGroupRestoresRowsFromSharedChunk(t *testing.T) {
 		event.RowTypes = []common.RowType{common.RowTypeUpdate, common.RowTypeUpdate}
 		event.Length = 1
 		event.PreviousTotalOffset = offset
-		message := codeccommon.NewDMLMessageFromEvent(event)
+		message := NewDMLMessageFromEvent(event)
 		require.NoError(t, group.AppendMessage(attachTestDMLMessageData(message)))
 	}
 
@@ -1071,7 +1094,7 @@ func TestEventsGroupRestoresCompactUpdateRows(t *testing.T) {
 	event.Length = 1
 
 	group := NewEventsGroup(0, 1)
-	message := codeccommon.NewDMLMessageFromEvent(event)
+	message := NewDMLMessageFromEvent(event)
 	require.NoError(t, group.AppendMessage(attachTestDMLMessageData(message)))
 	messages, err := group.GetAllMessages()
 	require.NoError(t, err)
@@ -1095,7 +1118,7 @@ func TestEventsGroupSpillDoesNotSignalDownstreamCallbacks(t *testing.T) {
 
 	group := NewEventsGroup(0, 1)
 	defer func() { require.NoError(t, group.Cleanup()) }()
-	message := codeccommon.NewDMLMessageFromEvent(event)
+	message := NewDMLMessageFromEvent(event)
 	require.NoError(t, group.AppendMessage(attachTestDMLMessageData(message)))
 	require.Zero(t, enqueued)
 	require.Zero(t, flushed)
@@ -1104,7 +1127,7 @@ func TestEventsGroupSpillDoesNotSignalDownstreamCallbacks(t *testing.T) {
 func BenchmarkEventsGroupResolveInto(b *testing.B) {
 	const messageCount = 16 * 1024
 
-	messages := make([]*codeccommon.DMLMessage, messageCount)
+	messages := make([]*DMLMessage, messageCount)
 	for i := range messages {
 		messages[i] = newTestDMLMessage(uint64(i + 1))
 	}
@@ -1128,11 +1151,11 @@ func BenchmarkEventsGroupResolveInto(b *testing.B) {
 		b.Run(benchmark.name, func(b *testing.B) {
 			source := messages
 			if benchmark.outOfOrder {
-				source = append([]*codeccommon.DMLMessage(nil), messages...)
+				source = append([]*DMLMessage(nil), messages...)
 				lastIndex := len(source) - 1
 				source[lastIndex-1], source[lastIndex] = source[lastIndex], source[lastIndex-1]
 			}
-			dst := make([]*codeccommon.DMLMessage, 0, messageCount)
+			dst := make([]*DMLMessage, 0, messageCount)
 
 			b.ReportAllocs()
 			b.ResetTimer()

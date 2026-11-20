@@ -55,9 +55,8 @@ func TestCSVBatchDecoder(t *testing.T) {
 		tp, hasNext := decoder.HasNext()
 		require.True(t, hasNext)
 		require.Equal(t, common.MessageTypeRow, tp)
-		message := decoder.NextDMLMessage()
-		require.Equal(t, commitTs, message.GetCommitTs())
-		event := message.ToDMLEvent()
+		event := decoder.NextDMLEvent()
+		require.NotNil(t, event)
 		require.Equal(t, commitTs, event.CommitTs)
 		if i == 1 || i == 4 {
 			require.Equal(t, []commonType.RowType{commonType.RowTypeDelete, commonType.RowTypeInsert}, event.RowTypes)
@@ -125,7 +124,7 @@ func TestCSVBatchDecoderWithColumnSelector(t *testing.T) {
 	require.True(t, hasNext)
 	require.Equal(t, common.MessageTypeRow, tp)
 
-	event := decoder.NextDMLMessage().ToDMLEvent()
+	event := decoder.NextDMLEvent()
 	require.Len(t, event.TableInfo.GetColumns(), 2)
 	require.Equal(t, "id", event.TableInfo.GetColumns()[0].Name.O)
 	require.Equal(t, "visible", event.TableInfo.GetColumns()[1].Name.O)

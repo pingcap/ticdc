@@ -41,14 +41,13 @@ import (
 	"go.uber.org/zap"
 )
 
-var tableIDAllocator = common.NewTableIDAllocator()
-
 // decoder implement the Decoder interface
 type decoder struct {
-	idx    int
-	config *common.Config
+	allocator *common.TableIDAllocator
+	config    *common.Config
 
 	upstreamTiDB *sql.DB
+	cache        *common.TableInfoProvider
 
 	keyPayload   map[string]any
 	keySchema    map[string]any
@@ -59,14 +58,14 @@ type decoder struct {
 // NewDecoder return an debezium decoder
 func NewDecoder(
 	config *common.Config,
-	idx int,
 	db *sql.DB,
+	allocator *common.TableIDAllocator,
 ) common.Decoder {
-	tableIDAllocator.Clean()
 	return &decoder{
-		idx:          idx,
+		allocator:    allocator,
 		config:       config,
 		upstreamTiDB: db,
+		cache:        common.NewTableInfoProvider(),
 	}
 }
 
@@ -140,20 +139,20 @@ func (d *decoder) NextDDLEvent() *commonEvent.DDLEvent {
 	event.Query = d.valuePayload["ddl"].(string)
 	actionType := common.GetDDLActionType(event.Query)
 	event.Type = byte(actionType)
+	d.cache.AddDDL(schemaName, tableName, event.FinishedTs)
 
-	if d.idx == 0 {
-		tableIDAllocator.AddBlockTableID(event.SchemaName, event.TableName, tableIDAllocator.Allocate(event.SchemaName, event.TableName))
-		event.BlockedTables = common.GetBlockedTables(tableIDAllocator, event)
-		if event.Type == byte(timodel.ActionRenameTable) {
-			schemaName = event.ExtraSchemaName
-			tableName = event.ExtraTableName
-		}
+	d.allocator.AddBlockTableID(event.SchemaName, event.TableName, d.allocator.Allocate(event.SchemaName, event.TableName))
+	event.BlockedTables = common.GetBlockedTables(d.allocator, event)
+	if event.Type == byte(timodel.ActionRenameTable) {
+		schemaName = event.ExtraSchemaName
+		tableName = event.ExtraTableName
 	}
+
 	return event
 }
 
-// NextDMLMessage returns the next dml message if exists
-func (d *decoder) NextDMLMessage() *common.DMLMessage {
+// NextDMLEvent returns the next dml event if exists
+func (d *decoder) NextDMLEvent() *commonEvent.DMLEvent {
 	if len(d.valuePayload) == 0 {
 		log.Panic("next DML message failed, since value payload is empty")
 	}
@@ -167,16 +166,8 @@ func (d *decoder) NextDMLMessage() *common.DMLMessage {
 	keyPayload := d.keyPayload
 	valuePayload := d.valuePayload
 	valueSchema := d.valueSchema
-	commitTs := getCommitTsFromPayload(valuePayload)
-	schemaName := getSchemaNameFromPayload(valuePayload)
-	tableName := getTableNameFromPayload(valuePayload)
-	rowType := rowTypeFromPayload(valuePayload)
-	tableID := tableIDAllocator.Allocate(schemaName, tableName)
 	d.clear()
-
-	return common.NewDMLMessage(tableID, schemaName, tableName, commitTs, rowType, func() *commonEvent.DMLEvent {
-		return d.assembleDMLEventFromPayload(keyPayload, valuePayload, valueSchema)
-	})
+	return d.assembleDMLEventFromPayload(keyPayload, valuePayload, valueSchema)
 }
 
 func rowTypeFromPayload(valuePayload map[string]any) commonType.RowType {
@@ -202,7 +193,7 @@ func (d *decoder) assembleDMLEventFromPayload(
 	valuePayload map[string]any,
 	valueSchema map[string]any,
 ) *commonEvent.DMLEvent {
-	tableInfo := queryTableInfoFromPayload(keyPayload, valuePayload, valueSchema)
+	tableInfo := d.queryTableInfoFromPayload(keyPayload, valuePayload, valueSchema)
 	commitTs := getCommitTsFromPayload(valuePayload)
 	startTs, hasStartTs := getStartTsFromPayload(valuePayload)
 	if !hasStartTs {
@@ -315,16 +306,32 @@ func (d *decoder) clear() {
 	d.valueSchema = nil
 }
 
-func queryTableInfoFromPayload(
+func (d *decoder) queryTableInfoFromPayload(
 	keyPayload map[string]any,
 	valuePayload map[string]any,
 	valueSchema map[string]any,
 ) *commonType.TableInfo {
 	schemaName := getSchemaNameFromPayload(valuePayload)
 	tableName := getTableNameFromPayload(valuePayload)
+	version, tableInfo := d.cache.ReadAt(schemaName, tableName, getCommitTsFromPayload(valuePayload))
+	if tableInfo != nil {
+		return tableInfo
+	}
+	tableInfo = d.newTableInfoFromPayload(schemaName, tableName, keyPayload, valuePayload, valueSchema)
+	d.cache.Write(schemaName, tableName, version, tableInfo)
+	return tableInfo
+}
+
+func (d *decoder) newTableInfoFromPayload(
+	schemaName, tableName string,
+	keyPayload map[string]any,
+	valuePayload map[string]any,
+	valueSchema map[string]any,
+) *commonType.TableInfo {
+	allocator := d.allocator
 	tidbTableInfo := new(timodel.TableInfo)
-	tidbTableInfo.ID = tableIDAllocator.Allocate(schemaName, tableName)
-	tableIDAllocator.AddBlockTableID(schemaName, tableName, tidbTableInfo.ID)
+	tidbTableInfo.ID = allocator.Allocate(schemaName, tableName)
+	allocator.AddBlockTableID(schemaName, tableName, tidbTableInfo.ID)
 	tidbTableInfo.Name = ast.NewCIStr(tableName)
 
 	fields := valueSchema["fields"].([]any)

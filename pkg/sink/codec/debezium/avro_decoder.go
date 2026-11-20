@@ -60,8 +60,8 @@ type registeredDebeziumAvroSchema struct {
 func NewAvroDecoder(
 	ctx context.Context,
 	config *common.Config,
-	idx int,
 	db *sql.DB,
+	allocator *common.TableIDAllocator,
 ) (common.Decoder, error) {
 	registryURL := strings.TrimRight(config.AvroConfluentSchemaRegistry, "/")
 	if registryURL == "" {
@@ -73,7 +73,7 @@ func NewAvroDecoder(
 		ctx:         ctx,
 		registryURL: registryURL,
 		httpClient:  http.DefaultClient,
-		inner:       NewDecoder(config, idx, db).(*decoder),
+		inner:       NewDecoder(config, db, allocator).(*decoder),
 		schemas:     schemas,
 	}, nil
 }
@@ -98,8 +98,8 @@ func (d *avroDecoder) NextResolvedEvent() uint64 {
 	return d.inner.NextResolvedEvent()
 }
 
-func (d *avroDecoder) NextDMLMessage() *common.DMLMessage {
-	return d.inner.NextDMLMessage()
+func (d *avroDecoder) NextDMLEvent() *commonEvent.DMLEvent {
+	return d.inner.NextDMLEvent()
 }
 
 func (d *avroDecoder) NextDDLEvent() *commonEvent.DDLEvent {

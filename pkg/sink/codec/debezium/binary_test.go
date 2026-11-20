@@ -109,9 +109,9 @@ func TestDebeziumBinaryHandling(t *testing.T) {
 				require.Equal(t, "bytes", bitField["type"])
 				require.Equal(t, "BQAAAAAAAAA=", bitField["default"])
 
-				decoder := NewDecoder(cfg, 0, nil)
+				decoder := NewDecoder(cfg, nil, common.NewTableIDAllocator())
 				decoder.AddKeyValue(messages[0].Key, messages[0].Value)
-				decoded := decoder.NextDMLMessage().ToDMLEvent()
+				decoded := decoder.NextDMLEvent()
 				change, ok := decoded.GetNextRow()
 				require.True(t, ok)
 				common.CompareRow(t, row, helper.tableInfo, change, decoded.TableInfo)

@@ -40,8 +40,6 @@ import (
 	"go.uber.org/zap"
 )
 
-var tableIDAllocator = common.NewTableIDAllocator()
-
 // Decoder implement the Decoder interface
 type Decoder struct {
 	config *common.Config
@@ -51,19 +49,21 @@ type Decoder struct {
 	upstreamTiDB *sql.DB
 	storage      storeapi.Storage
 
-	value []byte
-	msg   *message
-	memo  TableInfoProvider
+	value     []byte
+	msg       *message
+	memo      *common.TableInfoProvider
+	allocator *common.TableIDAllocator
 
 	// cachedMessages is used to store the messages which does not have received corresponding table info yet.
 	cachedMessages *list.List
-	// CachedDMLMessages are messages just released from the cachedMessages.
-	CachedDMLMessages []*common.DMLMessage
+	// CachedRowChangedEvents are events just decoded from the cachedMessages.
+	CachedRowChangedEvents []*commonEvent.DMLEvent
 }
 
 // NewDecoder returns a new Decoder
 func NewDecoder(
-	ctx context.Context, config *common.Config, db *sql.DB,
+	ctx context.Context, config *common.Config, db *sql.DB, provider *common.TableInfoProvider,
+	allocator *common.TableIDAllocator,
 ) (common.Decoder, error) {
 	var (
 		externalStorage storeapi.Storage
@@ -83,7 +83,6 @@ func NewDecoder(
 	}
 
 	m, err := newMarshaller(config)
-	tableIDAllocator.Clean()
 	return &Decoder{
 		config:     config,
 		marshaller: m,
@@ -91,7 +90,8 @@ func NewDecoder(
 		storage:      externalStorage,
 		upstreamTiDB: db,
 
-		memo:           newMemoryTableInfoProvider(),
+		memo:           provider,
+		allocator:      allocator,
 		cachedMessages: list.New(),
 	}, errors.Trace(err)
 }
@@ -147,8 +147,8 @@ func (d *Decoder) NextResolvedEvent() uint64 {
 	return ts
 }
 
-// NextDMLMessage returns the next dml message if exists
-func (d *Decoder) NextDMLMessage() *common.DMLMessage {
+// NextDMLEvent returns the next dml event if exists
+func (d *Decoder) NextDMLEvent() *commonEvent.DMLEvent {
 	if d.msg == nil || (d.msg.Data == nil && d.msg.Old == nil) {
 		log.Panic("invalid data for the DML event", zap.String("message", util.RedactAny(d.msg)))
 	}
@@ -167,28 +167,8 @@ func (d *Decoder) NextDMLMessage() *common.DMLMessage {
 		return nil
 	}
 
-	return d.newDMLMessage(msg, tableInfo)
-}
-
-func (d *Decoder) newDMLMessage(msg *message, tableInfo *commonType.TableInfo) *common.DMLMessage {
-	tableIDAllocator.AddBlockTableID(msg.Schema, msg.Table, msg.TableID)
-	return common.NewDMLMessage(msg.TableID, msg.Schema, msg.Table, msg.CommitTs, rowTypeFromMessageType(msg.Type), func() *commonEvent.DMLEvent {
-		return d.assembleDMLEvent(msg, tableInfo)
-	})
-}
-
-func rowTypeFromMessageType(tp MessageType) commonType.RowType {
-	switch tp {
-	case DMLTypeInsert:
-		return commonType.RowTypeInsert
-	case DMLTypeUpdate:
-		return commonType.RowTypeUpdate
-	case DMLTypeDelete:
-		return commonType.RowTypeDelete
-	default:
-		log.Panic("unknown row type for the DML message", zap.Any("type", tp))
-	}
-	return commonType.RowTypeInsert
+	d.allocator.AddBlockTableID(msg.Schema, msg.Table, msg.TableID)
+	return d.assembleDMLEvent(msg, tableInfo)
 }
 
 func (d *Decoder) assembleDMLEvent(msg *message, tableInfo *commonType.TableInfo) *commonEvent.DMLEvent {
@@ -301,15 +281,16 @@ func (d *Decoder) NextDDLEvent() *commonEvent.DDLEvent {
 	ddl := d.buildDDLEvent(d.msg)
 	d.msg = nil
 
-	d.memo.Write(ddl.TableInfo)
-	d.memo.Write(ddl.MultipleTableInfos[1])
+	d.memo.WriteInfo(ddl.TableInfo)
+	d.memo.WriteInfo(ddl.MultipleTableInfos[1])
 
 	for ele := d.cachedMessages.Front(); ele != nil; {
 		msg := ele.Value.(*message)
 		next := ele.Next()
 		tableInfo := d.memo.Read(msg.Schema, msg.Table, msg.SchemaVersion)
 		if tableInfo != nil {
-			d.CachedDMLMessages = append(d.CachedDMLMessages, d.newDMLMessage(msg, tableInfo))
+			d.allocator.AddBlockTableID(msg.Schema, msg.Table, msg.TableID)
+			d.CachedRowChangedEvents = append(d.CachedRowChangedEvents, d.assembleDMLEvent(msg, tableInfo))
 			d.cachedMessages.Remove(ele)
 		}
 		ele = next
@@ -317,78 +298,16 @@ func (d *Decoder) NextDDLEvent() *commonEvent.DDLEvent {
 	return ddl
 }
 
-// GetCachedMessages returns the cached messages.
-func (d *Decoder) GetCachedMessages() []*common.DMLMessage {
-	result := d.CachedDMLMessages
-	d.CachedDMLMessages = nil
+// GetCachedEvents returns the events decoded from the cached messages.
+func (d *Decoder) GetCachedEvents() []*commonEvent.DMLEvent {
+	result := d.CachedRowChangedEvents
+	d.CachedRowChangedEvents = nil
 	return result
 }
 
 // GetTableIDs identifies every table and partition whose events belong to the logical table.
 func (d *Decoder) GetTableIDs(schema, table string) []int64 {
-	return tableIDAllocator.GetBlockedTables(schema, table)
-}
-
-// TableInfoProvider is used to store and read table info
-// It works like a schema cache when consuming simple protocol messages
-// It will store multiple versions of table info for a table
-// The table info which has the exact (schema, table, version) will be returned when reading
-type TableInfoProvider interface {
-	Write(info *commonType.TableInfo)
-	Read(schema, table string, version uint64) *commonType.TableInfo
-}
-
-type memoryTableInfoProvider struct {
-	memo map[tableSchemaKey]*commonType.TableInfo
-}
-
-func newMemoryTableInfoProvider() *memoryTableInfoProvider {
-	return &memoryTableInfoProvider{
-		memo: make(map[tableSchemaKey]*commonType.TableInfo),
-	}
-}
-
-func (m *memoryTableInfoProvider) Write(info *commonType.TableInfo) {
-	if info == nil || info.TableName.Schema == "" || info.TableName.Table == "" {
-		return
-	}
-	key := tableSchemaKey{
-		schema:  info.TableName.Schema,
-		table:   info.TableName.Table,
-		version: info.GetUpdateTS(),
-	}
-
-	_, ok := m.memo[key]
-	if ok {
-		log.Debug("table info not stored, since it already exists",
-			zap.String("schema", info.TableName.Schema),
-			zap.String("table", info.TableName.Table),
-			zap.Uint64("version", info.GetUpdateTS()))
-		return
-	}
-
-	m.memo[key] = info
-	log.Info("table info stored",
-		zap.String("schema", info.TableName.Schema),
-		zap.String("table", info.TableName.Table),
-		zap.Uint64("version", info.GetUpdateTS()))
-}
-
-// Read returns the table info with the exact (schema, table, version)
-// Note: It's a blocking call, it will wait until the table info is stored
-func (m *memoryTableInfoProvider) Read(schema, table string, version uint64) *commonType.TableInfo {
-	key := tableSchemaKey{
-		schema:  schema,
-		table:   table,
-		version: version,
-	}
-	return m.memo[key]
-}
-
-type tableSchemaKey struct {
-	schema  string
-	table   string
-	version uint64
+	return d.allocator.GetBlockedTables(schema, table)
 }
 
 // newTiColumnInfo uses columnSchema and IndexSchema to construct a tidb column info.
@@ -530,7 +449,7 @@ func (d *Decoder) buildDDLEvent(msg *message) *commonEvent.DDLEvent {
 	result.FinishedTs = msg.CommitTs
 	result.SchemaName = tableInfo.TableName.Schema
 	result.TableName = tableInfo.TableName.Table
-	tableIDAllocator.AddBlockTableID(result.SchemaName, result.TableName, tableInfo.TableName.TableID)
+	d.allocator.AddBlockTableID(result.SchemaName, result.TableName, tableInfo.TableName.TableID)
 
 	if preTableInfo != nil {
 		result.ExtraSchemaName = preTableInfo.GetSchemaName()
@@ -544,7 +463,7 @@ func (d *Decoder) buildDDLEvent(msg *message) *commonEvent.DDLEvent {
 
 	actionType := common.GetDDLActionType(result.Query)
 	result.Type = byte(actionType)
-	result.BlockedTables = common.GetBlockedTables(tableIDAllocator, result)
+	result.BlockedTables = common.GetBlockedTables(d.allocator, result)
 	return result
 }
 

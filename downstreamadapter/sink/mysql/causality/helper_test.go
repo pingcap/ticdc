@@ -506,7 +506,7 @@ func TestConflictKeysReconstructedSchemas(t *testing.T) {
 						cfg := codeccommon.NewConfig(config.ProtocolOpen)
 						encoder, err := open.NewBatchEncoder(cfg, nil)
 						require.NoError(t, err)
-						decoder, err := open.NewDecoder(t.Context(), 0, cfg, nil)
+						decoder, err := open.NewDecoder(t.Context(), cfg, nil, codeccommon.NewTableIDAllocator())
 						require.NoError(t, err)
 						for i, row := range rows {
 							require.NoError(t, encoder.AppendRowChangedEvent(t.Context(), "", &commonEvent.RowEvent{
@@ -522,7 +522,7 @@ func TestConflictKeysReconstructedSchemas(t *testing.T) {
 									break
 								}
 								require.Equal(t, codeccommon.MessageTypeRow, typ)
-								events = append(events, decoder.NextDMLMessage().ToDMLEvent())
+								events = append(events, decoder.NextDMLEvent())
 							}
 						}
 					} else {

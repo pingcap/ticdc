@@ -20,8 +20,8 @@ import (
 	"time"
 
 	"github.com/pingcap/log"
-	cmdutil "github.com/pingcap/ticdc/cmd/util"
 	"github.com/pingcap/ticdc/downstreamadapter/sink/mysql"
+	"github.com/pingcap/ticdc/pkg/applier/message"
 	commonType "github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
@@ -30,7 +30,6 @@ import (
 	"github.com/pingcap/ticdc/pkg/redo"
 	misc "github.com/pingcap/ticdc/pkg/redo/common"
 	"github.com/pingcap/ticdc/pkg/redo/reader"
-	codeccommon "github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"github.com/pingcap/ticdc/pkg/util"
 	timodel "github.com/pingcap/tidb/pkg/meta/model"
 	"go.uber.org/atomic"
@@ -69,8 +68,8 @@ type RedoApplier struct {
 	mysqlSink       *mysql.Sink
 	appliedDDLCount uint64
 
-	eventsGroup     map[commonType.TableID]*cmdutil.EventsGroup
-	spillStore      *cmdutil.SpillStore
+	eventsGroup     map[commonType.TableID]*message.EventsGroup
+	spillStore      *message.SpillStore
 	tableDDLTs      map[commonType.TableID]ddlTs
 	appliedLogCount uint64
 
@@ -84,8 +83,8 @@ func NewRedoApplier(cfg *RedoApplierConfig) *RedoApplier {
 	return &RedoApplier{
 		cfg:              cfg,
 		tableDDLTs:       make(map[commonType.TableID]ddlTs),
-		eventsGroup:      make(map[commonType.TableID]*cmdutil.EventsGroup),
-		spillStore:       cmdutil.NewSpillStore(),
+		eventsGroup:      make(map[commonType.TableID]*message.EventsGroup),
+		spillStore:       message.NewSpillStore(),
 		needRecoveryInfo: true,
 	}
 }
@@ -381,7 +380,7 @@ func (ra *RedoApplier) applyRow(
 ) error {
 	tableID := row.Row.Table.TableID
 	if _, ok := ra.eventsGroup[tableID]; !ok {
-		ra.eventsGroup[tableID] = cmdutil.NewEventsGroup(0, tableID, ra.spillStore)
+		ra.eventsGroup[tableID] = message.NewEventsGroup(0, tableID, ra.spillStore)
 	}
 
 	if row.Row.CommitTs < ra.eventsGroup[tableID].HighWatermark {
@@ -415,10 +414,10 @@ func (ra *RedoApplier) applyRow(
 	if err != nil {
 		return errors.WrapError(errors.ErrMarshalFailed, err)
 	}
-	message := newRedoDMLMessage(row)
-	messageData := codeccommon.NewDMLMessageDataWithRestorer(nil, data, redoDMLMessageRestorer)
-	messageData.AttachDMLMessage(message)
-	if err := ra.eventsGroup[tableID].AppendMessage(message); err != nil {
+	dmlMessage := newRedoDMLMessage(row)
+	messageData := message.NewDMLMessageDataWithRestorer(nil, data, redoDMLMessageRestorer)
+	messageData.AttachDMLMessage(dmlMessage)
+	if err := ra.eventsGroup[tableID].AppendMessage(dmlMessage); err != nil {
 		return err
 	}
 
@@ -458,7 +457,7 @@ func (ra *RedoApplier) waitTableFlush(
 		if batch == nil {
 			break
 		}
-		events := cmdutil.DMLMessagesToEvents(batch.Messages)
+		events := message.DMLMessagesToEvents(batch.Messages)
 		if err := ra.flushDMLBatch(ctx, events, rts); err != nil {
 			return err
 		}

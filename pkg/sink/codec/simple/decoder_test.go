@@ -104,10 +104,10 @@ func TestChecksumFailureStopsDecode(t *testing.T) {
 				Type: DMLTypeUpdate, Data: map[string]any{"id": int64(1)},
 				Old: map[string]any{"id": int64(1)}, Checksum: &value,
 			}
-			decoder := &Decoder{config: common.NewConfig(config.ProtocolSimple)}
+			decoder := &Decoder{config: common.NewConfig(config.ProtocolSimple), allocator: common.NewTableIDAllocator()}
 			decoder.config.EnableRowChecksum = true
 			require.PanicsWithValue(t, "consumer detect checksum corrupted", func() {
-				decoder.newDMLMessage(msg, ddl.TableInfo).ToDMLEvent()
+				decoder.assembleDMLEvent(msg, ddl.TableInfo)
 			})
 		})
 	}
@@ -122,12 +122,11 @@ func TestCachedDMLReturnsMessage(t *testing.T) {
 		schemaVersion   = uint64(100)
 		commitTs        = uint64(90)
 	)
-	tableIDAllocator.Clean()
-	t.Cleanup(tableIDAllocator.Clean)
 
 	decoder := &Decoder{
 		config:         common.NewConfig(config.ProtocolSimple),
-		memo:           newMemoryTableInfoProvider(),
+		memo:           common.NewTableInfoProvider(),
+		allocator:      common.NewTableIDAllocator(),
 		cachedMessages: list.New(),
 	}
 	decoder.msg = &message{
@@ -141,7 +140,7 @@ func TestCachedDMLReturnsMessage(t *testing.T) {
 		Data:          map[string]any{"id": int64(1)},
 	}
 
-	require.Nil(t, decoder.NextDMLMessage())
+	require.Nil(t, decoder.NextDMLEvent())
 	require.Equal(t, 1, decoder.cachedMessages.Len())
 
 	decoder.msg = &message{
@@ -169,32 +168,21 @@ func TestCachedDMLReturnsMessage(t *testing.T) {
 	ddl := decoder.NextDDLEvent()
 	require.NotNil(t, ddl)
 
-	cachedMessages := decoder.GetCachedMessages()
-	require.Len(t, cachedMessages, 1)
+	cachedEvents := decoder.GetCachedEvents()
+	require.Len(t, cachedEvents, 1)
 	require.Zero(t, decoder.cachedMessages.Len())
 
-	dmlMessage := cachedMessages[0]
-	require.Equal(t, physicalTableID, dmlMessage.TableID)
-	require.Equal(t, schema, dmlMessage.Schema)
-	require.Equal(t, table, dmlMessage.Table)
-	require.Equal(t, commitTs, dmlMessage.GetCommitTs())
-	require.Equal(t, commonType.RowTypeInsert, dmlMessage.RowType)
-	require.ElementsMatch(t, []int64{logicalTableID, physicalTableID}, decoder.GetTableIDs(schema, table))
-
-	decoder.msg = &message{
-		Version:  defaultVersion,
-		Type:     MessageTypeWatermark,
-		CommitTs: commitTs + 1,
-	}
-	dmlEvent := dmlMessage.ToDMLEvent()
-	require.NotNil(t, dmlEvent)
-	require.Equal(t, physicalTableID, dmlEvent.GetTableID())
-	require.Equal(t, commitTs, dmlEvent.GetCommitTs())
+	dmlEvent := cachedEvents[0]
+	require.Equal(t, physicalTableID, dmlEvent.PhysicalTableID)
 	require.Equal(t, schema, dmlEvent.TableInfo.GetSchemaName())
 	require.Equal(t, table, dmlEvent.TableInfo.GetTableName())
-	require.NotNil(t, decoder.msg)
-	require.Equal(t, MessageTypeWatermark, decoder.msg.Type)
-	require.Equal(t, commitTs+1, decoder.msg.CommitTs)
+	require.Equal(t, commitTs, dmlEvent.CommitTs)
+	require.Equal(t, []commonType.RowType{commonType.RowTypeInsert}, dmlEvent.RowTypes)
+	require.ElementsMatch(t, []int64{logicalTableID, physicalTableID}, decoder.GetTableIDs(schema, table))
+
+	require.Equal(t, physicalTableID, dmlEvent.GetTableID())
+	require.Equal(t, schema, dmlEvent.TableInfo.GetSchemaName())
+	require.Equal(t, table, dmlEvent.TableInfo.GetTableName())
 }
 
 // TestDecodedTableInfoLocatesRowByPrimaryKey checks the table info this decoder
