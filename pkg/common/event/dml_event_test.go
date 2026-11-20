@@ -19,6 +19,7 @@ import (
 	"testing"
 
 	"github.com/pingcap/ticdc/pkg/common"
+	"github.com/pingcap/ticdc/pkg/filter"
 	"github.com/pingcap/ticdc/pkg/integrity"
 	"github.com/pingcap/tidb/pkg/meta/model"
 	parser_model "github.com/pingcap/tidb/pkg/parser/model"
@@ -55,19 +56,19 @@ func TestDMLEventBasicEncodeAndDecode(t *testing.T) {
 		err := e.AppendRow(&common.RawKVEntry{
 			OpType: common.OpTypePut,
 			Value:  []byte("value1"),
-		}, mockDecodeRawKVToChunk, nil)
+		}, mockDecodeRawKVToChunk, nil, filter.DMLFilterContext{})
 		require.Nil(t, err)
 		// update
 		err = e.AppendRow(&common.RawKVEntry{
 			OpType:   common.OpTypePut,
 			Value:    []byte("value1"),
 			OldValue: []byte("old_value1"),
-		}, mockDecodeRawKVToChunk, nil)
+		}, mockDecodeRawKVToChunk, nil, filter.DMLFilterContext{})
 		require.Nil(t, err)
 		// delete
 		err = e.AppendRow(&common.RawKVEntry{
 			OpType: common.OpTypeDelete,
-		}, mockDecodeRawKVToChunk, nil)
+		}, mockDecodeRawKVToChunk, nil, filter.DMLFilterContext{})
 		require.Nil(t, err)
 	}
 	// TableInfo is not encoded, for test comparison purpose, set it to nil.
@@ -247,7 +248,7 @@ func TestDMLEventAppendSparseChecksums(t *testing.T) {
 					}
 					return count, tc.checksums[i], nil
 				}
-				require.NoError(t, input.AppendRow(raw, decode, nil))
+				require.NoError(t, input.AppendRow(raw, decode, nil, filter.DMLFilterContext{}))
 			}
 			require.EqualValues(t, 5, input.Length)
 			require.Len(t, input.RowTypes, 6, "updates contain two physical rows")

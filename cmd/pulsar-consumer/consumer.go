@@ -22,6 +22,7 @@ import (
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/errors"
 	tpulsar "github.com/pingcap/ticdc/pkg/sink/pulsar"
+	"github.com/pingcap/ticdc/pkg/util"
 	"go.uber.org/zap"
 	"golang.org/x/sync/errgroup"
 )
@@ -63,7 +64,7 @@ func newConsumer(ctx context.Context, option *option) *consumer {
 			auth.ConfigParamScope:     option.oauth2Scope,
 			auth.ConfigParamType:      auth.ConfigParamTypeClientCredentials,
 		})
-		log.Info("oauth2 authentication is enabled", zap.String("issuerUrl", option.oauth2IssuerURL))
+		log.Info("oauth2 authentication is enabled", zap.String("issuerUrl", util.MaskSensitiveDataInURIForError(option.oauth2IssuerURL)))
 		clientOption.Authentication = authentication
 	}
 	if len(option.mtlsAuthTLSCertificatePath) != 0 {

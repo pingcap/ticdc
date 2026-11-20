@@ -163,7 +163,8 @@ func (s *eventScanner) scan(
 		s.schemaGetter,
 		dispatcherStat.filter,
 		dispatcherStat.info.IsOutputRawChangeEvent(),
-		s.mode)
+		s.mode,
+		dispatcherStat.info.EnableIgnoreUpdateOnlyColumns())
 	scanCtx.processor.txnOrderMatcher = dispatcherStat.txnOrderMatcher
 	scanCtx.processor.ctx = ctx
 	scanCtx.processor.dispatcherStat = dispatcherStat
@@ -827,6 +828,7 @@ func (t *TxnEvent) AppendRow(
 		chk *chunk.Chunk,
 	) (int, *integrity.Checksum, error),
 	filter filter.Filter,
+	filterContext filter.DMLFilterContext,
 ) error {
 	if t.shouldSplitTxn && (t.CurrentDMLEvent.Len() >= t.DMLEventMaxRows || t.CurrentDMLEvent.GetSize() >= t.DMLEventMaxBytes) {
 		newDMLEvent := event.NewDMLEvent(
@@ -841,7 +843,7 @@ func (t *TxnEvent) AppendRow(
 			return err
 		}
 	}
-	return t.CurrentDMLEvent.AppendRow(rawEvent, decode, filter)
+	return t.CurrentDMLEvent.AppendRow(rawEvent, decode, filter, filterContext)
 }
 
 func (t *TxnEvent) observeRawKVBytes(rawEvent *common.RawKVEntry) {
@@ -865,6 +867,7 @@ type dmlProcessor struct {
 
 	filter                   filter.Filter
 	txnOrderMatcher          *ordering.TxnOrderMatcher
+	filterContext            filter.DMLFilterContext
 	dispatcherStat           *dispatcherStat
 	spillDir                 string
 	cleanupLargeTxnAfterScan bool
@@ -892,7 +895,8 @@ type dmlProcessor struct {
 // newDMLProcessor creates a new DML processor
 func newDMLProcessor(
 	mounter event.Mounter, schemaGetter schemaGetter,
-	filter filter.Filter, outputRawChangeEvent bool, mode int64,
+	dmlFilter filter.Filter, outputRawChangeEvent bool, mode int64,
+	enableIgnoreUpdateOnlyColumns bool,
 ) *dmlProcessor {
 	// Preserve legacy raw UPDATE records for redo applier integration tests.
 	failpoint.Inject("OutputRawRedoUpdates", func() {
@@ -900,11 +904,16 @@ func newDMLProcessor(
 			outputRawChangeEvent = true
 		}
 	})
+	filterContext := filter.DMLFilterContext{}
+	if enableIgnoreUpdateOnlyColumns {
+		filterContext.EnableIgnoreUpdateOnlyColumns = true
+	}
 	return &dmlProcessor{
 		ctx:                  context.Background(),
 		mounter:              mounter,
 		schemaGetter:         schemaGetter,
-		filter:               filter,
+		filter:               dmlFilter,
+		filterContext:        filterContext,
 		batchDML:             event.NewBatchDMLEvent(),
 		insertRowCache:       make([]*common.RawKVEntry, 0),
 		spillDir:             getLargeTxnInsertSpillDir(),
@@ -954,7 +963,7 @@ func (p *dmlProcessor) flushCachedInsertRows() error {
 		return nil
 	}
 	for _, insertRow := range p.insertRowCache {
-		if err := p.currentTxn.AppendRow(insertRow, p.mounter.DecodeToChunk, p.filter); err != nil {
+		if err := p.currentTxn.AppendRow(insertRow, p.mounter.DecodeToChunk, p.filter, p.filterContext); err != nil {
 			return err
 		}
 	}
@@ -967,7 +976,7 @@ func (p *dmlProcessor) appendInsertRow(rawEvent *common.RawKVEntry) error {
 		log.Panic("no current DML event to append to")
 	}
 	rawEvent.Key = event.RemoveKeyspacePrefix(rawEvent.Key)
-	return p.currentTxn.AppendRow(rawEvent, p.mounter.DecodeToChunk, p.filter)
+	return p.currentTxn.AppendRow(rawEvent, p.mounter.DecodeToChunk, p.filter, p.filterContext)
 }
 
 // appendRow appends a row to the current DML event.
@@ -1018,7 +1027,7 @@ func (p *dmlProcessor) appendRow(rawEvent *common.RawKVEntry) error {
 		if ignore {
 			return nil
 		}
-		return p.currentTxn.AppendRow(rawEvent, p.mounter.DecodeToChunk, p.filter)
+		return p.currentTxn.AppendRow(rawEvent, p.mounter.DecodeToChunk, p.filter, p.filterContext)
 	}
 
 	var (
@@ -1044,7 +1053,7 @@ func (p *dmlProcessor) appendRow(rawEvent *common.RawKVEntry) error {
 	updateMetricEventServiceSendDMLTypeCount(p.mode, rawType, shouldSplit)
 
 	if !shouldSplit {
-		return p.currentTxn.AppendRow(rawEvent, p.mounter.DecodeToChunk, p.filter)
+		return p.currentTxn.AppendRow(rawEvent, p.mounter.DecodeToChunk, p.filter, p.filterContext)
 	}
 
 	log.Debug("split update event", zap.Uint64("startTs", rawEvent.StartTs),
@@ -1078,7 +1087,7 @@ func (p *dmlProcessor) appendRow(rawEvent *common.RawKVEntry) error {
 	if ignoreDelete {
 		return nil
 	}
-	return p.currentTxn.AppendRow(deleteRow, p.mounter.DecodeToChunk, p.filter)
+	return p.currentTxn.AppendRow(deleteRow, p.mounter.DecodeToChunk, p.filter, p.filterContext)
 }
 
 func (p *dmlProcessor) shouldIgnoreRawEventByDMLType(rawEvent *common.RawKVEntry) (bool, error) {

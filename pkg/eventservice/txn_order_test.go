@@ -69,7 +69,7 @@ func TestTxnOrderPartitionValidationRespectsFiltering(t *testing.T) {
 	for _, table := range []string{"ordered", "unordered", "excluded"} {
 		t.Run(table, func(t *testing.T) {
 			tableInfo := helper.DDL2Event("CREATE TABLE test." + table + " (id INT PRIMARY KEY) PARTITION BY HASH(id) PARTITIONS 2").TableInfo
-			processor := newDMLProcessor(nil, nil, f, false, common.DefaultMode)
+			processor := newDMLProcessor(nil, nil, f, false, common.DefaultMode, false)
 			processor.txnOrderMatcher = matcher
 			err := processor.startTxn(common.NewDispatcherID(), tableInfo.TableName.TableID, tableInfo, 1, 2, true)
 			if table == "ordered" {
