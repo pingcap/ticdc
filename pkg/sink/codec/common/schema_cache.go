@@ -24,9 +24,8 @@ import (
 // one provider: a decoder that lags behind still reads the version its message
 // asks for, and versions are released once the watermark passes them.
 type TableInfoProvider struct {
-	mu      sync.RWMutex
-	tables  map[accessKey]*tableVersions
-	changed chan struct{}
+	mu     sync.RWMutex
+	tables map[accessKey]*tableVersions
 }
 
 type entry struct {
@@ -57,7 +56,6 @@ func (c *TableInfoProvider) Write(schema, table string, version uint64, info *co
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.table(schema, table).set(version, info)
-	c.notify()
 }
 
 // Read returns the table info of exactly the requested version.
@@ -104,16 +102,6 @@ func (c *TableInfoProvider) ReleaseBefore(watermark uint64) {
 	}
 }
 
-// Changes returns a channel closed on the next write.
-func (c *TableInfoProvider) Changes() <-chan struct{} {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if c.changed == nil {
-		c.changed = make(chan struct{})
-	}
-	return c.changed
-}
-
 func (c *TableInfoProvider) table(schema, table string) *tableVersions {
 	key := newAccessKey(schema, table)
 	versions := c.tables[key]
@@ -122,13 +110,6 @@ func (c *TableInfoProvider) table(schema, table string) *tableVersions {
 		c.tables[key] = versions
 	}
 	return versions
-}
-
-func (c *TableInfoProvider) notify() {
-	if c.changed != nil {
-		close(c.changed)
-		c.changed = nil
-	}
 }
 
 // tableVersions holds the versions of one table in ascending order. A table has
@@ -166,19 +147,19 @@ func (t *tableVersions) get(version uint64) *commonType.TableInfo {
 }
 
 func (t *tableVersions) set(version uint64, info *commonType.TableInfo) {
-	for i := len(t.entries) - 1; i >= 0; i-- {
+	for i, e := range t.entries {
 		switch {
-		case t.entries[i].version == version:
+		case e.version == version:
 			if info != nil {
 				t.entries[i].info = info
 			}
 			return
-		case t.entries[i].version < version:
-			t.entries = slices.Insert(t.entries, i+1, entry{version: version, info: info})
+		case e.version > version:
+			t.entries = slices.Insert(t.entries, i, entry{version: version, info: info})
 			return
 		}
 	}
-	t.entries = slices.Insert(t.entries, 0, entry{version: version, info: info})
+	t.entries = append(t.entries, entry{version: version, info: info})
 }
 
 func (t *tableVersions) releaseBefore(watermark uint64) {
