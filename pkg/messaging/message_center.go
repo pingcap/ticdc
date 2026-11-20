@@ -506,10 +506,7 @@ func decodeHandshakeMessage(msg *proto.Message) (*HandshakeMessage, error) {
 		}
 	}
 	if msg.From == "" {
-		return nil, errors.AppError{
-			Type:   errors.ErrorTypeInvalidMessage,
-			Reason: "handshake message has no sender",
-		}
+		return nil, errors.ErrDecodeFailed.FastGenByArgs("handshake message has no sender")
 	}
 
 	handshake := &HandshakeMessage{}
@@ -521,10 +518,7 @@ func decodeHandshakeMessage(msg *proto.Message) (*HandshakeMessage, error) {
 	}
 	// A peer may only open the streams this node knows how to serve.
 	if handshake.StreamType != streamTypeEvent && handshake.StreamType != streamTypeCommand {
-		return nil, errors.AppError{
-			Type:   errors.ErrorTypeInvalidMessage,
-			Reason: fmt.Sprintf("unknown stream type %q", handshake.StreamType),
-		}
+		return nil, errors.ErrDecodeFailed.FastGenByArgs(fmt.Sprintf("unknown stream type %q", handshake.StreamType))
 	}
 	return handshake, nil
 }
