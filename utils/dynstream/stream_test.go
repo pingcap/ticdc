@@ -53,6 +53,7 @@ func newMockEvent(id int, path string, sleep time.Duration, work mockWork, start
 type mockHandler struct {
 	mu            sync.Mutex
 	droppedEvents []*mockEvent
+	dropEvent     *mockEvent
 }
 
 func (h *mockHandler) Path(event *mockEvent) string {
@@ -89,7 +90,7 @@ func (h *mockHandler) OnDrop(event *mockEvent) interface{} {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	h.droppedEvents = append(h.droppedEvents, event)
-	return nil
+	return h.dropEvent
 }
 
 func (h *mockHandler) drainDroppedEvents() []*mockEvent {
@@ -206,6 +207,20 @@ func TestPathInfo(t *testing.T) {
 	require.Equal(t, 1, pi.area)
 	require.Equal(t, "test/path", pi.path)
 	require.Equal(t, int64(0), pi.pendingSize.Load())
+}
+
+func TestDropPoppedBatchAfterRemovePath(t *testing.T) {
+	handler := mockHandler{}
+	stream := newStream(1, "test", &handler, Option{}, newTestBatchConfigRegistry())
+	path := newPathInfo[int, string, *mockEvent, any, *mockHandler](1, "test", "test/path", nil)
+	events := []*mockEvent{{id: 1}, {id: 2}}
+
+	require.False(t, stream.dropBatchIfPathRemoved(path, events))
+	require.Empty(t, handler.drainDroppedEvents())
+
+	path.removed.Store(true)
+	require.True(t, stream.dropBatchIfPathRemoved(path, events))
+	require.Equal(t, events, handler.drainDroppedEvents())
 }
 
 func TestStreamEvictsOldestBatchMetricCacheEntry(t *testing.T) {
