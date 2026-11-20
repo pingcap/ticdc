@@ -329,7 +329,7 @@ func (d *decoder) queryTableInfoFromPayload(
 	if tableInfo != nil {
 		return tableInfo
 	}
-	tableInfo = newTableInfoFromPayload(schemaName, tableName, keyPayload, valuePayload, valueSchema)
+	tableInfo = newTableInfoFromPayload(schemaName, tableName, keyPayload, valueSchema)
 	d.cache.Write(schemaName, tableName, version, tableInfo)
 	return tableInfo
 }
@@ -337,7 +337,6 @@ func (d *decoder) queryTableInfoFromPayload(
 func newTableInfoFromPayload(
 	schemaName, tableName string,
 	keyPayload map[string]any,
-	valuePayload map[string]any,
 	valueSchema map[string]any,
 ) *commonType.TableInfo {
 	tidbTableInfo := new(timodel.TableInfo)
