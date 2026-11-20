@@ -435,10 +435,7 @@ func (s *schemaStore) Close(ctx context.Context) error {
 			log.Warn("schema store close failed", zap.Uint32("keyspaceID", keyspaceID), zap.Error(err))
 		}
 		if store.gcKeeper != nil {
-			err := closeSchemaStoreGCKeeper(keyspaceID, store.gcKeeper)
-			if err != nil {
-				log.Warn("gc keeper close failed", zap.Uint32("keyspaceID", keyspaceID), zap.Error(err))
-			}
+			_ = closeSchemaStoreGCKeeper(keyspaceID, store.gcKeeper)
 		}
 	}
 	log.Info("schema store closed", zap.Uint32s("keyspaceIDs", keyspaceIDs))
@@ -646,10 +643,7 @@ func (s *schemaStore) RegisterKeyspace(
 	storage := newPersistentStorage(keyspaceCtx, s.root, keyspaceMeta.ID, s.pdCli, kvStorage)
 	if err := storage.initialize(initializationCtx, gcSafePoint); err != nil {
 		cancelKeyspace()
-		if closeErr := closeSchemaStoreGCKeeper(keyspaceMeta.ID, gcKeeper); closeErr != nil {
-			log.Warn("cleanup schema store gc keeper failed after storage init error",
-				zap.Any("keyspace", keyspaceMeta), zap.Error(closeErr))
-		}
+		_ = closeSchemaStoreGCKeeper(keyspaceMeta.ID, gcKeeper)
 		return err
 	}
 	store := &keyspaceSchemaStore{
@@ -693,10 +687,7 @@ func (s *schemaStore) RegisterKeyspace(
 			log.Warn("cleanup schema store failed after fetcher init error",
 				zap.Any("keyspace", keyspaceMeta), zap.Error(closeErr))
 		}
-		if closeErr := closeSchemaStoreGCKeeper(keyspaceMeta.ID, gcKeeper); closeErr != nil {
-			log.Warn("cleanup schema store gc keeper failed after fetcher init error",
-				zap.Any("keyspace", keyspaceMeta), zap.Error(closeErr))
-		}
+		_ = closeSchemaStoreGCKeeper(keyspaceMeta.ID, gcKeeper)
 		return err
 	}
 	store.dataStorage.run()
