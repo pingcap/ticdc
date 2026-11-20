@@ -132,6 +132,12 @@ func (c *client) DecryptMasterKey(ctx context.Context, ciphertext []byte, keyID 
 		plaintext, err := decryptor.Decrypt(ctx, keyID, ciphertext)
 		if err != nil {
 			err = util.MaskSensitiveDataInURLError(err)
+			log.Warn("failed to decrypt master key via aws kms",
+				zap.String("vendor", vendor),
+				zap.String("keyID", keyID),
+				zap.String("region", awsCfg.Region),
+				zap.String("endpoint", util.MaskSensitiveDataInURIForError(awsCfg.Endpoint)),
+				zap.Error(err))
 			return nil, cerrors.ErrDecodeFailed.Wrap(err)
 		}
 		return plaintext, nil
@@ -149,6 +155,11 @@ func (c *client) DecryptMasterKey(ctx context.Context, ciphertext []byte, keyID 
 		plaintext, err := decryptor.Decrypt(ctx, keyID, ciphertext)
 		if err != nil {
 			err = util.MaskSensitiveDataInURLError(err)
+			log.Warn("failed to decrypt master key via gcp kms",
+				zap.String("vendor", vendor),
+				zap.String("keyID", keyID),
+				zap.String("endpoint", util.MaskSensitiveDataInURIForError(gcpCfg.Endpoint)),
+				zap.Error(err))
 			return nil, cerrors.ErrDecodeFailed.Wrap(err)
 		}
 		return plaintext, nil
