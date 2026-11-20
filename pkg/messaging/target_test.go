@@ -89,6 +89,7 @@ func TestDecodeHandshakeMessageRejectsMalformedInput(t *testing.T) {
 	}
 
 	decoded, err := decodeHandshakeMessage(&proto.Message{
+		From:    "peer-a",
 		Type:    int32(TypeMessageHandShake),
 		Payload: [][]byte{payload},
 	})
