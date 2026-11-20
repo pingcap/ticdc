@@ -112,25 +112,16 @@ func (m *encryptionMetaManager) GetCurrentDataKey(ctx context.Context, keyspaceI
 	}
 
 	if meta.Current == nil || meta.Current.DataKeyId == 0 {
-		log.Warn("encryption meta current data key ID is empty",
-			zap.Uint32("keyspaceID", keyspaceID))
 		return nil, "", 0, cerrors.ErrDataKeyNotFound.GenWithStackByArgs("current data key ID is empty")
 	}
 
 	currentKeyID, err := encodeDataKeyID24BE(meta.Current.DataKeyId)
 	if err != nil {
-		log.Warn("failed to encode current data key ID",
-			zap.Uint32("keyspaceID", keyspaceID),
-			zap.Uint32("dataKeyID", meta.Current.DataKeyId),
-			zap.Error(err))
 		return nil, "", 0, err
 	}
 
 	version := byte(meta.Current.DataKeyId & 0xFF)
 	if version == VersionUnencrypted {
-		log.Warn("invalid encryption meta version derived from current data key ID",
-			zap.Uint32("keyspaceID", keyspaceID),
-			zap.Uint32("dataKeyID", meta.Current.DataKeyId))
 		return nil, "", 0, cerrors.ErrEncryptionFailed.GenWithStackByArgs("version must be non-zero")
 	}
 
@@ -150,9 +141,6 @@ func (m *encryptionMetaManager) GetCurrentDataKey(ctx context.Context, keyspaceI
 
 	dataKey, ok := meta.DataKeys[meta.Current.DataKeyId]
 	if !ok {
-		log.Warn("current data key not found in encryption meta",
-			zap.Uint32("keyspaceID", keyspaceID),
-			zap.Uint32("dataKeyID", meta.Current.DataKeyId))
 		return nil, "", 0, cerrors.ErrDataKeyNotFound.GenWithStackByArgs("current data key not found")
 	}
 
@@ -198,27 +186,16 @@ func (m *encryptionMetaManager) GetDataKey(ctx context.Context, keyspaceID uint3
 	}
 
 	if meta == nil {
-		log.Warn("encryption not enabled when looking up data key",
-			zap.Uint32("keyspaceID", keyspaceID),
-			zap.Binary("dataKeyID", []byte(dataKeyID)))
 		return nil, cerrors.ErrDataKeyNotFound.GenWithStackByArgs("encryption not enabled")
 	}
 
 	id, err := decodeDataKeyID24BE(dataKeyID)
 	if err != nil {
-		log.Warn("failed to decode data key ID",
-			zap.Uint32("keyspaceID", keyspaceID),
-			zap.Binary("dataKeyID", []byte(dataKeyID)),
-			zap.Error(err))
 		return nil, err
 	}
 
 	dataKey, ok := meta.DataKeys[id]
 	if !ok {
-		log.Warn("data key not found in encryption meta",
-			zap.Uint32("keyspaceID", keyspaceID),
-			zap.Uint32("dataKeyID", id),
-			zap.Binary("dataKeyIDBytes", []byte(dataKeyID)))
 		return nil, cerrors.ErrDataKeyNotFound.GenWithStackByArgs("data key not found: " + dataKeyID)
 	}
 
@@ -304,7 +281,6 @@ func (m *encryptionMetaManager) getMeta(ctx context.Context, keyspaceID uint32) 
 // decryptDataKey decrypts a data key using the master key
 func (m *encryptionMetaManager) decryptDataKey(ctx context.Context, masterKey *MasterKey, dataKeyCiphertext []byte) ([]byte, error) {
 	if masterKey == nil {
-		log.Warn("failed to decrypt data key: master key is nil")
 		return nil, cerrors.ErrDecodeFailed.GenWithStackByArgs("master key is nil")
 	}
 
@@ -318,21 +294,17 @@ func (m *encryptionMetaManager) decryptDataKey(ctx context.Context, masterKey *M
 		masterKey.Endpoint,
 	)
 	if err != nil {
-		return nil, cerrors.ErrDecodeFailed.Wrap(err)
+		return nil, err
 	}
 
 	if len(masterKeyPlaintext) != 32 {
-		log.Warn("invalid master key plaintext length",
-			zap.Int("length", len(masterKeyPlaintext)))
 		return nil, cerrors.ErrDecodeFailed.GenWithStackByArgs("master key plaintext must be 32 bytes")
 	}
 
 	// Decrypt data key using master key (AES-CTR).
 	block, err := aes.NewCipher(masterKeyPlaintext)
 	if err != nil {
-		log.Warn("failed to initialize AES cipher for data key decryption",
-			zap.Error(err))
-		return nil, cerrors.ErrDecodeFailed.Wrap(err)
+		return nil, cerrors.WrapError(cerrors.ErrDecodeFailed, err)
 	}
 
 	// New format: [iv(16)][ciphertext(payload)].
@@ -362,10 +334,7 @@ func (m *encryptionMetaManager) decryptDataKey(ctx context.Context, masterKey *M
 		block, make([]byte, aes.BlockSize), dataKeyCiphertext, false,
 	)
 	if err != nil {
-		log.Warn("invalid data key ciphertext",
-			zap.Int("length", len(dataKeyCiphertext)),
-			zap.Error(err))
-		return nil, cerrors.ErrDecodeFailed.Wrap(err)
+		return nil, err
 	}
 	fields := []zap.Field{
 		zap.String("format", "legacy_zero_iv"),
