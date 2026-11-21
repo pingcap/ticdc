@@ -39,9 +39,11 @@ import (
 	"github.com/pingcap/ticdc/maintainer/replica"
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/common/event"
+	"github.com/pingcap/ticdc/pkg/etcd"
 	"github.com/pingcap/ticdc/pkg/eventservice"
 	"github.com/pingcap/ticdc/pkg/logger"
 	"github.com/pingcap/ticdc/pkg/messaging"
+	"github.com/pingcap/ticdc/pkg/orchestrator"
 	redoCommon "github.com/pingcap/ticdc/pkg/redo/common"
 	"github.com/pingcap/ticdc/pkg/redo/writer"
 	"github.com/pingcap/ticdc/pkg/sink/codec"
@@ -97,4 +99,6 @@ func registerMetrics() {
 	pulsar.RegisterMetrics(registry)
 	gc.RegisterMetrics(registry)
 	dynstream.RegisterMetrics(registry)
+	etcd.RegisterMetrics(registry)
+	orchestrator.RegisterMetrics(registry)
 }
