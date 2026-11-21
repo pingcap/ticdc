@@ -604,6 +604,12 @@ func (s *remoteMessageTarget) handleIncomingMessage(ctx context.Context, stream 
 			return err
 		}
 
+		if message.From != string(s.targetId) || message.To != string(s.messageCenterID) {
+			return errors.ErrInvalidMessage.FastGen(
+				"sender or receiver does not match the connection, sender: %s, receiver: %s",
+				message.From, message.To)
+		}
+
 		mt := IOType(message.Type)
 
 		targetMsg := &TargetMessage{
