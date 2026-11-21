@@ -183,6 +183,9 @@ func (m *DispatcherOrchestrator) handleBootstrapRequest(
 	if m.fenced.Load() {
 		return nil
 	}
+	if err := validateChangefeedIdentity(req.ChangefeedID); err != nil {
+		return err
+	}
 	cfId := common.NewChangefeedIDFromPB(req.ChangefeedID)
 	maintainerEpoch := req.MaintainerEpoch
 
@@ -358,6 +361,16 @@ func (m *DispatcherOrchestrator) handleBootstrapRequest(
 	response := createBootstrapResponse(req.ChangefeedID, manager, startTs, redoStartTs)
 	manager.MaintainerFenceMu.Unlock()
 	return m.sendResponse(from, messaging.MaintainerManagerTopic, response)
+}
+
+func validateChangefeedIdentity(changefeedID *heartbeatpb.ChangefeedID) error {
+	if changefeedID == nil {
+		return common.ValidateChangefeedID("")
+	}
+	if err := common.ValidateChangefeedID(changefeedID.Name); err != nil {
+		return err
+	}
+	return common.ValidateKeyspace(changefeedID.Keyspace)
 }
 
 // bootstrapTableTrigger describes one table trigger flavor during bootstrap

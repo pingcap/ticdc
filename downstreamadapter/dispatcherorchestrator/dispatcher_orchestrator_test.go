@@ -81,6 +81,20 @@ func TestOrchestratorShard_CloseWaitsForRunningHandler(t *testing.T) {
 	}
 }
 
+func TestValidateChangefeedIdentity(t *testing.T) {
+	t.Parallel()
+
+	require.NoError(t, validateChangefeedIdentity(
+		common.NewChangeFeedIDWithName("cf-1", "tenant_a").ToPB()))
+	for _, changefeedID := range []*heartbeatpb.ChangefeedID{
+		nil,
+		{Name: "bad'name", Keyspace: "default"},
+		{Name: "valid-name", Keyspace: "bad'keyspace"},
+	} {
+		require.Error(t, validateChangefeedIdentity(changefeedID))
+	}
+}
+
 func TestOrchestratorShard_RunIsIdempotent(t *testing.T) {
 	t.Parallel()
 

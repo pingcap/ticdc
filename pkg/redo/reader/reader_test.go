@@ -319,6 +319,27 @@ func TestReadMetaPreservesKeyspace(t *testing.T) {
 	}
 }
 
+func TestGetChangefeedFromMetaPathValidatesIdentity(t *testing.T) {
+	t.Parallel()
+
+	valid := fmt.Sprintf(redo.RedoMetaFileFormat, "capture", "tenant_a", "cf-1", redo.RedoMetaFileType, "uuid", redo.MetaEXT)
+	changefeedID, err := getChangefeedFromMetaPath(valid)
+	require.NoError(t, err)
+	require.Equal(t, "tenant_a", changefeedID.Keyspace())
+	require.Equal(t, "cf-1", changefeedID.Name())
+
+	for _, invalid := range []string{
+		"short.meta",
+		"capture_default_bad'name_meta_uuid.meta",
+		"capture_bad'keyspace_cf-1_meta_uuid.meta",
+		"capture_default_cf-1_dml_uuid.meta",
+		"capture_default_cf-1_meta_.meta",
+	} {
+		_, err := getChangefeedFromMetaPath(invalid)
+		require.Error(t, err, invalid)
+	}
+}
+
 func TestLogHeapLess(t *testing.T) {
 	tests := []struct {
 		name   string

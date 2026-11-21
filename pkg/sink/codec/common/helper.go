@@ -425,22 +425,12 @@ func MustSnapshotQuery(
 			zap.Uint64("commitTs", commitTs), zap.Error(err))
 	}
 
-	// 2. query the whole row
-	columns := "*"
-	if len(projection) > 0 {
-		columns = projection[0]
-	}
-	query = fmt.Sprintf("select %s from %s.%s where ", columns, schema, table)
-	var whereClause string
-	for name, value := range conditions {
-		if whereClause != "" {
-			whereClause += " and "
-		}
-		whereClause += fmt.Sprintf("%s = %v", name, value)
-	}
-	query += whereClause
+	// 2. query the whole row. Identifiers and values can originate from MQ
+	// messages, so quote identifiers and bind values instead of interpolating
+	// them into SQL text.
+	query, args := buildSnapshotQuery(schema, table, conditions, projection...)
 
-	rows, err := conn.QueryContext(ctx, query)
+	rows, err := conn.QueryContext(ctx, query, args...)
 	if err != nil {
 		log.Panic("query row failed",
 			zap.String("query", util.RedactValue(query)),
@@ -468,6 +458,38 @@ func MustSnapshotQuery(
 		}
 	}
 	return holder
+}
+
+func buildSnapshotQuery(
+	schema, table string, conditions map[string]any, projection ...string,
+) (string, []any) {
+	columns := "*"
+	if len(projection) > 0 {
+		columns = projection[0]
+	}
+
+	names := make([]string, 0, len(conditions))
+	for name := range conditions {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+
+	var builder strings.Builder
+	builder.WriteString("select ")
+	builder.WriteString(columns)
+	builder.WriteString(" from ")
+	builder.WriteString(commonType.QuoteSchema(schema, table))
+	builder.WriteString(" where ")
+	args := make([]any, 0, len(names))
+	for i, name := range names {
+		if i > 0 {
+			builder.WriteString(" and ")
+		}
+		builder.WriteString(commonType.QuoteName(name))
+		builder.WriteString(" = ?")
+		args = append(args, conditions[name])
+	}
+	return builder.String(), args
 }
 
 // MustBinaryLiteralToInt convert bytes into uint64,

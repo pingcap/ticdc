@@ -921,6 +921,8 @@ func Restore(stmt ast.StmtNode) (string, error) {
 	restoreFlags |= format.RestoreKeyWordUppercase
 	// wrap string with single quote
 	restoreFlags |= format.RestoreStringSingleQuotes
+	// escape backslashes so restored literals keep the same boundary downstream
+	restoreFlags |= format.RestoreStringEscapeBackslash
 	// remove placement rule
 	restoreFlags |= format.SkipPlacementRuleForRestore
 	// force disable ttl

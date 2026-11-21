@@ -53,6 +53,14 @@ func newTestMysqlWriterForDDLTs(t *testing.T) (*Writer, *sql.DB, sqlmock.Sqlmock
 	return writer, db, mock
 }
 
+func TestQuoteSQLStringLiteral(t *testing.T) {
+	t.Parallel()
+
+	require.Equal(t, `'plain'`, quoteSQLStringLiteral("plain"))
+	require.Equal(t, `'path\\name''; DROP TABLE t; -- '`,
+		quoteSQLStringLiteral(`path\name'; DROP TABLE t; -- `))
+}
+
 func newTestMysqlWriterForDDLTsTiDB(t *testing.T) (*Writer, *sql.DB, sqlmock.Sqlmock) {
 	db, mock := newTestMockDBForDDLTs(t)
 
