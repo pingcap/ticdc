@@ -83,6 +83,20 @@ var (
 		Help:      "The number of bytes scanned by event store.",
 	}, []string{"type"})
 
+	eventStoreSSTFileFilterCount = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Namespace: "ticdc",
+		Subsystem: "event_store",
+		Name:      "sst_file_filter_count",
+		Help:      "The number of SST file filter decisions by event store.",
+	}, []string{"decision"})
+
+	eventStoreSSTFileFilterLogicalBytes = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Namespace: "ticdc",
+		Subsystem: "event_store",
+		Name:      "sst_file_filter_logical_bytes",
+		Help:      "The estimated logical bytes in SST files scanned or skipped by event store.",
+	}, []string{"decision"})
+
 	eventStoreDeleteRangeCount = prometheus.NewCounter(
 		prometheus.CounterOpts{
 			Namespace: "ticdc",
@@ -339,6 +353,8 @@ func RegisterMetrics(registry *prometheus.Registry) {
 	registry.MustRegister(eventStoreWriteDurationHistogram)
 	registry.MustRegister(eventStoreScanRequestsCount)
 	registry.MustRegister(eventStoreScanBytes)
+	registry.MustRegister(eventStoreSSTFileFilterCount)
+	registry.MustRegister(eventStoreSSTFileFilterLogicalBytes)
 	registry.MustRegister(eventStoreDeleteRangeCount)
 	registry.MustRegister(eventStoreDeleteRangeFetchedCount)
 	registry.MustRegister(eventStoreSubscriptionResolvedTsLagHist)
