@@ -1,0 +1,18 @@
+# The changefeed enables redo storage for the redo apply phase and routes
+# every table to `${table}_routed`, so each upstream rename generation maps
+# to a distinct downstream generation.
+
+[consistent]
+level = "eventual"
+storage = "file:///tmp/tidb_cdc_test/rename_atomic/redo"
+flush-interval = 1000
+meta-flush-interval = 200
+
+[filter]
+rules = ['rename_atomic.*']
+
+[sink]
+[[sink.dispatchers]]
+matcher = ['rename_atomic.*']
+target-schema = 'rename_atomic'
+target-table = '{table}_routed'

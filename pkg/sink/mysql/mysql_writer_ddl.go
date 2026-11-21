@@ -87,6 +87,23 @@ func (w *Writer) execDDL(event *commonEvent.DDLEvent) error {
 		}
 	}
 
+	query := event.GetDDLQuery()
+	if timodel.ActionType(event.Type) == timodel.ActionRenameTables {
+		var skip bool
+		var err error
+		query, skip, err = commonEvent.FixRenameTablesQuery(event)
+		if err != nil {
+			return err
+		}
+		if skip {
+			log.Info("Skip blank rename tables query",
+				zap.String("changefeed", w.ChangefeedID.String()),
+				zap.Uint64("startTs", event.GetStartTs()),
+				zap.Uint64("commitTs", event.GetCommitTs()))
+			return nil
+		}
+	}
+
 	failpoint.Inject("MySQLSinkExecDDLDelay", func(val failpoint.Value) {
 		delay := time.Hour
 		if seconds, ok := val.(string); ok && seconds != "" {
@@ -158,7 +175,6 @@ func (w *Writer) execDDL(event *commonEvent.DDLEvent) error {
 		}
 	}
 
-	query := event.GetDDLQuery()
 	_, err = tx.ExecContext(ctx, query)
 	if err != nil {
 		log.Error("Fail to ExecContext", zap.Any("err", err), zap.Any("query", query))
@@ -166,13 +182,13 @@ func (w *Writer) execDDL(event *commonEvent.DDLEvent) error {
 			if skipResetAfterDDL {
 				log.Warn("Skip resetting session timestamp after DDL execution failure due to failpoint",
 					zap.String("changefeed", w.ChangefeedID.String()),
-					zap.String("query", event.GetDDLQuery()))
+					zap.String("query", query))
 			} else if tsErr := resetSessionTimestamp(ctx, tx); tsErr != nil {
 				log.Warn("Failed to reset session timestamp after DDL execution failure", zap.Error(tsErr))
 			}
 		}
 		if rbErr := tx.Rollback(); rbErr != nil {
-			log.Error("Failed to rollback", zap.String("sql", event.GetDDLQuery()), zap.Error(rbErr))
+			log.Error("Failed to rollback", zap.String("sql", query), zap.Error(rbErr))
 		}
 		return err
 	}
@@ -182,11 +198,11 @@ func (w *Writer) execDDL(event *commonEvent.DDLEvent) error {
 		if skipResetAfterDDL {
 			log.Warn("Skip resetting session timestamp after DDL execution due to failpoint",
 				zap.String("changefeed", w.ChangefeedID.String()),
-				zap.String("query", event.GetDDLQuery()))
+				zap.String("query", query))
 		} else if err := resetSessionTimestamp(ctx, tx); err != nil {
 			log.Error("Failed to reset session timestamp after DDL execution", zap.Error(err))
 			if rbErr := tx.Rollback(); rbErr != nil {
-				log.Error("Failed to rollback", zap.String("sql", event.GetDDLQuery()), zap.Error(rbErr))
+				log.Error("Failed to rollback", zap.String("sql", query), zap.Error(rbErr))
 			}
 			return errors.WrapError(errors.ErrMySQLTxnError, errors.WithMessage(err, fmt.Sprintf("Query info: %s; ", event.GetDDLQuery())))
 		}
@@ -197,7 +213,7 @@ func (w *Writer) execDDL(event *commonEvent.DDLEvent) error {
 	}
 
 	logFields := []zap.Field{
-		zap.String("query", event.GetDDLQuery()),
+		zap.String("query", query),
 	}
 
 	if useSessionTimestamp {

@@ -54,7 +54,7 @@ mysql_groups=(
 	# G10
 	'overwrite_resume_with_syncpoint restart_changefeed changefeed_error bdr_mode fail_over_ddl_K split_table_check'
 	# G11
-	'pause_changefeed_with_long_time_ddl kill_owner_with_ddl multi_tables_ddl ddl_attributes multi_cdc_cluster fail_over_ddl_L'
+	'pause_changefeed_with_long_time_ddl kill_owner_with_ddl multi_tables_ddl ddl_attributes multi_cdc_cluster fail_over_ddl_L rename_atomic'
 	# G12
 	# ds_memory_control
 	'update_changefeed_check_config row_format tiflash multi_rocks fail_over_ddl_M correctness_for_shared_column_schema partial_index'
