@@ -1136,6 +1136,8 @@ func TestZeroDispatcherQuotaDoesNotSpendScanTokens(t *testing.T) {
 	disp.receivedResolvedTs.Store(102)
 	disp.eventStoreCommitTs.Store(101)
 	disp.availableMemoryQuota.Store(0)
+	lastSignal := time.Now().Add(-defaultSendResolvedTsInterval - time.Second)
+	disp.lastSentResolvedTsTime.Store(lastSignal)
 	shared := atomic.NewUint64(minScanLimitInBytes * 2)
 	status.availableMemoryQuota.Store(node.ID(info.GetServerID()), shared)
 	broker.scanRateLimiter = rate.NewLimiter(0, minScanLimitInBytes*2)
@@ -1146,5 +1148,6 @@ func TestZeroDispatcherQuotaDoesNotSpendScanTokens(t *testing.T) {
 	broker.doScan(context.Background(), disp)
 	require.Equal(t, before, broker.scanRateLimiter.Tokens())
 	require.Equal(t, uint64(minScanLimitInBytes*2), shared.Load())
+	require.True(t, disp.lastSentResolvedTsTime.Load().After(lastSignal), "zero quota must emit a resolved signal")
 	require.Equal(t, cursor, disp.sentResolvedTs.Load(), "unsent DML must not be bypassed by a resolved signal")
 }

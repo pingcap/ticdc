@@ -98,7 +98,7 @@ func (q *eventQueue[A, P, T, D, H]) releasePath(
 		if !ok {
 			break
 		}
-		if notifyDrop {
+		if notifyDrop || path.removed.Load() {
 			q.handler.OnDrop(event.event)
 		}
 	}

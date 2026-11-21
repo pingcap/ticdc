@@ -88,6 +88,8 @@ func TestParallelDynamicStreamRemovePathDropsBufferedEvent(t *testing.T) {
 	require.NoError(t, stream.AddPath(path, "dest"))
 	event := &mockEvent{id: 1, path: path}
 	stream.Push(path, event)
+	// Queue the release before removal while the owner loop is still held.
+	stream.Release(path)
 	require.NoError(t, stream.RemovePath(path))
 	handleWait.Done()
 
