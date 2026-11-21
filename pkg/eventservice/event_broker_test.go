@@ -37,6 +37,7 @@ import (
 	"github.com/tikv/client-go/v2/oracle"
 	"go.uber.org/atomic"
 	"go.uber.org/zap"
+	"golang.org/x/time/rate"
 )
 
 const testTableTriggerKeyspaceID uint32 = 1
@@ -1122,4 +1123,31 @@ func TestAddDispatcherFailure(t *testing.T) {
 
 	_, ok := broker.changefeedMap.Load(dispInfo.GetChangefeedID())
 	require.False(t, ok, "changefeedStatus should be removed after failed registration")
+}
+
+func TestZeroDispatcherQuotaDoesNotSpendScanTokens(t *testing.T) {
+	broker, _, _, _ := newEventBrokerForTest()
+	defer broker.close()
+	info := newMockDispatcherInfoForTest(t)
+	info.epoch = 1
+	info.startTs = 100
+	status := broker.getOrSetChangefeedStatus(info)
+	disp := newDispatcherStat(info, 1, 1, nil, status)
+	disp.receivedResolvedTs.Store(102)
+	disp.eventStoreCommitTs.Store(101)
+	disp.availableMemoryQuota.Store(0)
+	lastSignal := time.Now().Add(-defaultSendResolvedTsInterval - time.Second)
+	disp.lastSentResolvedTsTime.Store(lastSignal)
+	shared := atomic.NewUint64(minScanLimitInBytes * 2)
+	status.availableMemoryQuota.Store(node.ID(info.GetServerID()), shared)
+	broker.scanRateLimiter = rate.NewLimiter(0, minScanLimitInBytes*2)
+	needScan, _ := broker.getScanTaskDataRange(disp)
+	require.True(t, needScan, "test must reach the quota gate")
+	before := broker.scanRateLimiter.Tokens()
+	cursor := disp.sentResolvedTs.Load()
+	broker.doScan(context.Background(), disp)
+	require.Equal(t, before, broker.scanRateLimiter.Tokens())
+	require.Equal(t, uint64(minScanLimitInBytes*2), shared.Load())
+	require.True(t, disp.lastSentResolvedTsTime.Load().After(lastSignal), "zero quota must emit a resolved signal")
+	require.Equal(t, cursor, disp.sentResolvedTs.Load(), "unsent DML must not be bypassed by a resolved signal")
 }
