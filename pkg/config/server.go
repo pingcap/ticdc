@@ -24,7 +24,9 @@ import (
 
 	"github.com/pingcap/errors"
 	"github.com/pingcap/log"
+	meteringconfig "github.com/pingcap/metering_sdk/config"
 	cerror "github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/metering"
 	"github.com/pingcap/ticdc/pkg/security"
 	"github.com/pingcap/ticdc/pkg/util"
 	"go.uber.org/zap"
@@ -165,6 +167,9 @@ type ServerConfig struct {
 	Encryption *EncryptionConfig    `toml:"encryption" json:"encryption"`
 	Debug      *DebugConfig         `toml:"debug" json:"debug"`
 	ClusterID  string               `toml:"cluster-id" json:"cluster-id"`
+
+	Metering *meteringconfig.MeteringConfig `toml:"metering" json:"metering,omitempty"`
+
 	// Deprecated: we don't use this field anymore.
 	GcTunerMemoryThreshold uint64  `toml:"gc-tuner-memory-threshold" json:"gc-tuner-memory-threshold"`
 	MemoryLimitPercentage  float64 `toml:"memory-limit-percentage" json:"memory-limit-percentage"`
@@ -200,12 +205,15 @@ func (c *ServerConfig) String() string {
 }
 
 // MaskedForDisplay returns a copy suitable for logs and API responses.
+// It masks the KMS credentials and drops the metering destination, which
+// carries its own storage credentials.
 // It does not modify the active server configuration.
 func (c *ServerConfig) MaskedForDisplay() *ServerConfig {
 	if c == nil {
 		return nil
 	}
 	masked := *c
+	masked.Metering = nil
 	if c.Encryption != nil {
 		encryption := *c.Encryption
 		masked.Encryption = &encryption
@@ -256,6 +264,9 @@ func (c *ServerConfig) Clone() *ServerConfig {
 
 // ValidateAndAdjust validates and adjusts the server configuration
 func (c *ServerConfig) ValidateAndAdjust() error {
+	if err := metering.ValidateConfig(c.Metering); err != nil {
+		return err
+	}
 	if !isValidClusterID(c.ClusterID) {
 		return cerror.ErrInvalidServerOption.GenWithStack(fmt.Sprintf("bad cluster-id"+
 			"please match the pattern \"^[a-zA-Z0-9]+(\\-[a-zA-Z0-9]+)*$\", and not the list of"+
