@@ -25,6 +25,10 @@ import (
 	"go.uber.org/zap"
 )
 
+type blockingMockWork <-chan struct{}
+
+func (w blockingMockWork) Do() { <-w }
+
 func TestParallelDynamicStreamBasic(t *testing.T) {
 	handler := &mockHandler{}
 	option := Option{StreamCount: 4}
@@ -78,7 +82,6 @@ func TestParallelDynamicStreamRemovePathDropsBufferedEvent(t *testing.T) {
 	handleWait.Add(1)
 	stream := newParallelDynamicStream("test", handler, Option{
 		StreamCount: 1,
-		UseBuffer:   true,
 		handleWait:  &handleWait,
 	})
 	stream.Start()
@@ -86,12 +89,21 @@ func TestParallelDynamicStreamRemovePathDropsBufferedEvent(t *testing.T) {
 
 	const path = "test/path"
 	require.NoError(t, stream.AddPath(path, "dest"))
+	pathInfo := stream.pathMap.m[path]
+	blocked := make(chan struct{})
+	unblock := sync.OnceFunc(func() { close(blocked) })
+	defer unblock()
+	var started sync.WaitGroup
+	stream.Push(path, newMockEvent(0, path, 0, blockingMockWork(blocked), &started, nil))
 	event := &mockEvent{id: 1, path: path}
 	stream.Push(path, event)
-	// Queue the release before removal while the owner loop is still held.
+	handleWait.Done()
+	started.Wait()
+	require.Greater(t, pathInfo.pendingSize.Load(), int64(0), "event must be pending before removal")
+	// The owner is handling the first event, so release runs after removal.
 	stream.Release(path)
 	require.NoError(t, stream.RemovePath(path))
-	handleWait.Done()
+	unblock()
 
 	require.Eventually(t, func() bool {
 		if stream.GetMetrics().PendingQueueLen != 0 {
