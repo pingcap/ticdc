@@ -264,6 +264,129 @@ func TestChangeFeedInfoStringMasksSensitiveData(t *testing.T) {
 	require.Equal(t, original, after)
 }
 
+<<<<<<< HEAD
+=======
+func TestChangefeedConfigStringMasksSensitiveData(t *testing.T) {
+	cfg := GetDefaultReplicaConfig()
+	cfg.Sink.KafkaConfig = &KafkaConfig{
+		SASLPassword: new("plain-password-sentinel"),
+	}
+	changefeedConfig := &ChangefeedConfig{
+		SinkURI:    "mysql://user:sink-password-sentinel@127.0.0.1:3306/?secret=uri-secret-sentinel",
+		SinkConfig: cfg.Sink,
+		Consistent: &ConsistentConfig{Storage: util.AddressOf("s3://bucket/prefix?secret-access-key=redo-secret-sentinel")},
+	}
+	original, err := json.Marshal(changefeedConfig)
+	require.NoError(t, err)
+
+	output := changefeedConfig.String()
+	for _, secret := range []string{
+		"sink-password-sentinel",
+		"uri-secret-sentinel",
+		"plain-password-sentinel",
+		"redo-secret-sentinel",
+	} {
+		require.NotContains(t, output, secret)
+	}
+	require.Contains(t, output, "mysql://user:xxxxx@127.0.0.1:3306/?secret=xxxxx")
+	require.Contains(t, output, "secret-access-key=xxxxx")
+	after, err := json.Marshal(changefeedConfig)
+	require.NoError(t, err)
+	require.Equal(t, original, after)
+}
+
+func TestChangefeedConfigStringMasksNestedRedoStorageCredential(t *testing.T) {
+	tests := []struct {
+		name        string
+		storage     string
+		secret      string
+		wantOuter   string
+		wantDisplay string
+	}{
+		{
+			name: "Azure SAS endpoint",
+			storage: "azblob://container/prefix?account-name=account&endpoint=" +
+				"https%3A%2F%2Faccount.blob.core.windows.net%2F%3Fsv%3D2020%26sig%3Dnested-sas-secret-sentinel",
+			secret:      "nested-sas-secret-sentinel",
+			wantOuter:   "account-name=account",
+			wantDisplay: "endpoint=xxxxxx",
+		},
+		{
+			name:        "S3 endpoint userinfo",
+			storage:     "s3://bucket/prefix?region=us-east-1&endpoint=https%3A%2F%2Fuser%3Aendpoint-secret-sentinel%40storage.example",
+			secret:      "endpoint-secret-sentinel",
+			wantOuter:   "region=us-east-1",
+			wantDisplay: "endpoint=xxxxxx",
+		},
+		{
+			name:        "S3 uppercase endpoint userinfo",
+			storage:     "s3://bucket/prefix?region=us-east-1&ENDPOINT=https%3A%2F%2Fuser%3Auppercase-endpoint-secret-sentinel%40storage.example",
+			secret:      "uppercase-endpoint-secret-sentinel",
+			wantOuter:   "region=us-east-1",
+			wantDisplay: "ENDPOINT=xxxxxx",
+		},
+		{
+			name:        "S3 plain endpoint",
+			storage:     "s3://bucket/prefix?region=us-east-1&endpoint=https%3A%2F%2Fstorage.example",
+			wantOuter:   "region=us-east-1",
+			wantDisplay: "endpoint=https%3A%2F%2Fstorage.example",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := &ChangefeedConfig{Consistent: &ConsistentConfig{Storage: &tt.storage}}
+			original, err := json.Marshal(cfg)
+			require.NoError(t, err)
+
+			output := cfg.String()
+			if tt.secret != "" {
+				require.NotContains(t, output, tt.secret)
+			}
+			require.Contains(t, output, tt.wantDisplay)
+			require.Contains(t, output, tt.wantOuter)
+			after, err := json.Marshal(cfg)
+			require.NoError(t, err)
+			require.Equal(t, original, after)
+		})
+	}
+}
+
+// TestChangeFeedInfoRmUnusedFieldsEncoderConcurrency sets a custom concurrency
+// and removes unused fields, retaining it only for sinks with encoders or blackhole.
+func TestChangeFeedInfoRmUnusedFieldsEncoderConcurrency(t *testing.T) {
+	tests := []struct {
+		sinkURI string
+		keep    bool
+	}{
+		{sinkURI: "kafka://127.0.0.1:9092/topic", keep: true},
+		{sinkURI: "pulsar://127.0.0.1:6650/topic", keep: true},
+		{sinkURI: "file:///tmp/cdc", keep: true},
+		{sinkURI: "s3://bucket/cdc", keep: true},
+		{sinkURI: "gcs://bucket/cdc", keep: true},
+		{sinkURI: "azblob://bucket/cdc", keep: true},
+		{sinkURI: "mysql://127.0.0.1:3306"},
+		{sinkURI: "tidb://127.0.0.1:4000"},
+		{sinkURI: "blackhole://", keep: true},
+	}
+	for _, tt := range tests {
+		// Cleanup must preserve the configured value for encoder-backed sinks
+		// while still dropping it for MySQL-compatible sinks.
+		t.Run(tt.sinkURI, func(t *testing.T) {
+			cfg := GetDefaultReplicaConfig()
+			cfg.Sink.EncoderConcurrency = util.AddressOf(16)
+			info := &ChangeFeedInfo{SinkURI: tt.sinkURI, Config: cfg}
+			info.RmUnusedFields()
+			if tt.keep {
+				require.NotNil(t, cfg.Sink.EncoderConcurrency)
+				require.Equal(t, 16, *cfg.Sink.EncoderConcurrency)
+			} else {
+				require.Nil(t, cfg.Sink.EncoderConcurrency)
+			}
+		})
+	}
+}
+
+>>>>>>> b7e1a7058 (*: mask URI credentials and report table IDs (#6844))
 func TestChangeFeedInfoRmUnusedFieldsKeepsTableRouting(t *testing.T) {
 	for _, sinkURI := range []string{"mysql://127.0.0.1:3306", "file:///tmp/cdc"} {
 		t.Run(sinkURI, func(t *testing.T) {
