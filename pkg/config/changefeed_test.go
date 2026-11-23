@@ -264,8 +264,6 @@ func TestChangeFeedInfoStringMasksSensitiveData(t *testing.T) {
 	require.Equal(t, original, after)
 }
 
-<<<<<<< HEAD
-=======
 func TestChangefeedConfigStringMasksSensitiveData(t *testing.T) {
 	cfg := GetDefaultReplicaConfig()
 	cfg.Sink.KafkaConfig = &KafkaConfig{
@@ -352,7 +350,7 @@ func TestChangefeedConfigStringMasksNestedRedoStorageCredential(t *testing.T) {
 }
 
 // TestChangeFeedInfoRmUnusedFieldsEncoderConcurrency sets a custom concurrency
-// and removes unused fields, retaining it only for sinks with encoders or blackhole.
+// and removes unused fields, retaining it only for MQ sinks or blackhole.
 func TestChangeFeedInfoRmUnusedFieldsEncoderConcurrency(t *testing.T) {
 	tests := []struct {
 		sinkURI string
@@ -360,17 +358,16 @@ func TestChangeFeedInfoRmUnusedFieldsEncoderConcurrency(t *testing.T) {
 	}{
 		{sinkURI: "kafka://127.0.0.1:9092/topic", keep: true},
 		{sinkURI: "pulsar://127.0.0.1:6650/topic", keep: true},
-		{sinkURI: "file:///tmp/cdc", keep: true},
-		{sinkURI: "s3://bucket/cdc", keep: true},
-		{sinkURI: "gcs://bucket/cdc", keep: true},
-		{sinkURI: "azblob://bucket/cdc", keep: true},
+		{sinkURI: "file:///tmp/cdc"},
+		{sinkURI: "s3://bucket/cdc"},
+		{sinkURI: "gcs://bucket/cdc"},
+		{sinkURI: "azblob://bucket/cdc"},
 		{sinkURI: "mysql://127.0.0.1:3306"},
 		{sinkURI: "tidb://127.0.0.1:4000"},
 		{sinkURI: "blackhole://", keep: true},
 	}
 	for _, tt := range tests {
-		// Cleanup must preserve the configured value for encoder-backed sinks
-		// while still dropping it for MySQL-compatible sinks.
+		// Cleanup must preserve the configured value for MQ sinks and blackhole.
 		t.Run(tt.sinkURI, func(t *testing.T) {
 			cfg := GetDefaultReplicaConfig()
 			cfg.Sink.EncoderConcurrency = util.AddressOf(16)
@@ -386,7 +383,6 @@ func TestChangeFeedInfoRmUnusedFieldsEncoderConcurrency(t *testing.T) {
 	}
 }
 
->>>>>>> b7e1a7058 (*: mask URI credentials and report table IDs (#6844))
 func TestChangeFeedInfoRmUnusedFieldsKeepsTableRouting(t *testing.T) {
 	for _, sinkURI := range []string{"mysql://127.0.0.1:3306", "file:///tmp/cdc"} {
 		t.Run(sinkURI, func(t *testing.T) {

@@ -174,6 +174,14 @@ func TestMaskSensitiveDataInURI(t *testing.T) {
 			"http://h/p#/callback?authorization=xxxxx",
 		},
 		{
+			"s3://bucket/prefix#ENDPOINT=https%3A%2F%2Fuser%3Afragment-secret-sentinel%40storage.example",
+			"s3://bucket/prefix#ENDPOINT=xxxxx",
+		},
+		{
+			"s3://bucket/prefix#endpoint=https%3A%2F%2Fstorage.example",
+			"s3://bucket/prefix#endpoint=https%3A%2F%2Fstorage.example",
+		},
+		{
 			"http://h/p#/private?region=west",
 			"http://h/p#/private?region=west",
 		},
@@ -233,6 +241,8 @@ func TestContainsSensitiveDataInURI(t *testing.T) {
 		{uri: "s3://bucket/prefix?ENDPOINT=https%3A%2F%2Fuser%3Anested-secret%40storage.example", want: true},
 		{uri: "azblob://container?endpoint=https%3A%2F%2Fstorage.example%2F%3Fsig%3Dnested-secret", want: true},
 		{uri: "s3://bucket/prefix?endpoint=https%3A%2F%2Fstorage.example", want: false},
+		{uri: "s3://bucket/prefix#ENDPOINT=https%3A%2F%2Fuser%3Afragment-secret-sentinel%40storage.example", want: true},
+		{uri: "s3://bucket/prefix#endpoint=https%3A%2F%2Fstorage.example", want: false},
 		{uri: "https://storage.example/?sig=sas-secret", want: true},
 		{uri: "/api?region=west#token=secret-value", want: true},
 		{uri: "https://user:password@registry.example.com/%zz", want: true},

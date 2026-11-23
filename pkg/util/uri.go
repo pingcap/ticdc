@@ -135,13 +135,22 @@ func maskSensitiveDataInQueryLikeText(text string) (string, bool) {
 	parts := strings.Split(queryText, "&")
 	masked := false
 	for i, part := range parts {
-		name, _, hasValue := strings.Cut(part, "=")
+		name, value, hasValue := strings.Cut(part, "=")
 		if !hasValue {
 			continue
 		}
 		decodedName, err := url.QueryUnescape(name)
-		if err != nil || !isSensitiveQueryParameter(decodedName) {
+		if err != nil {
 			continue
+		}
+		if !isSensitiveQueryParameter(decodedName) {
+			if !strings.EqualFold(decodedName, "endpoint") {
+				continue
+			}
+			endpoint, err := url.QueryUnescape(value)
+			if err == nil && !endpointContainsSensitiveData(endpoint) {
+				continue
+			}
 		}
 		parts[i] = name + "=xxxxx"
 		masked = true
