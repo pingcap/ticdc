@@ -66,6 +66,34 @@ func TestDecoderReusesTableInfo(t *testing.T) {
 	require.Equal(t, mysql.TypeLong, first.GetColumns()[0].GetType())
 }
 
+func TestRenameTableInvalidatesCachedTableInfo(t *testing.T) {
+	d := &decoder{config: common.NewConfig(config.ProtocolOpen), idx: 1, cache: common.NewTableInfoProvider()}
+	key := &messageKey{Schema: "test", Table: "a", Ts: 100}
+	cols := map[string]column{"id": {Type: mysql.TypeLong, Flag: primaryKeyFlag, Value: json.Number("1")}}
+	first := d.queryTableInfo(key, &messageRow{Update: cols})
+	require.Same(t, first, d.queryTableInfo(key, &messageRow{Update: cols}))
+
+	k, v, err := encodeDDLEvent(&commonEvent.DDLEvent{
+		SchemaName: "test", TableName: "a", FinishedTs: 200,
+		Type: byte(timodel.ActionRenameTable), Query: "rename table test.a to test.b",
+	}, d.config)
+	require.NoError(t, err)
+	d.AddKeyValue(k, v)
+	typ, ok := d.HasNext()
+	require.True(t, ok)
+	require.Equal(t, common.MessageTypeDDL, typ)
+	d.NextDDLEvent()
+
+	// A row at the DDL commit ts still reads the previous layout.
+	require.Same(t, first, d.queryTableInfo(key, &messageRow{Update: cols}))
+	// Rows after the DDL rebuild, even when they arrive under the old name.
+	key.Ts = 201
+	cols["e"] = column{Type: mysql.TypeVarchar}
+	second := d.queryTableInfo(key, &messageRow{Update: cols})
+	require.NotSame(t, first, second)
+	require.Len(t, second.GetColumns(), 2)
+}
+
 func TestDeleteReusesCompleteTableInfo(t *testing.T) {
 	d := &decoder{cache: common.NewTableInfoProvider()}
 	key := &messageKey{Schema: "test", Table: "t", Ts: 100}

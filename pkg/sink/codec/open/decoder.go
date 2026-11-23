@@ -186,14 +186,14 @@ func (b *decoder) NextDDLEvent() *commonEvent.DDLEvent {
 
 	// Every partition decoder must record the boundary, even though only
 	// partition zero executes the DDL downstream.
-	schema, table := result.SchemaName, result.TableName
 	switch m.Type {
 	case timodel.ActionRenameTable, timodel.ActionRenameTables, timodel.ActionExchangeTablePartition:
-		// These DDLs affect multiple names. Start a new cache interval for all
-		// tables rather than relying on the single name carried by the message.
-		schema, table = "", ""
+		// These DDLs move the layout between names, so the entry cached for a
+		// name may belong to another table afterwards.
+		b.cache.InvalidateAll(result.FinishedTs)
+	default:
+		b.cache.AddDDL(result.SchemaName, result.TableName, result.FinishedTs)
 	}
-	b.cache.AddDDL(schema, table, result.FinishedTs)
 
 	// only the DDL comes from the first partition will be processed.
 	if b.idx == 0 {

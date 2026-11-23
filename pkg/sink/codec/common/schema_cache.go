@@ -25,8 +25,9 @@ import (
 // one provider: a decoder that lags behind still reads the version its message
 // asks for, and versions are released once the watermark passes them.
 type TableInfoProvider struct {
-	mu     sync.RWMutex
-	tables map[accessKey]*tableVersions
+	mu            sync.RWMutex
+	tables        map[accessKey]*tableVersions
+	invalidations []uint64
 }
 
 // NewTableInfoProvider creates an empty versioned provider.
@@ -67,7 +68,24 @@ func (c *TableInfoProvider) Read(schema, table string, version uint64) *commonTy
 func (c *TableInfoProvider) ReadAt(schema, table string, commitTs uint64) (uint64, *commonType.TableInfo) {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
-	return c.tables[newAccessKey(schema, table)].at(commitTs)
+	version, info := c.tables[newAccessKey(schema, table)].at(commitTs)
+	if invalidated := c.lastInvalidation(commitTs); invalidated > version {
+		return invalidated, nil
+	}
+	return version, info
+}
+
+// lastInvalidation returns the newest commit ts of a DDL that invalidated the
+// cached table info, below commitTs. Rows before it still read the cached
+// version: they are flushed before that DDL.
+func (c *TableInfoProvider) lastInvalidation(commitTs uint64) uint64 {
+	i := sort.Search(len(c.invalidations), func(i int) bool {
+		return c.invalidations[i] >= commitTs
+	})
+	if i == 0 {
+		return 0
+	}
+	return c.invalidations[i-1]
 }
 
 // AddDDL records the commit ts of a DDL, so a row can be resolved to the table
@@ -79,6 +97,21 @@ func (c *TableInfoProvider) AddDDL(schema, table string, ts uint64) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.table(schema, table).set(ts, nil)
+}
+
+// InvalidateAll records a DDL after which every cached table info is rebuilt:
+// such a DDL moves the layout between names, so a name may point to another
+// table than it did before.
+func (c *TableInfoProvider) InvalidateAll(ts uint64) {
+	if ts == 0 {
+		return
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	i, exists := slices.BinarySearch(c.invalidations, ts)
+	if !exists {
+		c.invalidations = slices.Insert(c.invalidations, i, ts)
+	}
 }
 
 // ReleaseBefore drops the versions the watermark has passed. Every decoder has
@@ -95,6 +128,12 @@ func (c *TableInfoProvider) ReleaseBefore(watermark uint64) {
 		if len(table.entries) == 0 {
 			delete(c.tables, key)
 		}
+	}
+	i := sort.Search(len(c.invalidations), func(i int) bool {
+		return c.invalidations[i] > watermark
+	})
+	if i > 1 {
+		c.invalidations = c.invalidations[i-1:]
 	}
 }
 
