@@ -21,9 +21,10 @@ import (
 	commonType "github.com/pingcap/ticdc/pkg/common"
 )
 
-// TableInfoProvider keeps the TableInfo of every table version. Decoders share
-// one provider: a decoder that lags behind still reads the version its message
-// asks for, and versions are released once the watermark passes them.
+// TableInfoProvider keeps the TableInfo of every table version. Decoders may
+// share one provider: a decoder that lags behind still reads the version its
+// message asks for, and versions are released once the watermark passes them.
+// Tables are keyed by their original name, so T and t are different tables.
 type TableInfoProvider struct {
 	mu            sync.RWMutex
 	tables        map[accessKey]*tableVersions
@@ -59,7 +60,7 @@ func (c *TableInfoProvider) Write(schema, table string, version uint64, info *co
 func (c *TableInfoProvider) Read(schema, table string, version uint64) *commonType.TableInfo {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
-	return c.tables[newAccessKey(schema, table)].get(version)
+	return c.tables[accessKey{schema, table}].get(version)
 }
 
 // ReadAt returns the table info in effect for the commit ts, together with the
@@ -68,7 +69,7 @@ func (c *TableInfoProvider) Read(schema, table string, version uint64) *commonTy
 func (c *TableInfoProvider) ReadAt(schema, table string, commitTs uint64) (uint64, *commonType.TableInfo) {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
-	version, info := c.tables[newAccessKey(schema, table)].at(commitTs)
+	version, info := c.tables[accessKey{schema, table}].at(commitTs)
 	if invalidated := c.lastInvalidation(commitTs); invalidated > version {
 		return invalidated, nil
 	}
@@ -138,7 +139,7 @@ func (c *TableInfoProvider) ReleaseBefore(watermark uint64) {
 }
 
 func (c *TableInfoProvider) table(schema, table string) *tableVersions {
-	key := newAccessKey(schema, table)
+	key := accessKey{schema, table}
 	versions := c.tables[key]
 	if versions == nil {
 		versions = new(tableVersions)
