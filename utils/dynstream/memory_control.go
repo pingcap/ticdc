@@ -137,6 +137,8 @@ func (as *areaMemStat[A, P, T, D, H]) appendEvent(
 				event.eventType = handler.GetType(dropEvent.(T))
 				event.event = dropEvent.(T)
 				path.pendingQueue.PushBack(event)
+				path.updatePendingSize(int64(event.eventSize))
+				as.totalPendingSize.Add(int64(event.eventSize))
 				return true
 			}
 		}
@@ -150,6 +152,8 @@ func (as *areaMemStat[A, P, T, D, H]) appendEvent(
 				event.eventType = handler.GetType(dropEvent.(T))
 				event.event = dropEvent.(T)
 				path.pendingQueue.PushBack(event)
+				path.updatePendingSize(int64(event.eventSize))
+				as.totalPendingSize.Add(int64(event.eventSize))
 				failpoint.Return(true)
 			}
 		}
@@ -353,18 +357,12 @@ func (m *memControl[A, P, T, D, H]) addPathToArea(path *pathInfo[A, P, T, D, H],
 }
 
 // This method is called after the path is removed.
-<<<<<<< HEAD
-=======
 // The owning stream reconciles the path's pending memory when it clears the
 // pending queue. Do not deduct it here, because RemovePath can race with the
 // stream popping an event and cause the same memory to be deducted twice.
 // Keep the area until the owner has cleared the last removed path's queue.
->>>>>>> d26cabf65 (eventcollector: prevent syncpoint and redo memory starvation (#6549))
 func (m *memControl[A, P, T, D, H]) removePathFromArea(path *pathInfo[A, P, T, D, H]) {
 	area := path.areaMemStat
-	pendingSize := path.pendingSize.Swap(0)
-	area.decPendingSize(path, pendingSize)
-
 	m.mutex.Lock()
 	defer m.mutex.Unlock()
 

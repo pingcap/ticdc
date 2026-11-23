@@ -785,7 +785,7 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask) {
 	// spending scan tokens or reserving shared memory needed by lagging dispatchers.
 	if task.availableMemoryQuota.Load() == 0 {
 		c.sendSignalResolvedTs(task)
-		eventServiceSkipScanCount.WithLabelValues("dispatcher_quota").Inc()
+		metrics.EventServiceSkipScanCount.WithLabelValues("dispatcher_quota").Inc()
 		return
 	}
 
@@ -1820,7 +1820,19 @@ func (c *eventBroker) handleCongestionControl(from node.ID, m *event.CongestionC
 		dispatcher := v.(*atomic.Pointer[dispatcherStat]).Load()
 		available, ok := dispatcherAvailable[dispatcherID]
 		if ok {
-			dispatcher.availableMemoryQuota.Store(available)
+			previous := dispatcher.availableMemoryQuota.Swap(available)
+			if previous == 0 && available > 0 {
+				dispatcher.scanMu.Lock()
+				if !dispatcher.isRemoved.Load() {
+					switch dispatcher.scanState {
+					case dispatcherScanIdle:
+						c.enqueueScanLocked(dispatcher)
+					case dispatcherScanRunning:
+						dispatcher.scanState = dispatcherScanRunningPending
+					}
+				}
+				dispatcher.scanMu.Unlock()
+			}
 		}
 		return true
 	})

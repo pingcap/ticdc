@@ -72,17 +72,11 @@ func (q *eventQueue[A, P, T, D, H]) appendEvent(event eventWrap[A, P, T, D, H]) 
 		q.handler.OnDrop(event.event)
 		return
 	}
-<<<<<<< HEAD
-=======
-	if !appended {
-		return
-	}
 	// Admission may have replaced droppable data with a recovery marker.
 	queued, _ := path.pendingQueue.BackRef()
 	if queued.eventType.Droppable && queued.eventType.Property != PeriodicSignal {
 		path.reclaimed.Store(false)
 	}
->>>>>>> d26cabf65 (eventcollector: prevent syncpoint and redo memory starvation (#6549))
 	addSignal()
 }
 
