@@ -2141,3 +2141,5 @@ func readRemoveTargets(t *testing.T, collector *EventCollector, count int) []nod
 	}
 	return targets
 }
+
+func (m *mockDispatcher) ShouldPauseScan() bool { return false }

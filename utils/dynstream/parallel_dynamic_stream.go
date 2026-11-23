@@ -247,7 +247,7 @@ func (s *parallelDynamicStream[A, P, T, D, H]) RemovePath(path P) error {
 	s.batchConfigRegistry.onRemovePath(pi.area)
 	delete(s.pathMap.m, path)
 	s.pathMap.Unlock()
-	pi.stream.addEvent(eventWrap[A, P, T, D, H]{pathInfo: pi})
+	pi.stream.addEvent(eventWrap[A, P, T, D, H]{pathInfo: pi, removePath: true})
 	s._statRemovePathCount.Add(1)
 	return nil
 }
@@ -255,6 +255,12 @@ func (s *parallelDynamicStream[A, P, T, D, H]) RemovePath(path P) error {
 func (s *parallelDynamicStream[A, P, T, D, H]) SetAreaSettings(area A, settings AreaSettings) {
 	if s.memControl != nil {
 		s.memControl.setAreaSettings(area, settings)
+	}
+}
+
+func (s *parallelDynamicStream[A, P, T, D, H]) CheckMemoryPressure() {
+	if !s.closed.Load() && s.memControl != nil {
+		s.memControl.checkMemoryPressure()
 	}
 }
 

@@ -259,3 +259,5 @@ func TestRegionEventSinkRunCancelUnblocksPush(t *testing.T) {
 		t.Fatal("Run should exit after context cancellation")
 	}
 }
+
+func (s *mockRegionEventSinkStream) CheckMemoryPressure() {}

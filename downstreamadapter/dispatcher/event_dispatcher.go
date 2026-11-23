@@ -45,6 +45,9 @@ type EventDispatcher struct {
 	cacheEvents struct {
 		sync.Mutex
 		events chan cacheEvents
+		// requiredTs is published before the cached batch can be retried and
+		// cleared before handling it, so completion cannot erase a newer wait.
+		requiredTs atomic.Uint64
 	}
 }
 
@@ -98,6 +101,7 @@ func (d *EventDispatcher) HandleCacheEvents() {
 		if !ok {
 			return
 		}
+		d.cacheEvents.requiredTs.Store(0)
 		block := d.HandleEvents(cacheEvents.events, cacheEvents.wakeCallback)
 		if !block {
 			cacheEvents.wakeCallback()
@@ -119,6 +123,7 @@ func (d *EventDispatcher) cache(dispatcherEvents []DispatcherEvent, wakeCallback
 		events:       append(make([]DispatcherEvent, 0, len(dispatcherEvents)), dispatcherEvents...),
 		wakeCallback: wakeCallback,
 	}
+	d.cacheEvents.requiredTs.Store(dispatcherEvents[len(dispatcherEvents)-1].GetCommitTs())
 	select {
 	case d.cacheEvents.events <- cacheEvents:
 		log.Debug("cache events",
@@ -143,12 +148,20 @@ func (d *EventDispatcher) HandleEvents(dispatcherEvents []DispatcherEvent, wakeC
 	return d.handleEvents(dispatcherEvents, wakeCallback)
 }
 
+// ShouldPauseScan stops prefetch while an actual cached batch needs redo
+// progress, or while this dispatcher is handling a syncpoint barrier.
+func (d *EventDispatcher) ShouldPauseScan() bool {
+	return d.BasicDispatcher.ShouldPauseScan() ||
+		(d.redoEnable && d.cacheEvents.requiredTs.Load() > d.redoGlobalTs.Load())
+}
+
 // Remove is called when TryClose returns true
 // It set isRemoving to true, to make the dispatcher can be clean by the DispatcherManager.
 func (d *EventDispatcher) Remove() {
 	if d.isRemoving.CompareAndSwap(false, true) {
 		d.cacheEvents.Lock()
 		defer d.cacheEvents.Unlock()
+		d.cacheEvents.requiredTs.Store(0)
 		close(d.cacheEvents.events)
 	}
 	d.removeDispatcher()
