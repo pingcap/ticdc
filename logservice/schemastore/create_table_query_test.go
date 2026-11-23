@@ -128,7 +128,7 @@ func TestCreateTablesSQLModeSemantics(t *testing.T) {
 			})
 			require.NoError(t, err)
 			require.Equal(t, []string{firstSQL, tc.secondSQL}, raw.OriginalQueries)
-			event, ok, err := buildDDLEvent(&raw, nil, common.DDLSpanTableID)
+			event, ok, err := buildDDLEvent(&raw, nil, nil, common.DDLSpanTableID)
 			require.NoError(t, err)
 			require.True(t, ok)
 			queries, err := commonEvent.SplitQueries(event.Query)

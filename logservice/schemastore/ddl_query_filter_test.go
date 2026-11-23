@@ -72,7 +72,7 @@ func TestDDLIgnoreSQLUsesOriginalQuery(t *testing.T) {
 				}},
 			}, "UTC", false, false)
 			require.NoError(t, err)
-			event, ok, err := buildDDLEvent(&replayed, f, common.DDLSpanTableID)
+			event, ok, err := buildDDLEvent(&replayed, f, nil, common.DDLSpanTableID)
 			require.NoError(t, err)
 			require.True(t, ok)
 			require.Equal(t, tc.ignore, event.NotSync)
@@ -138,7 +138,7 @@ func TestDDLIgnoreSQLForRewrittenQueries(t *testing.T) {
 						}},
 					}, "UTC", false, false)
 					require.NoError(t, err)
-					event, ok, err := buildDDLEvent(&raw, f, common.DDLSpanTableID)
+					event, ok, err := buildDDLEvent(&raw, f, nil, common.DDLSpanTableID)
 					require.NoError(t, err)
 					require.True(t, ok)
 					require.Equal(t, match.ignore, event.NotSync)
@@ -202,7 +202,7 @@ func TestDDLIgnoreSQLForBatchedQueries(t *testing.T) {
 						}},
 					}, "UTC", false, false)
 					require.NoError(t, err)
-					event, ok, err := buildDDLEvent(&raw, f, common.DDLSpanTableID)
+					event, ok, err := buildDDLEvent(&raw, f, nil, common.DDLSpanTableID)
 					require.NoError(t, err)
 					require.True(t, ok)
 					require.False(t, event.NotSync)
@@ -291,7 +291,7 @@ func TestDDLIgnoreSQLForCreateTables(t *testing.T) {
 				}},
 			}, "UTC", false, false)
 			require.NoError(t, err)
-			event, ok, err := buildDDLEvent(&replayed, f, common.DDLSpanTableID)
+			event, ok, err := buildDDLEvent(&replayed, f, nil, common.DDLSpanTableID)
 			require.NoError(t, err)
 			require.True(t, ok)
 			require.False(t, event.NotSync)
