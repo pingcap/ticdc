@@ -427,6 +427,9 @@ func verifySchemaRoutingConsistent(filters []tablePattern, routes []routeRuleToC
 
 // findSharedSourceSchema intersects two schema matchers within the replicated source range.
 func findSharedSourceSchema(filters []tablePattern, left, right namePattern) (string, bool) {
+	if !left.overlaps(right) {
+		return "", false
+	}
 	for _, source := range filters {
 		if schema, ok := findNameWitness(source.schema, left, right, targetName{hasVariable: true}); ok {
 			return schema, true
