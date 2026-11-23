@@ -31,6 +31,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"github.com/pingcap/ticdc/pkg/sink/codec/schemamanager"
 	"github.com/pingcap/ticdc/pkg/util"
+	"github.com/pingcap/tidb/pkg/types"
 	"github.com/pingcap/tidb/pkg/util/chunk"
 	"github.com/pingcap/tidb/pkg/util/rowcodec"
 	"github.com/stretchr/testify/require"
@@ -77,7 +78,7 @@ func TestDecodedTableInfoLocatesRowByPrimaryKey(t *testing.T) {
 	}
 	for _, primaryKeys := range [][]string{{"a", "b"}, {"b"}} {
 		t.Run(strings.Join(primaryKeys, ","), func(t *testing.T) {
-			columns, _, err := avroData2Columns(map[string]any{
+			columns, _, _, err := avroData2Columns(map[string]any{
 				"a": int64(1), "b": int64(2), "c": int64(3),
 			}, fields)
 			require.NoError(t, err)
@@ -346,13 +347,45 @@ func TestDecodedTableInfoWithoutKeyColumnsHasNoRowLocator(t *testing.T) {
 		map[string]any{"name": "a", "type": map[string]any{"connect.parameters": map[string]any{"tidb_type": "INT"}}},
 		map[string]any{"name": "b", "type": map[string]any{"connect.parameters": map[string]any{"tidb_type": "INT"}}},
 	}
-	columns, _, err := avroData2Columns(map[string]any{"a": int64(1), "b": int64(2)}, fields)
+	columns, _, _, err := avroData2Columns(map[string]any{"a": int64(1), "b": int64(2)}, fields)
 	require.NoError(t, err)
 
 	tableInfo := newTableInfo("test", "t", columns, nil)
 	require.False(t, tableInfo.PKIsHandle())
 	require.Empty(t, tableInfo.GetIndices())
 	require.Empty(t, tableInfo.GetOrderedHandleKeyColumnIDs())
+}
+
+// A TIME column takes its decimal from the value, so a NULL row leaves it
+// unknown: the layout fills the maximum so another event reusing it still prints
+// every digit, and it must not become the cached layout of the version.
+func TestNullTimeColumnPrecision(t *testing.T) {
+	fields := []any{
+		map[string]any{"name": "id", "type": map[string]any{"connect.parameters": map[string]any{"tidb_type": "INT"}}},
+		map[string]any{"name": "t", "type": map[string]any{"connect.parameters": map[string]any{"tidb_type": "TIME"}}},
+	}
+
+	columns, _, precise, err := avroData2Columns(map[string]any{"id": int64(1), "t": nil}, fields)
+	require.NoError(t, err)
+	require.False(t, precise)
+	require.Equal(t, types.MaxFsp, columns[1].GetDecimal())
+
+	columns, _, precise, err = avroData2Columns(map[string]any{
+		"id": int64(1), "t": "01:02:03.123",
+	}, fields)
+	require.NoError(t, err)
+	require.True(t, precise)
+	require.Equal(t, 3, columns[1].GetDecimal())
+
+	cache := common.NewTableInfoProvider()
+	queryTableInfo(cache, "test", "t", 100, columns, nil, false)
+	_, cached := cache.ReadAt("test", "t", 101)
+	require.Nil(t, cached)
+
+	queryTableInfo(cache, "test", "t", 100, columns, nil, true)
+	_, cached = cache.ReadAt("test", "t", 101)
+	require.NotNil(t, cached)
+	require.Equal(t, 3, cached.GetColumns()[1].GetDecimal())
 }
 
 func TestUpdateWithoutBeforeValue(t *testing.T) {

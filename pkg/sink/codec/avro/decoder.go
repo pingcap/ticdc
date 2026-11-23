@@ -303,7 +303,7 @@ func assembleEvent(
 		return nil, errors.ErrCodecDecode.GenWithStack("schema fields should be a map")
 	}
 
-	columns, data, err := avroData2Columns(valueMap, fields)
+	columns, data, precise, err := avroData2Columns(valueMap, fields)
 	if err != nil {
 		return nil, errors.Trace(err)
 	}
@@ -314,7 +314,7 @@ func assembleEvent(
 	}
 	var beforeData map[string]any
 	if hasBefore {
-		_, beforeData, err = avroData2Columns(beforeMap, fields)
+		_, beforeData, _, err = avroData2Columns(beforeMap, fields)
 		if err != nil {
 			return nil, errors.Trace(err)
 		}
@@ -362,7 +362,7 @@ func assembleEvent(
 	}
 
 	event := new(commonEvent.DMLEvent)
-	event.TableInfo = queryTableInfo(cache, schemaName, tableName, uint64(commitTs), columns, keyMap)
+	event.TableInfo = queryTableInfo(cache, schemaName, tableName, uint64(commitTs), columns, keyMap, hasValue && precise)
 	event.StartTs = uint64(commitTs)
 	event.CommitTs = uint64(commitTs)
 	event.PhysicalTableID = event.TableInfo.TableName.TableID
@@ -432,7 +432,8 @@ func extractBeforeValueMap(valueMap map[string]any) (map[string]any, bool, error
 
 func avroData2Columns(
 	valueMap map[string]any, fields []any,
-) ([]*timodel.ColumnInfo, map[string]any, error) {
+) ([]*timodel.ColumnInfo, map[string]any, bool, error) {
+	precise := true
 	columns := make([]*timodel.ColumnInfo, 0, len(valueMap))
 	data := make(map[string]any, 0)
 	// fields is ordered by the column id, so iterate over it to build columns
@@ -440,7 +441,7 @@ func avroData2Columns(
 	for idx, item := range fields {
 		field, ok := item.(map[string]any)
 		if !ok {
-			return nil, nil, errors.ErrCodecDecode.GenWithStack("schema field should be a map")
+			return nil, nil, false, errors.ErrCodecDecode.GenWithStack("schema field should be a map")
 		}
 		// Extension fields are not real columns, so break here.
 		colName := field["name"].(string)
@@ -468,11 +469,11 @@ func avroData2Columns(
 		flag := flagFromTiDBType(tidbType)
 		value, ok := valueMap[colName]
 		if !ok {
-			return nil, nil, errors.ErrCodecDecode.GenWithStack("value not found")
+			return nil, nil, false, errors.ErrCodecDecode.GenWithStack("value not found")
 		}
 		value, err := getColumnValue(value, holder, mysqlType, flag)
 		if err != nil {
-			return nil, nil, errors.Trace(err)
+			return nil, nil, false, errors.Trace(err)
 		}
 		data[colName] = value
 
@@ -489,10 +490,18 @@ func avroData2Columns(
 			tiCol.SetDecimal(value.Fsp())
 		case types.Duration:
 			tiCol.SetDecimal(value.Fsp)
+		case nil:
+			if mysqlType == mysql.TypeDuration {
+				// A NULL TIME carries no decimal. Fill the maximum: the extra
+				// digits are zeros, so the written value stays the same. Leave
+				// the layout uncached: only a value reveals the precision.
+				tiCol.SetDecimal(types.MaxFsp)
+				precise = false
+			}
 		}
 		columns = append(columns, tiCol)
 	}
-	return columns, data, nil
+	return columns, data, precise, nil
 }
 
 func schemaAndTableName(schema map[string]any) (string, string) {
@@ -506,14 +515,18 @@ func schemaAndTableName(schema map[string]any) (string, string) {
 
 func queryTableInfo(
 	cache *common.TableInfoProvider, schemaName, tableName string, commitTs uint64,
-	columns []*timodel.ColumnInfo, keyMap map[string]any,
+	columns []*timodel.ColumnInfo, keyMap map[string]any, cacheable bool,
 ) *commonType.TableInfo {
 	version, tableInfo := cache.ReadAt(schemaName, tableName, commitTs)
 	if tableInfo != nil {
 		return tableInfo
 	}
 	tableInfo = newTableInfo(schemaName, tableName, columns, keyMap)
-	cache.Write(schemaName, tableName, version, tableInfo)
+	// A key-only delete has the handle columns alone, and a NULL time column
+	// has no decimal yet; neither may define the layout of later rows.
+	if cacheable {
+		cache.Write(schemaName, tableName, version, tableInfo)
+	}
 	return tableInfo
 }
 
