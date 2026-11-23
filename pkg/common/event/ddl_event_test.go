@@ -461,6 +461,14 @@ INSERT INTO test VALUES ('This; is; a test');
 			expectedError: false,
 		},
 		{
+			name:  "DDL with literal backslash in default and comment",
+			input: `CREATE TABLE test (c VARCHAR(100) DEFAULT '\\n') COMMENT='a\\b';`,
+			expected: []string{
+				"CREATE TABLE `test` (`c` VARCHAR(100) DEFAULT _UTF8MB4'\\\\n') COMMENT = 'a\\\\b';",
+			},
+			expectedError: false,
+		},
+		{
 			name: "Query with escaped quotes inside strings",
 			input: `
 CREATE TABLE test (name VARCHAR(50));

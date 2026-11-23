@@ -912,6 +912,9 @@ func toTableInfosKey(schema, table string) string {
 }
 
 func Restore(stmt ast.StmtNode) (string, error) {
+	if create, ok := stmt.(*ast.CreateTableStmt); ok {
+		stmt = escapeCreateTableOptions(create)
+	}
 	var sb strings.Builder
 	// translate TiDB feature to special comment
 	restoreFlags := format.RestoreTiDBSpecialComment
@@ -930,6 +933,64 @@ func Restore(stmt ast.StmtNode) (string, error) {
 		return "", errors.Trace(err)
 	}
 	return sb.String(), nil
+}
+
+// escapeCreateTableOptions escapes strings not handled by TiDB's ValueExpr
+// driver. Copy the affected nodes so restoring a statement never mutates it.
+func escapeCreateTableOptions(stmt *ast.CreateTableStmt) *ast.CreateTableStmt {
+	result := *stmt
+	result.Options = escapeTableOptions(stmt.Options)
+	result.Cols = make([]*ast.ColumnDef, len(stmt.Cols))
+	for i, column := range stmt.Cols {
+		cloned := *column
+		if column.Tp != nil && len(column.Tp.GetElems()) > 0 {
+			cloned.Tp = column.Tp.Clone()
+			elems := make([]string, len(column.Tp.GetElems()))
+			for j, elem := range column.Tp.GetElems() {
+				elems[j] = strings.ReplaceAll(elem, `\`, `\\`)
+			}
+			cloned.Tp.SetElems(elems)
+		}
+		result.Cols[i] = &cloned
+	}
+	result.Constraints = make([]*ast.Constraint, len(stmt.Constraints))
+	for i, constraint := range stmt.Constraints {
+		cloned := *constraint
+		if constraint.Option != nil {
+			option := *constraint.Option
+			option.Comment = strings.ReplaceAll(option.Comment, `\`, `\\`)
+			option.SecondaryEngineAttr = strings.ReplaceAll(option.SecondaryEngineAttr, `\`, `\\`)
+			cloned.Option = &option
+		}
+		result.Constraints[i] = &cloned
+	}
+	if stmt.Partition != nil {
+		partition := *stmt.Partition
+		partition.Definitions = make([]*ast.PartitionDefinition, len(stmt.Partition.Definitions))
+		for i, definition := range stmt.Partition.Definitions {
+			cloned := *definition
+			cloned.Options = escapeTableOptions(definition.Options)
+			partition.Definitions[i] = &cloned
+		}
+		result.Partition = &partition
+	}
+	return &result
+}
+
+func escapeTableOptions(options []*ast.TableOption) []*ast.TableOption {
+	result := make([]*ast.TableOption, len(options))
+	for i, option := range options {
+		cloned := *option
+		switch option.Tp {
+		case ast.TableOptionComment, ast.TableOptionCompression, ast.TableOptionConnection,
+			ast.TableOptionPassword, ast.TableOptionDataDirectory, ast.TableOptionIndexDirectory,
+			ast.TableOptionEncryption, ast.TableOptionEngineAttribute, ast.TableOptionStorageClass,
+			ast.TableOptionSecondaryEngine, ast.TableOptionSecondaryEngineAttribute:
+			cloned.StrValue = strings.ReplaceAll(cloned.StrValue, `\`, `\\`)
+		}
+		result[i] = &cloned
+	}
+	return result
 }
 
 // SplitQueries takes a string containing multiple SQL statements and splits them into individual SQL statements.
