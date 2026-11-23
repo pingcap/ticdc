@@ -28,7 +28,8 @@ func TestStoreToDefaultPathUsesPrivatePermissions(t *testing.T) {
 	credentialDir := filepath.Join(homeDir, ".ticdc")
 	require.NoError(t, os.Mkdir(credentialDir, 0o755))
 	credentialFile := filepath.Join(credentialDir, "credentials")
-	require.NoError(t, os.WriteFile(credentialFile, []byte("old"), 0o644))
+	require.NoError(t, os.WriteFile(credentialFile, []byte(
+		"old credentials that must not remain after the file is replaced"), 0o644))
 
 	auth := &ClientAuth{User: "user", Password: "secret"}
 	require.NoError(t, auth.StoreToDefaultPath())
@@ -43,4 +44,5 @@ func TestStoreToDefaultPathUsesPrivatePermissions(t *testing.T) {
 	stored, err := os.ReadFile(credentialFile)
 	require.NoError(t, err)
 	require.Contains(t, string(stored), `ticdc_password = "secret"`)
+	require.NotContains(t, string(stored), "old credentials")
 }

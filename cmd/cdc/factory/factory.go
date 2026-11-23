@@ -92,11 +92,11 @@ func (c *ClientAuth) StoreToDefaultPath() error {
 	}
 	// MkdirAll and OpenFile preserve permissions on existing paths, so chmod
 	// both to repair credentials created by older versions with permissive modes.
-	if err = os.Chmod(credentialDir, 0o700); err != nil {
+	if err = os.Chmod(credentialDir, 0o700); err != nil { //nolint:gosec // Directories require the owner execute bit.
 		msg := fmt.Sprintf("failed to secure directory for creandential file <%s>", filename)
 		return fmt.Errorf("%s: %w", msg, err)
 	}
-	file, err := os.OpenFile(filename, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
+	file, err := os.OpenFile(filename, os.O_WRONLY|os.O_CREATE, 0o600)
 	if err != nil {
 		msg := fmt.Sprintf("failed to create creandential file <%s>", filename)
 		return fmt.Errorf("%s: %w", msg, err)
@@ -105,6 +105,11 @@ func (c *ClientAuth) StoreToDefaultPath() error {
 		_ = file.Close()
 		msg := fmt.Sprintf("failed to secure creandential file <%s>", filename)
 		return fmt.Errorf("%s: %w", msg, err)
+	}
+	if err = file.Truncate(0); err != nil {
+		_ = file.Close()
+		msg := fmt.Sprintf("failed to truncate credential file <%s>", filename)
+		return errors.WrapError(errors.ErrUnexpected, err, msg)
 	}
 
 	err = toml.NewEncoder(file).Encode(c)
