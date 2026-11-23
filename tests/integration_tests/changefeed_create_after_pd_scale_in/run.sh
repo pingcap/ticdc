@@ -42,6 +42,24 @@ wait_for_new_pd_tso() {
 	return 1
 }
 
+wait_for_new_pd_metadata_write() {
+	local probe_service_id="ticdc-pd-scale-in-readiness-probe"
+
+	for ((i = 0; i < 60; i++)); do
+		# Deleting an absent service safepoint is idempotent, but still commits a
+		# PD GC state transaction. This verifies metadata writes without leaving
+		# probe data behind.
+		if curl -fsS -X DELETE \
+			"$NEW_PD_ADDR/pd/api/v1/gc/safepoint/$probe_service_id" \
+			>/dev/null 2>&1; then
+			return 0
+		fi
+		sleep 1
+	done
+
+	return 1
+}
+
 wait_for_pd4_leader() {
 	for ((i = 0; i < 60; i++)); do
 		if curl -fsS "$NEW_PD_ADDR/pd/api/v1/leader" |
@@ -116,6 +134,10 @@ prepare() {
 	check_pd_health "$NEW_PD_HOST" "$NEW_PD_PORT"
 	wait_for_new_pd_tso || {
 		echo "the new PD endpoint did not serve TSO after the original PD nodes were removed"
+		return 1
+	}
+	wait_for_new_pd_metadata_write || {
+		echo "the new PD endpoint did not accept metadata writes after the original PD nodes were removed"
 		return 1
 	}
 }
