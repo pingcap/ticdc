@@ -20,9 +20,93 @@ import (
 
 	"github.com/BurntSushi/toml"
 	"github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/ordering"
 	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/stretchr/testify/require"
 )
+
+func TestTxnOrderTables(t *testing.T) {
+	for _, scheme := range []string{"mysql", "mysql+ssl", "tidb", "tidb+ssl"} {
+		cfg := GetDefaultReplicaConfig()
+		cfg.Sink.MySQLConfig = &MySQLConfig{TxnOrderTables: []string{"APP.orders", "app.ledger_*", "!app.ledger_skip"}}
+		cfg.Scheduler.ForceSplit = new(true)
+		uri, err := url.Parse(scheme + "://127.0.0.1/")
+		require.NoError(t, err)
+		require.NoError(t, cfg.ValidateAndAdjust(uri))
+		require.False(t, util.GetOrZero(cfg.Scheduler.EnableTableAcrossNodes))
+		f, err := ordering.NewTxnOrderMatcher(cfg.Sink.GetTxnOrderTables(scheme), false)
+		require.NoError(t, err)
+		require.True(t, f.Match("app", "orders"))
+		require.True(t, f.Match("APP", "LEDGER_1"))
+		require.False(t, f.Match("app", "ledger_skip"))
+		require.False(t, f.Match("app", "other"))
+		f, err = ordering.NewTxnOrderMatcher(cfg.Sink.MySQLConfig.TxnOrderTables, true)
+		require.NoError(t, err)
+		require.False(t, f.Match("app", "orders"))
+		require.True(t, f.Match("APP", "orders"))
+		require.Equal(t, cfg.Sink.MySQLConfig.TxnOrderTables, cfg.Clone().Sink.MySQLConfig.TxnOrderTables)
+		for _, forceSplit := range []bool{false, true} {
+			cfg.Scheduler.EnableTableAcrossNodes = new(true)
+			cfg.Scheduler.ForceSplit = new(forceSplit)
+			err := cfg.ValidateAndAdjust(uri)
+			require.ErrorIs(t, err, errors.ErrInvalidReplicaConfig)
+			require.ErrorContains(t, err, "txn-order-tables")
+			require.ErrorContains(t, err, "enable-table-across-nodes")
+			require.True(t, util.GetOrZero(cfg.Scheduler.EnableTableAcrossNodes))
+		}
+		cfg.Sink.MySQLConfig.TxnOrderTables = nil
+		require.NoError(t, cfg.ValidateAndAdjust(uri))
+		require.True(t, util.GetOrZero(cfg.Scheduler.EnableTableAcrossNodes))
+	}
+	cfg := GetDefaultReplicaConfig()
+	_, err := toml.Decode("[sink.mysql-config]\ntxn-order-tables = [\"app.orders\", \"app.ledger_*\"]", cfg)
+	require.NoError(t, err)
+	require.Equal(t, []string{"app.orders", "app.ledger_*"}, cfg.Sink.MySQLConfig.TxnOrderTables)
+	cfg.Sink.MySQLConfig.TxnOrderTables = []string{"invalid"}
+	uri, err := url.Parse("mysql://127.0.0.1/")
+	require.NoError(t, err)
+	require.ErrorContains(t, cfg.ValidateAndAdjust(uri), "txn-order-tables")
+	cfg.Scheduler.EnableTableAcrossNodes = new(true)
+	for _, sinkURI := range []string{"kafka://127.0.0.1/topic?protocol=open-protocol", "blackhole://", "s3://bucket/prefix?protocol=csv"} {
+		uri, err := url.Parse(sinkURI)
+		require.NoError(t, err)
+		require.NoError(t, cfg.ValidateAndAdjust(uri))
+		require.True(t, util.GetOrZero(cfg.Scheduler.EnableTableAcrossNodes))
+		require.Nil(t, cfg.Sink.GetTxnOrderTables(uri.Scheme))
+		require.Equal(t, []string{"invalid"}, cfg.Sink.MySQLConfig.TxnOrderTables)
+	}
+	f, err := ordering.NewTxnOrderMatcher(nil, false)
+	require.NoError(t, err)
+	require.Nil(t, f)
+}
+
+func TestDecodeAWSMSKIAMConfig(t *testing.T) {
+	t.Parallel()
+
+	var replicaConfig ReplicaConfig
+	metadata, err := toml.Decode(`
+[sink.kafka-config]
+sasl-mechanism = "OAUTHBEARER"
+sasl-oauth-provider = "AWS_MSK_IAM"
+enable-tls = true
+
+[sink.kafka-config.aws-msk-iam]
+region = "ap-northeast-1"
+role-arn = "arn:aws:iam::123456789012:role/TiCDCMSKProducer"
+role-session-name = "ticdc"
+external-id = "external-id"
+`, &replicaConfig)
+	require.NoError(t, err)
+	require.Empty(t, metadata.Undecoded())
+	require.NotNil(t, replicaConfig.Sink)
+	require.NotNil(t, replicaConfig.Sink.KafkaConfig)
+	require.Equal(t, &AWSMSKIAMConfig{
+		Region:          "ap-northeast-1",
+		RoleARN:         "arn:aws:iam::123456789012:role/TiCDCMSKProducer",
+		RoleSessionName: "ticdc",
+		ExternalID:      "external-id",
+	}, replicaConfig.Sink.KafkaConfig.AWSMSKIAM)
+}
 
 func TestDateSeparatorSerialization(t *testing.T) {
 	t.Parallel()

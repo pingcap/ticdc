@@ -712,7 +712,7 @@ func TestSplitTableBalanceWhenTrafficUnbalanced(t *testing.T) {
 			controller.spanController.UpdateStatus(spanReplica, status)
 		}
 
-		log.Info("spanReplica", zap.Any("j", j), zap.Any("id", spanReplica.ID), zap.Any("span", common.FormatTableSpan(spanReplica.Span)))
+		log.Info("spanReplica", zap.Any("j", j), zap.Stringer("dispatcherID", spanReplica.ID))
 	}
 
 	// first keep the system is balanced
@@ -790,8 +790,8 @@ func TestSplitTableBalanceWhenTrafficUnbalanced(t *testing.T) {
 		spanReplicaID8 = spanTmp1
 	}
 
-	log.Info("spanReplica7", zap.Any("changefeedID", spanReplica7.ID), zap.Any("span", common.FormatTableSpan(spanReplica7.Span)))
-	log.Info("spanReplica8", zap.Any("changefeedID", spanReplica8.ID), zap.Any("span", common.FormatTableSpan(spanReplica8.Span)))
+	log.Info("spanReplica7", zap.Stringer("dispatcherID", spanReplica7.ID))
+	log.Info("spanReplica8", zap.Stringer("dispatcherID", spanReplica8.ID))
 	trafficForSpanReplica7 := 50
 	trafficForSpanReplica8 := 150
 
@@ -883,8 +883,8 @@ func TestSplitTableBalanceWhenTrafficUnbalanced(t *testing.T) {
 		spanReplicaID9 = spanID2
 	}
 
-	log.Info("spanReplica9", zap.Any("changefeedID", spanReplica9.ID), zap.Any("span", common.FormatTableSpan(spanReplica9.Span)))
-	log.Info("spanReplica10", zap.Any("changefeedID", spanReplica10.ID), zap.Any("span", common.FormatTableSpan(spanReplica10.Span)))
+	log.Info("spanReplica9", zap.Stringer("dispatcherID", spanReplica9.ID))
+	log.Info("spanReplica10", zap.Stringer("dispatcherID", spanReplica10.ID))
 	operators[0].Start()
 	operators[0].PostFinish()
 	operators[1].Start()
@@ -941,7 +941,7 @@ func TestSplitTableBalanceWhenTrafficUnbalanced(t *testing.T) {
 	require.Contains(t, relatedIDs, spanReplicaID9)
 	spanReplicaID11 := typeCount["merge"][0].ID()
 	spanReplica11 := controller.spanController.GetTaskByID(spanReplicaID11)
-	log.Info("spanReplica11", zap.Any("changefeedID", spanReplica11.ID), zap.Any("span", common.FormatTableSpan(spanReplica11.Span)))
+	log.Info("spanReplica11", zap.Stringer("dispatcherID", spanReplica11.ID))
 	typeCount["merge"][0].Start()
 	typeCount["merge"][0].PostFinish()
 	controller.operatorController.RemoveOp(typeCount["merge"][0].ID())
@@ -973,7 +973,7 @@ func TestSplitTableBalanceWhenTrafficUnbalanced(t *testing.T) {
 	// 50    |       |
 	controller.schedulerController.GetScheduler(scheduler.BalanceSplitScheduler).Execute()
 	for _, operator := range controller.operatorController.GetAllOperators() {
-		log.Info("operator", zap.Any("type", operator.Type()), zap.Any("id", operator.ID()), zap.Any("string", operator.String()))
+		log.Info("operator", zap.Any("type", operator.Type()), zap.Stringer("dispatcherID", operator.ID()), zap.Any("string", operator.String()))
 	}
 	require.Equal(t, controller.operatorController.OperatorSize(), 3)
 
@@ -1025,7 +1025,7 @@ func TestSplitTableBalanceWhenTrafficUnbalanced(t *testing.T) {
 	// 400   |       |
 	controller.schedulerController.GetScheduler(scheduler.BalanceSplitScheduler).Execute()
 	for _, operator := range controller.operatorController.GetAllOperators() {
-		log.Info("operator", zap.Any("type", operator.Type()), zap.Any("changefeedID", operator.ID()), zap.Any("string", operator.String()))
+		log.Info("operator", zap.Any("type", operator.Type()), zap.Stringer("dispatcherID", operator.ID()), zap.Any("string", operator.String()))
 	}
 	require.Equal(t, controller.operatorController.OperatorSize(), 7)
 	typeCount = make(map[string][]pkgoperator.Operator[common.DispatcherID, *heartbeatpb.TableSpanStatus])
@@ -1727,6 +1727,24 @@ func TestFinishBootstrapReplacesTerminalSpanOfAddedTable(t *testing.T) {
 }
 
 func TestFinishBootstrapAddedTableHistory(t *testing.T) {
+	t.Run("validation error in history aborts bootstrap", func(t *testing.T) {
+		env := newMergeBootstrapTestEnv(t)
+		schemaStore := eventservice.NewMockSchemaStore()
+		schemaStore.SetResolvedTs(200)
+		schemaStore.AppendDDLEvent(common.DDLSpanTableID, commonEvent.DDLEvent{
+			FinishedTs: 112,
+			Err: cerrors.WrapChangefeedUnretryableErr(cerrors.ErrInvalidReplicaConfig.GenWithStackByArgs(
+				"sink.mysql-config.txn-order-tables does not support partitioned table test.ordered")).Error(),
+			NeedAddedTables: []commonEvent.Table{{TableID: 1, SchemaID: 1}},
+		})
+		appcontext.SetService(appcontext.SchemaStore, schemaStore)
+		spanInfo := env.bootstrapSpan(env.sourceDispatcherID1, env.mergedSpan, heartbeatpb.ComponentState_Working)
+		spanInfo.CheckpointTs = 112
+		_, err := env.controller.FinishBootstrap(context.Background(), env.bootstrapResponses(nil, spanInfo), false)
+		require.ErrorContains(t, err, "txn-order-tables does not support partitioned table")
+		require.True(t, cerrors.ShouldFailChangefeed(err))
+		require.False(t, env.controller.bootstrapped)
+	})
 	t.Run("paginated history", func(t *testing.T) {
 		env := newMergeBootstrapTestEnv(t)
 		schemaStore := eventservice.NewMockSchemaStore()

@@ -33,6 +33,27 @@ func TestSinkConfigDateSeparator(t *testing.T) {
 	require.ErrorContains(t, err, "CDC:ErrStorageSinkInvalidConfig")
 }
 
+func TestMySQLTxnOrderTablesUpdate(t *testing.T) {
+	storedRules := []string{"app.orders"}
+	for _, rules := range [][]string{nil, {}, {"app.ledger"}} {
+		cfg := &ReplicaConfig{Sink: &SinkConfig{MySQLConfig: &MySQLConfig{TxnOrderTables: rules}}}
+		converted := ToAPIReplicaConfig(cfg.ToInternalReplicaConfig())
+		require.Equal(t, rules, converted.Sink.MySQLConfig.TxnOrderTables)
+		info, err := (&ChangeFeedInfo{Config: converted}).Clone()
+		require.NoError(t, err)
+		require.Equal(t, rules, info.Config.Sink.MySQLConfig.TxnOrderTables)
+		body, err := json.Marshal(info.Config)
+		require.NoError(t, err)
+		stored := &ReplicaConfig{Sink: &SinkConfig{MySQLConfig: &MySQLConfig{TxnOrderTables: storedRules}}}
+		require.NoError(t, json.Unmarshal(body, stored))
+		want := rules
+		if rules == nil {
+			want = storedRules
+		}
+		require.Equal(t, want, stored.Sink.MySQLConfig.TxnOrderTables)
+	}
+}
+
 func TestChangeFeedInfoCloneWithMaskedSensitiveData(t *testing.T) {
 	info := &ChangeFeedInfo{
 		ID:      "test",
@@ -113,7 +134,15 @@ func TestReplicaConfigConversion(t *testing.T) {
 				IncludeStartTs: util.AddressOf(true),
 			},
 			KafkaConfig: &KafkaConfig{
-				SASLOAuthCA: util.AddressOf("/etc/ssl/oauth-ca.pem"),
+				SASLOAuthCA:       new("/etc/ssl/oauth-ca.pem"),
+				SASLMechanism:     new("OAUTHBEARER"),
+				SASLOAuthProvider: new("AWS_MSK_IAM"),
+				AWSMSKIAM: &AWSMSKIAMConfig{
+					Region:          "us-west-2",
+					RoleARN:         "arn:aws:iam::123456789012:role/ticdc-msk",
+					RoleSessionName: "ticdc",
+					ExternalID:      "external-id",
+				},
 			},
 		},
 		Mounter: &MounterConfig{
@@ -155,6 +184,11 @@ func TestReplicaConfigConversion(t *testing.T) {
 	require.Equal(t, "hex", util.GetOrZero(internalCfg.Sink.Debezium.BinaryHandlingMode))
 	require.True(t, util.GetOrZero(internalCfg.Sink.Simple.IncludeStartTs))
 	require.Equal(t, "/etc/ssl/oauth-ca.pem", util.GetOrZero(internalCfg.Sink.KafkaConfig.SASLOAuthCA))
+	require.Equal(t, "AWS_MSK_IAM", util.GetOrZero(internalCfg.Sink.KafkaConfig.SASLOAuthProvider))
+	require.Equal(t, "us-west-2", internalCfg.Sink.KafkaConfig.AWSMSKIAM.Region)
+	require.Equal(t, "arn:aws:iam::123456789012:role/ticdc-msk", internalCfg.Sink.KafkaConfig.AWSMSKIAM.RoleARN)
+	require.Equal(t, "ticdc", internalCfg.Sink.KafkaConfig.AWSMSKIAM.RoleSessionName)
+	require.Equal(t, "external-id", internalCfg.Sink.KafkaConfig.AWSMSKIAM.ExternalID)
 	require.Equal(t, internalCfg.Mounter.WorkerNum, *apiCfg.Mounter.WorkerNum)
 	require.True(t, util.GetOrZero(internalCfg.Scheduler.EnableTableAcrossNodes))
 	require.Equal(t, 1000, util.GetOrZero(internalCfg.Scheduler.RegionThreshold))
@@ -209,6 +243,11 @@ func TestReplicaConfigConversion(t *testing.T) {
 	require.True(t, util.GetOrZero(apiCfgBack.Sink.SimpleConfig.IncludeStartTs))
 	require.True(t, util.GetOrZero(apiCfgBack.Sink.DebeziumConfig.OutputOldValue))
 	require.Equal(t, "/etc/ssl/oauth-ca.pem", util.GetOrZero(apiCfgBack.Sink.KafkaConfig.SASLOAuthCA))
+	require.Equal(t, "AWS_MSK_IAM", *apiCfgBack.Sink.KafkaConfig.SASLOAuthProvider)
+	require.Equal(t, "us-west-2", apiCfgBack.Sink.KafkaConfig.AWSMSKIAM.Region)
+	require.Equal(t, "arn:aws:iam::123456789012:role/ticdc-msk", apiCfgBack.Sink.KafkaConfig.AWSMSKIAM.RoleARN)
+	require.Equal(t, "ticdc", apiCfgBack.Sink.KafkaConfig.AWSMSKIAM.RoleSessionName)
+	require.Equal(t, "external-id", apiCfgBack.Sink.KafkaConfig.AWSMSKIAM.ExternalID)
 	require.Equal(t, 16, *apiCfgBack.Mounter.WorkerNum)
 	require.True(t, *apiCfgBack.Scheduler.EnableTableAcrossNodes)
 	require.Equal(t, "correctness", *apiCfgBack.Integrity.IntegrityCheckLevel)
@@ -325,6 +364,7 @@ func TestReplicaConfigConversionMySQLAsyncDDLTimeout(t *testing.T) {
 		Sink: &SinkConfig{
 			MySQLConfig: &MySQLConfig{
 				AsyncDDLTimeout: util.AddressOf("45m"),
+				TxnOrderTables:  []string{"app.orders", "app.ledger_*"},
 			},
 		},
 	}
@@ -332,10 +372,12 @@ func TestReplicaConfigConversionMySQLAsyncDDLTimeout(t *testing.T) {
 	internalCfg := apiCfg.ToInternalReplicaConfig()
 	require.NotNil(t, internalCfg.Sink.MySQLConfig)
 	require.Equal(t, "45m", util.GetOrZero(internalCfg.Sink.MySQLConfig.AsyncDDLTimeout))
+	require.Equal(t, apiCfg.Sink.MySQLConfig.TxnOrderTables, internalCfg.Sink.MySQLConfig.TxnOrderTables)
 
 	apiCfgBack := ToAPIReplicaConfig(internalCfg)
 	require.NotNil(t, apiCfgBack.Sink.MySQLConfig)
 	require.Equal(t, "45m", util.GetOrZero(apiCfgBack.Sink.MySQLConfig.AsyncDDLTimeout))
+	require.Equal(t, apiCfg.Sink.MySQLConfig.TxnOrderTables, apiCfgBack.Sink.MySQLConfig.TxnOrderTables)
 }
 
 func TestReplicaConfigCodecConfigConversion(t *testing.T) {

@@ -34,6 +34,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/node"
+	"github.com/pingcap/ticdc/pkg/ordering"
 	"github.com/pingcap/ticdc/pkg/pdutil"
 	"github.com/pingcap/ticdc/pkg/routing"
 	"github.com/pingcap/ticdc/pkg/util"
@@ -205,6 +206,7 @@ func (s *bootstrapSchemaStoreForTest) GetAllPhysicalTables(
 	keyspaceMeta common.KeyspaceMeta,
 	snapTs uint64,
 	filter filter.Filter,
+	txnOrderMatcher *ordering.TxnOrderMatcher,
 ) ([]event.Table, error) {
 	return nil, nil
 }
@@ -252,6 +254,7 @@ func (s *bootstrapSchemaStoreForTest) FetchTableDDLEvents(
 	dispatcherID common.DispatcherID,
 	tableID int64,
 	tableFilter filter.Filter,
+	txnOrderMatcher *ordering.TxnOrderMatcher,
 	start uint64,
 	end uint64,
 ) ([]event.DDLEvent, error) {
@@ -262,6 +265,7 @@ func (s *bootstrapSchemaStoreForTest) FetchTableTriggerDDLEvents(
 	keyspaceMeta common.KeyspaceMeta,
 	dispatcherID common.DispatcherID,
 	tableFilter filter.Filter,
+	txnOrderMatcher *ordering.TxnOrderMatcher,
 	start uint64,
 	limit int,
 ) ([]event.DDLEvent, uint64, error) {
@@ -521,6 +525,7 @@ func TestTryCloseRemovedRequestAfterClosedReturnsImmediatelyAndTriggersCleanup(t
 
 func TestLocalFenceCancelsWritePathWithoutWaitingForCleanup(t *testing.T) {
 	manager := createTestManager(t)
+	require.False(t, manager.IsClosingOrClosed())
 	ctx, cancel := context.WithCancel(context.Background())
 	manager.ctx = ctx
 	manager.cancel = cancel
@@ -538,11 +543,14 @@ func TestLocalFenceCancelsWritePathWithoutWaitingForCleanup(t *testing.T) {
 		require.FailNow(t, "local fence should not wait for dispatcher manager cleanup")
 	}
 	require.ErrorIs(t, ctx.Err(), context.Canceled)
+	require.True(t, manager.IsClosingOrClosed())
+	require.False(t, manager.TryClose(false))
 
 	manager.wg.Done()
 	require.Eventually(t, func() bool {
 		return manager.TryClose(false)
 	}, time.Second, 10*time.Millisecond)
+	require.True(t, manager.IsClosingOrClosed())
 }
 
 func TestLocalFenceDoesNotWaitForBootstrapWriteBlockEvent(t *testing.T) {
@@ -783,8 +791,9 @@ func TestInitializeTableTriggerEventDispatcherReturnsFenceErrorWhenWritePathClos
 	require.False(t, eventCollector.HasDispatcher(dispatcherID))
 }
 
-func TestCreateDispatcherByInfoKeepsCreateOperatorWhenFenced(t *testing.T) {
+func TestFencedCreateRetainsOperator(t *testing.T) {
 	manager := createTestManager(t)
+	manager.meta.maintainerID = "maintainer"
 	manager.writePathClosed.Store(true)
 	dispatcherID := common.NewDispatcherID()
 	createReq := NewSchedulerDispatcherRequest(node.ID("maintainer"), &heartbeatpb.ScheduleDispatcherRequest{
@@ -800,19 +809,9 @@ func TestCreateDispatcherByInfoKeepsCreateOperatorWhenFenced(t *testing.T) {
 		ScheduleAction: heartbeatpb.ScheduleAction_Create,
 		OperatorType:   heartbeatpb.OperatorType_O_Add,
 	})
-	manager.currentOperatorMap.Store(dispatcherID, createReq)
+	(&SchedulerDispatcherRequestHandler{}).Handle(manager, createReq)
 
-	createDispatcherByInfo(manager, map[common.DispatcherID]dispatcherCreateInfo{
-		dispatcherID: {
-			ID: dispatcherID,
-			TableSpan: &heartbeatpb.TableSpan{
-				TableID: 1,
-			},
-			StartTs:  1,
-			SchemaID: 1,
-		},
-	}, nil)
-
+	// Failed creation must retain the request for the next maintainer's bootstrap.
 	_, dispatcherExists := manager.dispatcherMap.Get(dispatcherID)
 	require.False(t, dispatcherExists)
 	operator, operatorExists := manager.currentOperatorMap.Load(dispatcherID)

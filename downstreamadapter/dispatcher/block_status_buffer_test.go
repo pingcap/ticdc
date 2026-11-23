@@ -23,6 +23,7 @@ import (
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/routing"
+	"github.com/pingcap/ticdc/utils/threadpool"
 	"github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/stretchr/testify/require"
 )
@@ -94,6 +95,192 @@ func TestBlockStatusBufferAllowsWaitingAgainAfterTake(t *testing.T) {
 	require.Equal(t, heartbeatpb.BlockStage_WAITING, second.State.Stage)
 
 	requireNoBlockStatus(t, buffer)
+}
+
+func TestBlockStatusBufferRetryWhenFull(t *testing.T) {
+	buffer := NewBlockStatusBuffer(1)
+	defer buffer.Close()
+	dispatcherID := common.NewDispatcherID()
+	buffer.OfferStatus(newTestWaitingBlockStatus(dispatcherID, 100, common.DefaultMode))
+	retry := newTestWaitingBlockStatus(dispatcherID, 200, common.DefaultMode)
+
+	require.False(t, buffer.offerRetryStatus(retry, nil))
+	require.False(t, buffer.offerRetryStatus(retry, nil))
+	require.True(t, buffer.offerRetryStatus(newTestWaitingBlockStatus(dispatcherID, 200, common.DefaultMode), nil))
+	nextRetry := newTestWaitingBlockStatus(dispatcherID, 250, common.DefaultMode)
+	require.False(t, buffer.offerRetryStatus(nextRetry, nil))
+	require.Equal(t, 1, buffer.Len())
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	first := buffer.Take(ctx)
+	require.NotNil(t, first)
+	require.Equal(t, uint64(100), first.State.BlockTs)
+
+	second := buffer.Take(ctx)
+	require.NotNil(t, second)
+	require.Same(t, retry, second)
+	require.Same(t, nextRetry, buffer.Take(ctx))
+	requireNoBlockStatus(t, buffer)
+
+	buffer.OfferStatus(newTestWaitingBlockStatus(dispatcherID, 300, common.DefaultMode))
+	none := &heartbeatpb.TableSpanBlockStatus{
+		ID:    dispatcherID.ToPB(),
+		State: &heartbeatpb.State{BlockTs: 400, Stage: heartbeatpb.BlockStage_NONE},
+		Mode:  common.DefaultMode,
+	}
+	require.False(t, buffer.offerRetryStatus(none, nil))
+	require.NotNil(t, buffer.Take(ctx))
+	third := buffer.Take(ctx)
+	require.NotNil(t, third)
+	require.Same(t, none, third)
+}
+
+func TestResendTaskDoesNotBlockWorkerWhenBufferFull(t *testing.T) {
+	buffer := NewBlockStatusBuffer(1)
+	defer buffer.Close()
+	dispatcherID := common.NewDispatcherID()
+	buffer.OfferStatus(newTestWaitingBlockStatus(dispatcherID, 100, common.DefaultMode))
+	dispatcher := &BasicDispatcher{
+		id:         dispatcherID,
+		sharedInfo: &SharedInfo{blockStatusBuffer: buffer},
+	}
+	retry := newTestWaitingBlockStatus(dispatcherID, 200, common.DefaultMode)
+	task := &ResendTask{dispatcher: dispatcher, message: retry, canceled: make(chan struct{})}
+	pool := threadpool.NewThreadPool(1)
+	defer func() {
+		// Drain the buffer before Stop so a blocked worker cannot leak if this
+		// regression fails.
+		buffer.TryTake()
+		pool.Stop()
+	}()
+
+	started := make(chan struct{})
+	handle := pool.SubmitFunc(func() time.Time {
+		close(started)
+		task.Execute()
+		return time.Time{}
+	}, time.Now())
+	<-started
+	handle.Cancel()
+	workerAvailable := make(chan struct{})
+	pool.SubmitFunc(func() time.Time {
+		close(workerAvailable)
+		return time.Time{}
+	}, time.Now())
+	select {
+	case <-workerAvailable:
+	case <-time.After(time.Second):
+		require.FailNow(t, "full block status buffer held the resend worker")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	require.NotNil(t, buffer.Take(ctx))
+	status := buffer.Take(ctx)
+	require.NotNil(t, status)
+	require.Same(t, retry, status)
+}
+
+func TestIgnoredBlockStatusRetryWhenBufferFull(t *testing.T) {
+	buffer := NewBlockStatusBuffer(1)
+	defer buffer.Close()
+	dispatcherID := common.NewDispatcherID()
+	buffer.OfferStatus(newTestWaitingBlockStatus(dispatcherID, 100, common.DefaultMode))
+	retry := newTestWaitingBlockStatus(dispatcherID, 200, common.DefaultMode)
+	dispatcher := &BasicDispatcher{
+		id:            dispatcherID,
+		sharedInfo:    &SharedInfo{blockStatusBuffer: buffer},
+		resendTaskMap: newResendTaskMap(),
+	}
+	dispatcher.blockEventStatus.setBlockEvent(&commonEvent.DDLEvent{FinishedTs: 200}, heartbeatpb.BlockStage_WAITING)
+	task := &ResendTask{dispatcher: dispatcher, message: retry, canceled: make(chan struct{})}
+	dispatcher.resendTaskMap.Set(BlockEventIdentifier{CommitTs: 200}, task)
+	defer task.Cancel()
+
+	require.False(t, dispatcher.HandleDispatcherStatus(&heartbeatpb.DispatcherStatus{
+		IgnoredBlockStatus: &heartbeatpb.IgnoredBlockStatus{CommitTs: 200},
+	}))
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	require.NotNil(t, buffer.Take(ctx))
+	require.Same(t, retry, buffer.Take(ctx))
+}
+
+func TestBlockStatusBufferRetryProgressWithWaitingProducers(t *testing.T) {
+	buffer := NewBlockStatusBuffer(1)
+	defer buffer.Close()
+	dispatcherID := common.NewDispatcherID()
+	buffer.OfferStatus(newTestWaitingBlockStatus(dispatcherID, 100, common.DefaultMode))
+	retry := newTestWaitingBlockStatus(dispatcherID, 200, common.DefaultMode)
+	require.False(t, buffer.offerRetryStatus(retry, nil))
+
+	producerDone := make(chan struct{})
+	go func() {
+		defer close(producerDone)
+		buffer.OfferStatus(newTestWaitingBlockStatus(dispatcherID, 300, common.DefaultMode))
+	}()
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	seenRetry := false
+	for range 3 {
+		status := buffer.Take(ctx)
+		require.NotNil(t, status)
+		if status == retry {
+			seenRetry = true
+		}
+	}
+	require.True(t, seenRetry)
+	<-producerDone
+}
+
+func TestBlockStatusBufferCancelsPendingRetry(t *testing.T) {
+	buffer := NewBlockStatusBuffer(1)
+	defer buffer.Close()
+	dispatcherID := common.NewDispatcherID()
+	buffer.OfferStatus(newTestWaitingBlockStatus(dispatcherID, 100, common.DefaultMode))
+	retry := newTestWaitingBlockStatus(dispatcherID, 200, common.DefaultMode)
+	dispatcher := &BasicDispatcher{
+		id:         dispatcherID,
+		sharedInfo: &SharedInfo{blockStatusBuffer: buffer},
+	}
+	task := &ResendTask{dispatcher: dispatcher, message: retry, canceled: make(chan struct{})}
+	task.Execute()
+	nextRetry := newTestWaitingBlockStatus(dispatcherID, 300, common.DefaultMode)
+	require.False(t, buffer.offerRetryStatus(nextRetry, nil))
+	task.Cancel()
+
+	require.Eventually(t, func() bool {
+		buffer.mu.Lock()
+		defer buffer.mu.Unlock()
+		_, ok := buffer.retryByStatus[retry]
+		return !ok
+	}, time.Second, time.Millisecond)
+	_, ok := buffer.TryTake()
+	require.True(t, ok)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	require.Same(t, nextRetry, buffer.Take(ctx))
+	requireNoBlockStatus(t, buffer)
+}
+
+func TestBlockStatusBufferCloseUnblocksRetrySender(t *testing.T) {
+	buffer := NewBlockStatusBuffer(1)
+	dispatcherID := common.NewDispatcherID()
+	buffer.OfferStatus(newTestWaitingBlockStatus(dispatcherID, 100, common.DefaultMode))
+	retry := newTestWaitingBlockStatus(dispatcherID, 200, common.DefaultMode)
+	require.False(t, buffer.offerRetryStatus(retry, nil))
+
+	closed := make(chan struct{})
+	go func() {
+		buffer.Close()
+		close(closed)
+	}()
+	select {
+	case <-closed:
+	case <-time.After(time.Second):
+		require.FailNow(t, "retry sender did not stop with the buffer")
+	}
 }
 
 func TestBlockStatusBufferAllowsDoneAgainAfterTake(t *testing.T) {

@@ -151,7 +151,11 @@ func (p *ddlJobFetcher) input(kvs []common.RawKVEntry, _ func()) bool {
 	for _, entry := range kvs {
 		job, err := p.unmarshalDDL(&entry)
 		if err != nil {
-			log.Fatal("unmarshal ddl failed", zap.Any("entry", entry), zap.Error(err))
+			log.Fatal("unmarshal ddl failed",
+				zap.Uint64("regionID", entry.RegionID),
+				zap.Uint64("startTs", entry.StartTs),
+				zap.Uint64("commitTs", entry.CRTs),
+				zap.Error(err))
 		}
 
 		if job == nil {
