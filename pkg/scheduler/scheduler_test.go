@@ -37,7 +37,7 @@ func (r *testReplication) GetNodeID() node.ID          { return r.nodeID }
 func (r *testReplication) SetNodeID(nodeID node.ID)    { r.nodeID = nodeID }
 func (r *testReplication) ShouldRun() bool             { return true }
 
-func TestBalanceStopsWhenMoveIsRejected(t *testing.T) {
+func TestBalanceStopsAfterAllMovesAreRejected(t *testing.T) {
 	nodes := map[node.ID]*node.Info{
 		"node1": {ID: "node1"},
 		"node2": {ID: "node2"},
@@ -53,14 +53,17 @@ func TestBalanceStopsWhenMoveIsRejected(t *testing.T) {
 
 	// Simulates a quiescing operator controller that rejects every move.
 	calls := 0
+	attempted := make(map[testReplicationID]bool)
 	moved := Balance(10, rand.New(rand.NewSource(1)), nodes, replicating,
-		func(*testReplication, node.ID) bool {
+		func(r *testReplication, target node.ID) bool {
 			calls++
-			require.Equal(t, 1, calls, "rejected move was retried")
+			require.Equal(t, node.ID("node3"), target)
+			require.False(t, attempted[r.id], "rejected pair must not be retried without progress")
+			attempted[r.id] = true
 			return false
 		})
 	require.Equal(t, 0, moved)
-	require.Equal(t, 1, calls)
+	require.Equal(t, len(replicating), calls)
 }
 
 func TestBalanceMovesTasksToEmptyNode(t *testing.T) {
@@ -83,6 +86,47 @@ func TestBalanceMovesTasksToEmptyNode(t *testing.T) {
 			return true
 		})
 	require.Equal(t, 2, moved)
+}
+
+func TestBalanceTriesOtherTargets(t *testing.T) {
+	nodes := map[node.ID]*node.Info{
+		"source": {ID: "source"}, "busy": {ID: "busy"}, "eligible": {ID: "eligible"},
+	}
+	var replicating []*testReplication
+	for i, id := range []node.ID{"source", "source", "source", "source", "source", "eligible"} {
+		replicating = append(replicating, &testReplication{id: testReplicationID(rune('a' + i)), nodeID: id})
+	}
+	rejected := 0
+	moved := Balance(10, rand.New(rand.NewSource(1)), nodes, replicating, func(r *testReplication, target node.ID) bool {
+		if target == "busy" {
+			rejected++
+			return false
+		}
+		require.Equal(t, node.ID("eligible"), target)
+		r.SetNodeID(target)
+		return true
+	})
+	require.Positive(t, rejected)
+	require.Equal(t, 1, moved, "a rejected empty node must not hide another underloaded node")
+}
+
+func TestBalanceTriesOtherTasksAndSources(t *testing.T) {
+	for _, eligible := range []testReplicationID{"c", "e"} {
+		t.Run(eligible.String(), func(t *testing.T) {
+			nodes := map[node.ID]*node.Info{
+				"source1": {ID: "source1"}, "source2": {ID: "source2"}, "target": {ID: "target"},
+			}
+			var replicating []*testReplication
+			for i, id := range []node.ID{"source1", "source1", "source1", "source1", "source2", "source2", "source2"} {
+				replicating = append(replicating, &testReplication{id: testReplicationID(rune('a' + i)), nodeID: id})
+			}
+			moved := Balance(10, rand.New(rand.NewSource(1)), nodes, replicating, func(r *testReplication, target node.ID) bool {
+				require.Equal(t, node.ID("target"), target)
+				return r.id == eligible
+			})
+			require.Equal(t, 1, moved)
+		})
+	}
 }
 
 func TestCheckBalanceStatus(t *testing.T) {

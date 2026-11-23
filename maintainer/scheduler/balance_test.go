@@ -50,6 +50,7 @@ func TestBalanceSchedulerUsesCheckBalanceInterval(t *testing.T) {
 				tc.mode,
 				drainState,
 				testDefaultBalanceMoveBatchSize,
+				nil,
 			)
 
 			beforeExecute := time.Now()
@@ -86,6 +87,7 @@ func TestBalanceSchedulerSkipsWhenDrainActive(t *testing.T) {
 		common.DefaultMode,
 		drainState,
 		testDefaultBalanceMoveBatchSize,
+		nil,
 	)
 	_ = s.Execute()
 
@@ -115,6 +117,7 @@ func TestBalanceSchedulerUsesConfiguredMoveBatchSize(t *testing.T) {
 		common.DefaultMode,
 		drainState,
 		5,
+		nil,
 	)
 	_ = s.Execute()
 
@@ -145,6 +148,7 @@ func TestBalanceSchedulerSkipsDuringDrainCooldown(t *testing.T) {
 		common.DefaultMode,
 		drainState,
 		testDefaultBalanceMoveBatchSize,
+		nil,
 	)
 	s.drainBalanceBlockedUntil = time.Time{}
 
@@ -184,7 +188,7 @@ func TestBalanceSchedulerBalancesWholeTableTraffic(t *testing.T) {
 			}
 		}
 	}
-	s := NewBalanceScheduler(cfID, nil, oc, sc, time.Second, common.DefaultMode, drainState, 5)
+	s := NewBalanceScheduler(cfID, nil, oc, sc, time.Second, common.DefaultMode, drainState, 5, nil)
 	s.random = rand.New(rand.NewSource(1))
 	hotMoves := 0
 	for round := range 40 {
@@ -201,14 +205,14 @@ func TestBalanceSchedulerBalancesWholeTableTraffic(t *testing.T) {
 		}
 		tracker.Replace(reports, heartbeatpb.NodeLoadStatus_LOAD_AVAILABLE, time.Now())
 		// Advance the observation window without sleeping in the unit test.
-		s.trafficMovePending = false
-		s.trafficBalanceNotBefore = time.Time{}
+		s.trafficBalance.pending = nil
+		s.trafficBalance.notBefore = time.Time{}
 		s.Execute()
 		if round == 0 {
 			require.Equal(t, 1, oc.OperatorSize(), "traffic balance is locally limited to one move")
 			s.Execute()
 			require.Equal(t, 1, oc.OperatorSize(), "an unfinished move blocks another round")
-			require.True(t, s.trafficMovePending)
+			require.Same(t, oc, s.trafficBalance.pending)
 		}
 		for _, op := range oc.GetAllOperators() {
 			if traffic[op.ID()] > 1 {
@@ -228,7 +232,7 @@ func TestBalanceSchedulerBalancesWholeTableTraffic(t *testing.T) {
 			before := time.Now()
 			s.Execute()
 			require.Zero(t, oc.OperatorSize())
-			require.False(t, s.trafficBalanceNotBefore.Before(before.Add(3*heartbeatpb.DispatcherTrafficSampleInterval)))
+			require.False(t, s.trafficBalance.notBefore.Before(before.Add(3*heartbeatpb.DispatcherTrafficSampleInterval)))
 		}
 	}
 	counts, hotCounts := map[node.ID]int{}, map[node.ID]int{}
@@ -267,7 +271,7 @@ func TestBalanceSchedulerRequiresReliableNodeLoad(t *testing.T) {
 			tracker := replica.NewNodeLoadTracker()
 			tracker.Replace([]*heartbeatpb.NodeLoad{{NodeId: self.String(), BytesPerSecond: 300}, {NodeId: "dest"}}, tc.status, time.Now().Add(-tc.age))
 			sc.SetNodeLoadTracker(tracker)
-			s := NewBalanceScheduler(cfID, nil, oc, sc, time.Second, common.DefaultMode, ds, 2)
+			s := NewBalanceScheduler(cfID, nil, oc, sc, time.Second, common.DefaultMode, ds, 2, nil)
 			s.Execute()
 			require.Equal(t, tc.moves, oc.OperatorSize() > 0)
 		})
@@ -288,7 +292,7 @@ func TestBalanceSchedulerUsesNodeTotalsAcrossChangefeeds(t *testing.T) {
 	tracker := replica.NewNodeLoadTracker()
 	tracker.Replace([]*heartbeatpb.NodeLoad{{NodeId: self.String(), BytesPerSecond: 1500}, {NodeId: "busy", BytesPerSecond: 2000}, {NodeId: "idle", BytesPerSecond: 100}}, heartbeatpb.NodeLoadStatus_LOAD_AVAILABLE, time.Now())
 	sc.SetNodeLoadTracker(tracker)
-	s := NewBalanceScheduler(cfID, nil, oc, sc, time.Second, common.DefaultMode, ds, 5)
+	s := NewBalanceScheduler(cfID, nil, oc, sc, time.Second, common.DefaultMode, ds, 5, nil)
 	s.Execute()
 	require.Equal(t, 1, oc.OperatorSize())
 	op := oc.GetAllOperators()[0]
@@ -309,7 +313,7 @@ func TestBalanceSchedulerDoesNotMoveAnIndivisibleHotTable(t *testing.T) {
 	tracker := replica.NewNodeLoadTracker()
 	tracker.Replace([]*heartbeatpb.NodeLoad{{NodeId: self.String(), BytesPerSecond: 100}, {NodeId: "dest"}}, heartbeatpb.NodeLoadStatus_LOAD_AVAILABLE, time.Now())
 	sc.SetNodeLoadTracker(tracker)
-	s := NewBalanceScheduler(cfID, nil, oc, sc, time.Second, common.DefaultMode, ds, 5)
+	s := NewBalanceScheduler(cfID, nil, oc, sc, time.Second, common.DefaultMode, ds, 5, nil)
 	s.Execute()
 	require.Zero(t, oc.OperatorSize())
 }
@@ -334,13 +338,64 @@ func TestBalanceSchedulerAvoidsBusyEventStoreTargets(t *testing.T) {
 				resource.Load{resource.Sink: 0, kind: 0}.ToNodeLoad("idle"),
 			}, heartbeatpb.NodeLoadStatus_LOAD_AVAILABLE, time.Now())
 			sc.SetNodeLoadTracker(tracker)
-			s := NewBalanceScheduler(cfID, nil, oc, sc, time.Second, common.DefaultMode, ds, 5)
+			s := NewBalanceScheduler(cfID, nil, oc, sc, time.Second, common.DefaultMode, ds, 5, nil)
 			s.Execute()
 			require.Equal(t, 1, oc.OperatorSize())
 			op := oc.GetAllOperators()[0]
 			require.Equal(t, self, op.Schedule().To)
 			op.Check(self, &heartbeatpb.TableSpanStatus{CheckpointTs: 1, ComponentStatus: heartbeatpb.ComponentState_Stopped})
 			require.Equal(t, node.ID("idle"), op.Schedule().To)
+		})
+	}
+}
+
+func TestCountBalanceSkipsRejectedEmptyNode(t *testing.T) {
+	cfID, nm, oc, sc, ds, self := newDrainSchedulerTestHarness(t)
+	for _, id := range []node.ID{self, "busy", "eligible"} {
+		nm.GetAliveNodes()[id] = &node.Info{ID: id}
+	}
+	for i, id := range []node.ID{self, self, self, self, self, "eligible"} {
+		r := addReplicatingSpan(t, cfID, sc, int64(i+1), id)
+		r.UpdateStatus(&heartbeatpb.TableSpanStatus{CheckpointTs: 1, ComponentStatus: heartbeatpb.ComponentState_Working, EventSizePerSecond: 1})
+	}
+	tracker := replica.NewNodeLoadTracker()
+	tracker.Replace([]*heartbeatpb.NodeLoad{
+		resource.Load{resource.Sink: 0, resource.EventStoreWrite: 0}.ToNodeLoad(self.String()),
+		resource.Load{resource.Sink: 0, resource.EventStoreWrite: 2000}.ToNodeLoad("busy"),
+		resource.Load{resource.Sink: 0, resource.EventStoreWrite: 0}.ToNodeLoad("eligible"),
+	}, heartbeatpb.NodeLoadStatus_LOAD_AVAILABLE, time.Now())
+	sc.SetNodeLoadTracker(tracker)
+	s := NewBalanceScheduler(cfID, nil, oc, sc, time.Second, common.DefaultMode, ds, 5, nil)
+	s.Execute()
+	require.Equal(t, 1, oc.OperatorSize())
+	op := oc.GetAllOperators()[0]
+	op.Check(self, &heartbeatpb.TableSpanStatus{CheckpointTs: 1, ComponentStatus: heartbeatpb.ComponentState_Stopped})
+	require.Equal(t, node.ID("eligible"), op.Schedule().To)
+}
+
+func TestTrafficBalanceObservationStartsAfterCompletion(t *testing.T) {
+	for _, interval := range []time.Duration{time.Second, time.Minute} {
+		t.Run(interval.String(), func(t *testing.T) {
+			cfID, nm, oc, sc, _, self := newDrainSchedulerTestHarness(t)
+			nm.GetAliveNodes()[self] = &node.Info{ID: self}
+			nm.GetAliveNodes()["target"] = &node.Info{ID: "target"}
+			r := addReplicatingSpan(t, cfID, sc, 1, self)
+			op := oc.NewMoveOperator(r, self, "target")
+			require.True(t, oc.AddOperator(op))
+			state := NewTrafficBalanceState(interval)
+			state.pending = oc
+			now := time.Unix(100, 0)
+			require.False(t, state.ready(now))
+			// Even a long move must keep both modes blocked until completion.
+			now = now.Add(time.Hour)
+			require.False(t, state.ready(now))
+			require.True(t, state.notBefore.IsZero())
+			oc.RemoveOp(op.ID())
+			require.False(t, state.ready(now))
+			expected := now.Add(max(interval, 3*heartbeatpb.DispatcherTrafficSampleInterval))
+			require.Equal(t, expected, state.notBefore)
+			require.False(t, state.ready(expected.Add(-time.Nanosecond)))
+			require.True(t, state.ready(expected))
 		})
 	}
 }

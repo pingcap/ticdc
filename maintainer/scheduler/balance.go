@@ -53,8 +53,7 @@ type balanceScheduler struct {
 	drainState *DrainState
 
 	drainBalanceBlockedUntil time.Time
-	trafficMovePending       bool
-	trafficBalanceNotBefore  time.Time
+	trafficBalance           *TrafficBalanceState
 }
 
 func NewBalanceScheduler(
@@ -66,7 +65,11 @@ func NewBalanceScheduler(
 	mode int64,
 	drainState *DrainState,
 	moveBatchSize int,
+	trafficBalance *TrafficBalanceState,
 ) *balanceScheduler {
+	if trafficBalance == nil {
+		trafficBalance = NewTrafficBalanceState(checkBalanceInterval)
+	}
 	return &balanceScheduler{
 		changefeedID:         changefeedID,
 		batchSize:            moveBatchSize,
@@ -78,6 +81,7 @@ func NewBalanceScheduler(
 		checkBalanceInterval: checkBalanceInterval,
 		mode:                 mode,
 		drainState:           drainState,
+		trafficBalance:       trafficBalance,
 	}
 }
 
@@ -103,15 +107,6 @@ func (s *balanceScheduler) Execute() time.Time {
 		// not in stable schedule state, skip balance
 		return nextCheckTime
 	}
-	if s.trafficMovePending {
-		// Start the observation window after the operator finishes, so a slow
-		// move cannot consume the cooldown before its new placement is sampled.
-		// Three report windows also let the node smoother settle before choosing
-		// another destination from rates that still include the old placement.
-		s.trafficMovePending = false
-		s.trafficBalanceNotBefore = now.Add(max(s.checkBalanceInterval, 3*heartbeatpb.DispatcherTrafficSampleInterval))
-	}
-
 	// 1. check whether we have spans in defaultGroupID need to be splitted.
 	//    we only consider the not splitted span here.
 	checkResults := s.spanController.CheckByGroup(pkgReplica.DefaultGroupID, s.batchSize)
@@ -141,7 +136,8 @@ func (s *balanceScheduler) schedulerDefaultGroup(
 	maxSize int,
 	state drainStateSnapshot,
 ) int {
-	if maxSize <= 0 || time.Now().Before(s.trafficBalanceNotBefore) {
+	now := time.Now()
+	if maxSize <= 0 || !s.trafficBalance.ready(now) {
 		return 0
 	}
 	nodes := s.nodeManager.GetAliveNodes()
@@ -150,7 +146,6 @@ func (s *balanceScheduler) schedulerDefaultGroup(
 		return 0
 	}
 	group := pkgreplica.DefaultGroupID
-	now := time.Now()
 	loads, status := s.spanController.NodeLoadTracker().Snapshot(nodes, now)
 	if status == heartbeatpb.NodeLoadStatus_LOAD_INCOMPLETE {
 		return 0
@@ -176,7 +171,7 @@ func (s *balanceScheduler) schedulerDefaultGroup(
 		// Project only this maintainer's accepted moves. Other maintainers keep
 		// using the coordinator snapshot until the next node sample arrives.
 		if overloaded && s.balanceTraffic(nodes, replicas, loadView, now) {
-			s.trafficMovePending = true
+			s.trafficBalance.pending = s.operatorController
 			return 1
 		}
 	}
@@ -186,6 +181,7 @@ func (s *balanceScheduler) schedulerDefaultGroup(
 	}
 	return pkgScheduler.Balance(maxSize, s.random, nodes, replicas, func(r *replica.SpanReplication, target node.ID) bool {
 		if status == heartbeatpb.NodeLoadStatus_LOAD_AVAILABLE {
+			source := r.GetNodeID()
 			rate := r.TrafficRate(now)
 			if rate == 0 {
 				return false
@@ -193,13 +189,13 @@ func (s *balanceScheduler) schedulerDefaultGroup(
 			if rate == 1 {
 				rate = 0 // The idle sentinel contributes no actual traffic.
 			}
-			if !loadView.canMove(r.GetNodeID(), target, rate) {
+			if !loadView.canMove(source, target, rate) {
 				return false
 			}
 			if !s.doMove(r, target) {
 				return false
 			}
-			loadView.project(r.GetNodeID(), target, rate)
+			loadView.project(source, target, rate)
 			return true
 		}
 		return s.doMove(r, target)

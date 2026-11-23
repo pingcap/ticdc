@@ -1517,9 +1517,11 @@ func (e *eventStore) writeEvents(
 	insertKVEntryCount.Add(float64(insertCount))
 	updateKVEntryCount.Add(float64(updateCount))
 	deleteKVEntryCount.Add(float64(deleteCount))
+	// A large Pebble commit transfers ownership and clears the batch data.
+	batchBytes := batch.Len()
 	eventStoreWriteBatchEventsCountHist.Observe(float64(kvCount))
-	eventStoreWriteBatchSizeHist.Observe(float64(batch.Len()))
-	eventStoreWriteBytes.Add(float64(batch.Len()))
+	eventStoreWriteBatchSizeHist.Observe(float64(batchBytes))
+	eventStoreWriteBytes.Add(float64(batchBytes))
 	if totalValueBytesAfter > 0 {
 		eventStoreCompressionRatioHistogram.Observe(float64(totalValueBytesBefore) / float64(totalValueBytesAfter))
 	}
@@ -1527,7 +1529,7 @@ func (e *eventStore) writeEvents(
 	start := time.Now()
 	err := batch.Commit(pebble.NoSync)
 	if err == nil {
-		resource.EventStoreWriteBytes.Add(uint64(batch.Len()))
+		resource.EventStoreWriteBytes.Add(uint64(batchBytes))
 	}
 	eventStoreWriteDurationHistogram.Observe(time.Since(start).Seconds())
 	return err

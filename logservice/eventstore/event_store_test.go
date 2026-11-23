@@ -1758,6 +1758,33 @@ func TestEventStoreFailedWriteDoesNotRecordLoad(t *testing.T) {
 	require.Equal(t, before, resource.EventStoreWriteBytes.Load())
 }
 
+func TestEventStoreLargeBatchWriteLoad(t *testing.T) {
+	// A small memtable exercises Pebble's flushable-batch path without a
+	// production-sized allocation. Commit transfers ownership of batch data.
+	db, err := pebble.Open(t.TempDir(), &pebble.Options{MemTableSize: 64 << 10})
+	require.NoError(t, err)
+	defer db.Close()
+	entry := common.RawKVEntry{
+		OpType: common.OpTypePut, StartTs: 1, CRTs: 2,
+		Key: []byte("k"), Value: bytes.Repeat([]byte("v"), 40<<10),
+	}
+	batch := db.NewBatch()
+	require.NoError(t, batch.Set(EncodeKey(1, 1, &entry, CompressionNone), entry.Encode(), pebble.NoSync))
+	expectedBytes := uint64(batch.Len())
+	require.Greater(t, expectedBytes, uint64(40<<10))
+	require.NoError(t, batch.Close())
+
+	encoder, err := zstd.NewWriter(nil)
+	require.NoError(t, err)
+	defer encoder.Close()
+	before := resource.EventStoreWriteBytes.Load()
+	store := &eventStore{}
+	require.NoError(t, store.writeEvents(db, []eventWithCallback{{
+		subID: 1, tableID: 1, kvs: []common.RawKVEntry{entry},
+	}}, encoder, nil, nil))
+	require.Equal(t, expectedBytes, resource.EventStoreWriteBytes.Load()-before)
+}
+
 func TestEventStoreKVEntryCount(t *testing.T) {
 	dir := t.TempDir()
 	_, storeInt := newEventStoreForTest(dir)

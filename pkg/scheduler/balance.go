@@ -115,23 +115,35 @@ func Balance[T replica.ReplicationID, R replica.Replication[T]](
 		return 0
 	}
 
+	tryMove := func() (victim, target *item[T, R], taskIndex int) {
+		// The first entries retain the usual most/least loaded fast path.
+		// Rejections can be specific to a task, source, or destination, so try
+		// the other pairs before declaring this round unable to make progress.
+		for _, source := range maxPriorityQueue.h.All() {
+			if source.Load <= lowerLimitPerCapture {
+				continue
+			}
+			for i, task := range source.Tasks {
+				for _, dest := range minPriorityQueue.h.All() {
+					if dest.Load < lowerLimitPerCapture && move(task, dest.Node) {
+						return source, dest, i
+					}
+				}
+			}
+		}
+		return nil, nil, -1
+	}
+
 	movedSize = 0
 	for {
-		target, _ := minPriorityQueue.PeekTop()
-		if target.Load >= lowerLimitPerCapture {
-			// the minimum workload has reached the lower limit
-			break
-		}
-		victim, _ := maxPriorityQueue.PeekTop()
-		task := victim.Tasks[0]
-		if !move(task, target.Node) {
-			// A rejected move leaves both queues unchanged, so retrying would pick
-			// the same pair forever. End the round; the next one reshuffles tasks.
+		victim, target, taskIndex := tryMove()
+		if taskIndex < 0 {
 			break
 		}
 		// update the task size priority queue
 		target.Load++
 		victim.Load--
+		victim.Tasks[taskIndex] = victim.Tasks[0]
 		clear(victim.Tasks[:1])
 		victim.Tasks = victim.Tasks[1:]
 		movedSize++
