@@ -181,5 +181,5 @@ func (c *ConsistentConfig) MaskSensitiveData() {
 			redactedStorage = parsed.String()
 		}
 	}
-	c.Storage = util.AddressOf(util.MaskSensitiveDataInURI(redactedStorage))
+	c.Storage = new(util.MaskSensitiveDataInURI(redactedStorage))
 }

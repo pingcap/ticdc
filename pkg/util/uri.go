@@ -16,6 +16,7 @@ package util
 import (
 	"net"
 	"net/url"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -187,12 +188,8 @@ func ContainsSensitiveDataInURI(uri string) bool {
 		if isSensitiveQueryParameter(name) {
 			return true
 		}
-		if strings.EqualFold(name, "endpoint") {
-			for _, endpoint := range values {
-				if endpointContainsSensitiveData(endpoint) {
-					return true
-				}
-			}
+		if strings.EqualFold(name, "endpoint") && slices.ContainsFunc(values, endpointContainsSensitiveData) {
+			return true
 		}
 	}
 	if _, sensitive := maskSensitiveDataInQueryLikeText(parsed.Fragment); sensitive {
@@ -213,13 +210,8 @@ func MaskSensitiveDataInURI(uri string) string {
 			queries.Set(key, "xxxxx")
 			continue
 		}
-		if strings.EqualFold(key, "endpoint") {
-			for _, endpoint := range values {
-				if endpointContainsSensitiveData(endpoint) {
-					queries.Set(key, "xxxxx")
-					break
-				}
-			}
+		if strings.EqualFold(key, "endpoint") && slices.ContainsFunc(values, endpointContainsSensitiveData) {
+			queries.Set(key, "xxxxx")
 		}
 	}
 	uriParsed.RawQuery = queries.Encode()

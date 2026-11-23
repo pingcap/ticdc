@@ -272,7 +272,7 @@ func TestChangefeedConfigStringMasksSensitiveData(t *testing.T) {
 	changefeedConfig := &ChangefeedConfig{
 		SinkURI:    "mysql://user:sink-password-sentinel@127.0.0.1:3306/?secret=uri-secret-sentinel",
 		SinkConfig: cfg.Sink,
-		Consistent: &ConsistentConfig{Storage: util.AddressOf("s3://bucket/prefix?secret-access-key=redo-secret-sentinel")},
+		Consistent: &ConsistentConfig{Storage: new("s3://bucket/prefix?secret-access-key=redo-secret-sentinel")},
 	}
 	original, err := json.Marshal(changefeedConfig)
 	require.NoError(t, err)
@@ -370,7 +370,7 @@ func TestChangeFeedInfoRmUnusedFieldsEncoderConcurrency(t *testing.T) {
 		// Cleanup must preserve the configured value for MQ sinks and blackhole.
 		t.Run(tt.sinkURI, func(t *testing.T) {
 			cfg := GetDefaultReplicaConfig()
-			cfg.Sink.EncoderConcurrency = util.AddressOf(16)
+			cfg.Sink.EncoderConcurrency = new(16)
 			info := &ChangeFeedInfo{SinkURI: tt.sinkURI, Config: cfg}
 			info.RmUnusedFields()
 			if tt.keep {
