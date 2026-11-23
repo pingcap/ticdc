@@ -67,17 +67,6 @@ func CloseDB(db *sql.DB) error {
 	return errors.Trace(db.Close())
 }
 
-// CloseDBs close the mysql fd
-func CloseDBs(dbs []*sql.DB) error {
-	for _, db := range dbs {
-		err := db.Close()
-		if err != nil {
-			return errors.Trace(err)
-		}
-	}
-	return nil
-}
-
 // CheckSyncState check if srouceDB and targetDB has the same table and data
 func CheckSyncState(sourceDB, targetDB *sql.DB, schema string) bool {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -155,17 +144,4 @@ func MustExecWithConn(ctx context.Context, conn *sql.Conn, sql string, args ...i
 	if err != nil && errors.Cause(err) == context.DeadlineExceeded && errors.Cause(err) == context.Canceled {
 		log.S().Fatal(err)
 	}
-}
-
-// CreateSinkDB return sink sql.DB for test
-func CreateSinkDB() (db *sql.DB, err error) {
-	cfg := DBConfig{
-		Host:     "127.0.0.1",
-		User:     "root",
-		Password: "",
-		Name:     "test",
-		Port:     3306,
-	}
-
-	return CreateDB(cfg)
 }

@@ -32,6 +32,15 @@ function test_recover_schema() {
 	run_sql "drop database recover_schema_test;" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
 	ensure 30 "check_db_not_exists recover_schema_test ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT}"
 
+	# Recover an empty database, then reload its metadata from disk below.
+	run_sql "drop database if exists recover_empty_schema_test;" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
+	run_sql "create database recover_empty_schema_test;" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
+	ensure 30 "check_db_exists recover_empty_schema_test ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT}"
+	run_sql "drop database recover_empty_schema_test;" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
+	ensure 30 "check_db_not_exists recover_empty_schema_test ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT}"
+	run_sql "flashback database recover_empty_schema_test;" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
+	ensure 30 "check_db_exists recover_empty_schema_test ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT}"
+
 	# Simulate the old TiDB job format, which embeds all recovered table infos.
 	check_cdc_server_guard --workdir "$WORK_DIR"
 	stop_cdc_server_guards
@@ -40,6 +49,12 @@ function test_recover_schema() {
 	export GO_FAILPOINTS='github.com/pingcap/ticdc/logservice/schemastore/forceRecoverSchemaJobWithTableInfo=return(true)'
 	run_cdc_server_with_guard --max-restarts 3 --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix "-recover-schema" --data-dir "$WORK_DIR/cdc_data"
 	export GO_FAILPOINTS=''
+
+	check_cdc_server_guard --workdir "$WORK_DIR" --logsuffix "-recover-schema"
+	run_sql "create table recover_empty_schema_test.after_reload (id int primary key);" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
+	check_table_exists recover_empty_schema_test.after_reload ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT}
+	run_sql "drop database recover_empty_schema_test;" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
+	ensure 30 "check_db_not_exists recover_empty_schema_test ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT}"
 
 	run_sql "flashback database recover_schema_test;" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
 	ensure 30 "grep -q 'forced recover schema job to use embedded table infos' $WORK_DIR/cdc-recover-schema.log"

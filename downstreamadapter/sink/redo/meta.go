@@ -397,10 +397,6 @@ func (m *RedoMeta) maybeFlushMeta(ctx context.Context) error {
 		return nil
 	}
 
-	log.Debug("Flush redo meta",
-		zap.String("keyspace", m.changeFeedID.Keyspace()),
-		zap.String("changefeed", m.changeFeedID.Name()),
-		zap.Any("meta", unflushed))
 	if err := m.flush(ctx, unflushed); err != nil {
 		return err
 	}
@@ -467,11 +463,6 @@ func (m *RedoMeta) flush(ctx context.Context, meta misc.LogMeta) error {
 	}
 	m.preMetaFile = metaFile
 
-	log.Debug("flush meta to s3",
-		zap.String("keyspace", m.changeFeedID.Keyspace()),
-		zap.String("changefeed", m.changeFeedID.Name()),
-		zap.String("metaFile", metaFile),
-		zap.Any("cost", time.Since(start).Milliseconds()))
 	m.metricFlushLogDuration.Observe(time.Since(start).Seconds())
 	return nil
 }
@@ -529,7 +520,7 @@ func (m *RedoMeta) bgGC(egCtx context.Context) error {
 	ticker := time.NewTicker(time.Duration(redo.DefaultGCIntervalInMs) * time.Millisecond)
 	defer ticker.Stop()
 
-	preCkpt := uint64(0)
+	var preCkpt uint64
 	for {
 		select {
 		case <-egCtx.Done():
@@ -546,10 +537,6 @@ func (m *RedoMeta) bgGC(egCtx context.Context) error {
 				continue
 			}
 			preCkpt = ckpt
-			log.Debug("redo meta GC is triggered",
-				zap.Uint64("checkpointTs", ckpt),
-				zap.String("keyspace", m.changeFeedID.Keyspace()),
-				zap.String("changefeed", m.changeFeedID.Name()))
 			err := util.RemoveFilesIf(egCtx, m.extStorage, func(path string) bool {
 				return m.shouldRemoved(path, ckpt)
 			}, nil)

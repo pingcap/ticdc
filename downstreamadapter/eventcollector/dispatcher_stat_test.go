@@ -1595,6 +1595,30 @@ func TestHandleSingleDataEventsUpdatesDDLStateAndDedupsSameTsDDL(t *testing.T) {
 	require.Len(t, mockDisp.events, 1)
 }
 
+func TestHandleDDLErrorWithTableRouting(t *testing.T) {
+	mock := newMockDispatcher(common.NewDispatcherID(), 0)
+	mock.tableSpan = &heartbeatpb.TableSpan{TableID: 1}
+	var err error
+	mock.router, err = routing.NewRouter(mock.changefeedID, false, []*config.DispatchRule{
+		{Matcher: []string{"test.*"}, TargetSchema: "destination"},
+	})
+	require.NoError(t, err)
+	mock.handleEvents = func([]dispatcher.DispatcherEvent, func()) bool { return true }
+	stat := newDispatcherStatForTest(mock, nil)
+	stat.currentEpoch.Store(newDispatcherEpochState(10, 1, 0))
+	markSessionReceiving(stat.session, node.ID("service1"))
+	stat.lastEventCommitTs.Store(100)
+	stat.tableInfoVersion.Store(90)
+	stat.gotDDLOnTs.Store(true)
+	ddl := &commonEvent.DDLEvent{Seq: 2, Epoch: 10, FinishedTs: 100, Err: "partitioned table is unsupported"}
+	require.True(t, stat.handleSingleDataEvents([]dispatcher.DispatcherEvent{
+		dispatcher.NewDispatcherEvent(createNodeID("service1"), ddl),
+	}))
+	require.Len(t, mock.events, 1)
+	require.Same(t, ddl, mock.events[0].Event)
+	require.Equal(t, uint64(90), stat.tableInfoVersion.Load())
+}
+
 func TestHandleSingleDataEventsUpdatesSyncPointStateAndDedupsSameTsSyncPoint(t *testing.T) {
 	t.Parallel()
 
@@ -2045,7 +2069,7 @@ func TestLocalHeartbeatRemovedReregisterReadySendsReset(t *testing.T) {
 	msg := messaging.NewSingleTargetMessage(localServerID, messaging.EventCollectorTopic, response)
 	msg.From = localServerID
 
-	mockEventCollector.handleDispatcherHeartbeatResponse(msg)
+	mockEventCollector.handleDispatcherHeartbeatResponse(msg.From, response)
 	requireDispatcherRequests(
 		t,
 		readDispatcherRequests(t, mockEventCollector, 1),

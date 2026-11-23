@@ -42,7 +42,7 @@ mysql_groups=(
 	# G04
 	'ci_collation_compatibility resourcecontrol fail_over_ddl_E changefeed_create_paused'
 	# G05
-	'vector simple partition_table fail_over_ddl_F conflict_key_generated_column wide_table'
+	'vector simple partition_table fail_over_ddl_F conflict_key_generated_column mysql_conflict_keys wide_table'
 	# G06
 	'http_api http_api_compatibility http_api_tls_old_arch fail_over_ddl_G synced_status same_upstream_downstream'
 	# G07
@@ -54,14 +54,14 @@ mysql_groups=(
 	# G10
 	'overwrite_resume_with_syncpoint restart_changefeed changefeed_error bdr_mode fail_over_ddl_K split_table_check'
 	# G11
-	'kill_owner_with_ddl multi_tables_ddl ddl_attributes multi_cdc_cluster fail_over_ddl_L'
+	'pause_changefeed_with_long_time_ddl kill_owner_with_ddl multi_tables_ddl ddl_attributes multi_cdc_cluster fail_over_ddl_L'
 	# G12
 	# ds_memory_control
-	'row_format tiflash multi_rocks fail_over_ddl_M correctness_for_shared_column_schema partial_index'
+	'update_changefeed_check_config row_format tiflash multi_rocks fail_over_ddl_M correctness_for_shared_column_schema partial_index'
 	# G13
 	'cli_with_auth fail_over_ddl_N maintainer_failover_when_operator cli_missing_keyspace_error changefeed_query_toml_api'
 	# G14
-	'batch_add_table batch_update_to_no_batch fail_over_ddl_O update_changefeed_check_config pause_changefeed_with_long_time_ddl'
+	"batch_add_table batch_update_to_no_batch batch_dml_with_filter fail_over_ddl_O"
 	# G15
 	'split_region changefeed_resume_with_checkpoint_ts autorandom gc_safepoint foreign_key_check old_arch_compatibility bootstrap_retry_after_error'
 )

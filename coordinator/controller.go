@@ -464,8 +464,7 @@ func (c *Controller) onMessage(ctx context.Context, msg *messaging.TargetMessage
 		c.drainController.ObserveEventBrokerDispatcherCountResponse(msg.Message[0].(*logservicepb.EventBrokerDispatcherCountResponse))
 	default:
 		log.Warn("unknown message type, ignore it",
-			zap.String("type", msg.Type.String()),
-			zap.Any("message", msg.Message))
+			zap.String("type", msg.Type.String()))
 	}
 }
 
@@ -525,10 +524,6 @@ func (c *Controller) RequestResolvedTsFromLogCoordinator(ctx context.Context, ch
 		case <-ticker.C:
 			newTs := c.changefeedDB.GetLogCoordinatorResolvedTsByName(changefeedDisplayName)
 			if newTs != oldTs {
-				log.Debug("received log coordinator resolved ts",
-					zap.String("changefeed", changefeedDisplayName.String()),
-					zap.Uint64("oldTs", oldTs),
-					zap.Uint64("newTs", newTs))
 				return
 			}
 		case <-ctx.Done():

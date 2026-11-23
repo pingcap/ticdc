@@ -415,3 +415,39 @@ func TestDispatcherHeartbeatResponseHeaderValidation(t *testing.T) {
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "data too short")
 }
+
+func TestDispatcherHeartbeatRejectsUntrustedCounts(t *testing.T) {
+	for _, test := range []struct {
+		name      string
+		eventType int
+		version   int
+		decode    func([]byte) error
+	}{
+		{
+			name:      "heartbeat v1",
+			eventType: TypeDispatcherHeartbeat,
+			version:   DispatcherHeartbeatVersion1,
+			decode:    func(data []byte) error { return (&DispatcherHeartbeat{}).Unmarshal(data) },
+		},
+		{
+			name:      "heartbeat v2",
+			eventType: TypeDispatcherHeartbeat,
+			version:   DispatcherHeartbeatVersion2,
+			decode:    func(data []byte) error { return (&DispatcherHeartbeat{}).Unmarshal(data) },
+		},
+		{
+			name:      "heartbeat response",
+			eventType: TypeDispatcherHeartbeatResponse,
+			version:   DispatcherHeartbeatResponseVersion1,
+			decode:    func(data []byte) error { return (&DispatcherHeartbeatResponse{}).Unmarshal(data) },
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			payload := make([]byte, 12)
+			binary.BigEndian.PutUint32(payload[8:12], ^uint32(0))
+			data, err := MarshalEventWithHeader(test.eventType, test.version, payload)
+			require.NoError(t, err)
+			require.Error(t, test.decode(data))
+		})
+	}
+}

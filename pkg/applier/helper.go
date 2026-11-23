@@ -17,13 +17,11 @@ import (
 	"fmt"
 	"strconv"
 
-	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/cmd/util"
 	commonType "github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/errors"
 	codeccommon "github.com/pingcap/ticdc/pkg/sink/codec/common"
-	"go.uber.org/zap"
 )
 
 func isNonEmptyUniqueOrHandleCol(col commonEvent.RedoColumnValue) bool {
@@ -115,31 +113,28 @@ func splitUpdateEvent(
 	deleteEvent := &commonEvent.RedoDMLEvent{
 		PreColumns: updateEvent.PreColumns,
 		Row: &commonEvent.DMLEventInRedoLog{
-			StartTs:      updateEvent.Row.StartTs,
-			CommitTs:     updateEvent.Row.CommitTs,
-			Table:        updateEvent.Row.Table,
-			PreColumns:   updateEvent.Row.PreColumns,
-			IndexColumns: updateEvent.Row.IndexColumns,
+			StartTs:            updateEvent.Row.StartTs,
+			CommitTs:           updateEvent.Row.CommitTs,
+			Table:              updateEvent.Row.Table,
+			SourceTable:        updateEvent.Row.SourceTable,
+			PreColumns:         updateEvent.Row.PreColumns,
+			IndexColumns:       updateEvent.Row.IndexColumns,
+			IndexColumnLengths: updateEvent.Row.IndexColumnLengths,
 		},
 	}
 
 	insertEvent := &commonEvent.RedoDMLEvent{
 		Columns: updateEvent.Columns,
 		Row: &commonEvent.DMLEventInRedoLog{
-			StartTs:      updateEvent.Row.StartTs,
-			CommitTs:     updateEvent.Row.CommitTs,
-			Table:        updateEvent.Row.Table,
-			Columns:      updateEvent.Row.Columns,
-			IndexColumns: updateEvent.Row.IndexColumns,
+			StartTs:            updateEvent.Row.StartTs,
+			CommitTs:           updateEvent.Row.CommitTs,
+			Table:              updateEvent.Row.Table,
+			SourceTable:        updateEvent.Row.SourceTable,
+			Columns:            updateEvent.Row.Columns,
+			IndexColumns:       updateEvent.Row.IndexColumns,
+			IndexColumnLengths: updateEvent.Row.IndexColumnLengths,
 		},
 	}
-
-	log.Debug("split update event", zap.Uint64("startTs", updateEvent.Row.StartTs),
-		zap.Uint64("commitTs", updateEvent.Row.CommitTs),
-		zap.String("schema", updateEvent.Row.Table.Schema),
-		zap.String("table", updateEvent.Row.Table.Table),
-		zap.Any("preCols", updateEvent.PreColumns),
-		zap.Any("cols", updateEvent.Columns))
 
 	return deleteEvent, insertEvent, nil
 }
@@ -166,7 +161,18 @@ func newRedoDMLMessage(row *commonEvent.RedoDMLEvent) *codeccommon.DMLMessage {
 		rowType = commonType.RowTypeUpdate
 	}
 	return codeccommon.NewDMLMessage(row.Row.Table.TableID, row.Row.Table.Schema,
-		row.Row.Table.Table, row.Row.CommitTs, rowType, row.ToDMLEvent)
+		row.Row.Table.Table, row.Row.CommitTs, rowType, func() *commonEvent.DMLEvent {
+			event := row.ToDMLEvent()
+			if source := row.Row.SourceTable; source != nil &&
+				(source.Schema != row.Row.Table.Schema || source.Table != row.Row.Table.Table) {
+				// Match ordering rules against the source while writing the recorded target.
+				info := event.TableInfo.CloneWithRouting(row.Row.Table.Schema, row.Row.Table.Table)
+				info.TableName.Schema, info.TableName.Table = source.Schema, source.Table
+				info.TableName.IsPartition = source.IsPartition
+				event.TableInfo = info
+			}
+			return event
+		})
 }
 
 type ddlTs struct {

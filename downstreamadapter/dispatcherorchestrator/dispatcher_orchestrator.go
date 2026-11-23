@@ -108,8 +108,7 @@ func (m *DispatcherOrchestrator) RecvMaintainerRequest(
 	key, ok := getPendingMessageKey(msg)
 	if !ok {
 		log.Warn("unknown message type, drop message",
-			zap.String("type", msg.Type.String()),
-			zap.Any("message", msg.Message))
+			zap.String("type", msg.Type.String()))
 		return nil
 	}
 
@@ -173,8 +172,7 @@ func (m *DispatcherOrchestrator) processMessage(msg *messaging.TargetMessage) {
 		}
 	default:
 		log.Warn("unknown message type, ignore it",
-			zap.String("type", msg.Type.String()),
-			zap.Any("message", msg.Message))
+			zap.String("type", msg.Type.String()))
 	}
 }
 
@@ -487,7 +485,7 @@ func validateBootstrapNoTableTriggerDispatcher(
 	log.Error("table trigger dispatcher present during nil trigger bootstrap",
 		zap.Stringer("changefeedID", cfID),
 		zap.String("triggerName", triggerName),
-		zap.Stringer("actualDispatcherID", currentID))
+		zap.Stringer("dispatcherID", currentID))
 	return errors.ErrChangefeedInitTableTriggerDispatcherFailed.
 		GenWithStackByArgs(triggerName + " present during nil trigger bootstrap")
 }
@@ -506,7 +504,7 @@ func validateBootstrapTableTriggerDispatcherID(
 		zap.Stringer("changefeedID", cfID),
 		zap.String("triggerName", triggerName),
 		zap.Stringer("expectedDispatcherID", expectedID),
-		zap.Stringer("actualDispatcherID", currentID))
+		zap.Stringer("dispatcherID", currentID))
 	return errors.ErrChangefeedInitTableTriggerDispatcherFailed.
 		GenWithStackByArgs(triggerName + " id mismatch during bootstrap")
 }
@@ -584,7 +582,7 @@ func (m *DispatcherOrchestrator) handlePostBootstrapRequest(
 		log.Error("Receive post bootstrap request but the table trigger event dispatcher id is not match",
 			zap.Any("changefeedID", cfId.Name()),
 			zap.String("expectedDispatcherID", expectedDispatcherID.String()),
-			zap.String("actualDispatcherID", actualDispatcherID.String()))
+			zap.String("dispatcherID", actualDispatcherID.String()))
 
 		err := errors.ErrChangefeedInitTableTriggerDispatcherFailed.
 			GenWithStackByArgs("Receive post bootstrap request but the table trigger event dispatcher id is not match")

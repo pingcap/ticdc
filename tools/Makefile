@@ -35,7 +35,7 @@ tools/bin/shfmt: tools/check/go.mod
 	cd tools/check && $(GO) build -mod=mod -o ../bin/shfmt mvdan.cc/sh/v3/cmd/shfmt
 
 tools/bin/oapi-codegen: tools/check/go.mod
-	cd tools/check && $(GO) build -mod=mod -o ../bin/oapi-codegen github.com/deepmap/oapi-codegen/cmd/oapi-codegen
+	cd tools/check && $(GO) build -mod=mod -o ../bin/oapi-codegen github.com/oapi-codegen/oapi-codegen/v2/cmd/oapi-codegen
 
 tools/bin/gocov: tools/check/go.mod
 	cd tools/check && $(GO) build -mod=mod -o ../bin/gocov  github.com/axw/gocov/gocov

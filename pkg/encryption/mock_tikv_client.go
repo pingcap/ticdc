@@ -129,43 +129,15 @@ func (c *MockTiKVClient) initDefaultMockData() {
 func (c *MockTiKVClient) GetKeyspaceEncryptionMeta(ctx context.Context, keyspaceID uint32) (*EncryptionMeta, error) {
 	// Check if this keyspace should return not found error
 	if c.notFoundKeyspaces[keyspaceID] {
-		log.Debug("mock TiKV client: encryption meta not found",
-			zap.Uint32("keyspaceID", keyspaceID))
 		return nil, cerrors.ErrEncryptionMetaNotFound
 	}
 
 	// Return mock metadata if available
 	if meta, ok := c.metaMap[keyspaceID]; ok {
-		log.Debug("mock TiKV client: returning encryption meta",
-			zap.Uint32("keyspaceID", keyspaceID),
-			zap.Bool("enabled", meta != nil))
 		return meta, nil
 	}
 
 	// Default behavior: return not found for unknown keyspaces
 	// This simulates classic architecture or unconfigured encryption
-	log.Debug("mock TiKV client: encryption meta not found (unknown keyspace)",
-		zap.Uint32("keyspaceID", keyspaceID))
 	return nil, cerrors.ErrEncryptionMetaNotFound
-}
-
-// SetKeyspaceMeta sets mock encryption metadata for a keyspace (for testing)
-func (c *MockTiKVClient) SetKeyspaceMeta(keyspaceID uint32, meta *EncryptionMeta) {
-	c.metaMap[keyspaceID] = meta
-}
-
-// SetKeyspaceNotFound sets a keyspace to return cerrors.ErrEncryptionMetaNotFound (for testing)
-func (c *MockTiKVClient) SetKeyspaceNotFound(keyspaceID uint32) {
-	c.notFoundKeyspaces[keyspaceID] = true
-}
-
-// ClearKeyspaceNotFound clears the not found flag for a keyspace (for testing)
-func (c *MockTiKVClient) ClearKeyspaceNotFound(keyspaceID uint32) {
-	delete(c.notFoundKeyspaces, keyspaceID)
-}
-
-// GetKeyspaceMeta gets the stored mock metadata (for testing)
-func (c *MockTiKVClient) GetKeyspaceMeta(keyspaceID uint32) (*EncryptionMeta, bool) {
-	meta, ok := c.metaMap[keyspaceID]
-	return meta, ok
 }
