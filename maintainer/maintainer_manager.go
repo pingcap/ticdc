@@ -20,6 +20,7 @@ import (
 
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/heartbeatpb"
+	"github.com/pingcap/ticdc/maintainer/replica"
 	"github.com/pingcap/ticdc/pkg/common"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	"github.com/pingcap/ticdc/pkg/config"
@@ -53,7 +54,8 @@ type Manager struct {
 	// heartbeatCh coalesces prompt reports from low-latency maintainers.
 	heartbeatCh chan struct{}
 	// node holds node-scoped liveness and drain state that applies to the whole capture.
-	node *managerNodeState
+	node      *managerNodeState
+	nodeLoads *replica.NodeLoadTracker
 	// maintainers holds changefeed-scoped state and lifecycle operations.
 	maintainers *managerMaintainerSet
 	writeGate   *writelease.Gate
@@ -85,6 +87,7 @@ func NewMaintainerManager(
 		node:        newManagerNodeState(nodeLiveness),
 		maintainers: newManagerMaintainerSet(conf, nodeInfo, heartbeatCh),
 		writeGate:   writeGate,
+		nodeLoads:   replica.NewNodeLoadTracker(),
 		verifyCoordinator: func(ctx context.Context, id node.ID, version int64) error {
 			nodeManager, ok := appcontext.TryGetService[*watcher.NodeManager](watcher.NodeManagerName)
 			if !ok || nodeManager == nil {
@@ -100,6 +103,7 @@ func NewMaintainerManager(
 			return nil
 		},
 	}
+	m.maintainers.nodeLoads = m.nodeLoads
 
 	mc.RegisterHandler(messaging.MaintainerManagerTopic, m.recvMessages)
 	mc.RegisterHandler(messaging.MaintainerTopic, m.recvMaintainerMessage)
@@ -280,10 +284,16 @@ func (m *Manager) onCoordinatorBootstrapRequest(msg *messaging.TargetMessage) {
 	if m.coordinatorID != msg.From || m.coordinatorVersion != req.Version {
 		m.writeGate.InvalidateP2P()
 		m.node.resetWriteLeaseRequests()
+		m.nodeLoads.Replace(nil, heartbeatpb.NodeLoadStatus_LOAD_INCOMPLETE, time.Now())
 	}
 	m.writeGate.SetP2PRequired(
 		req.GetWriteLeaseProtocolVersion() == heartbeatpb.CurrentWriteLeaseProtocolVersion,
 	)
+	if req.GetWriteLeaseProtocolVersion() != heartbeatpb.CurrentWriteLeaseProtocolVersion {
+		// Older coordinators do not send node heartbeat responses. Retain count
+		// balancing instead of waiting indefinitely for a resource snapshot.
+		m.nodeLoads.Replace(nil, heartbeatpb.NodeLoadStatus_LOAD_UNSUPPORTED, time.Now())
+	}
 	m.coordinatorID = msg.From
 	m.coordinatorVersion = req.Version
 

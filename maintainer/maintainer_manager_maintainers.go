@@ -21,6 +21,7 @@ import (
 
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/heartbeatpb"
+	"github.com/pingcap/ticdc/maintainer/replica"
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
@@ -52,6 +53,7 @@ type managerMaintainerSet struct {
 	taskScheduler threadpool.ThreadPool
 	// heartbeatCh coalesces prompt reports from low-latency maintainers.
 	heartbeatCh chan<- struct{}
+	nodeLoads   *replica.NodeLoadTracker
 
 	// registryMu serializes registry mutations that create, replace, or fully
 	// close maintainers because maintainer metrics share changefeed labels across
@@ -220,6 +222,10 @@ func (p *managerMaintainerSet) handleAddMaintainer(
 	newMaintainer := func() *Maintainer {
 		maintainer := NewMaintainer(changefeedID, p.conf, info, p.nodeInfo, p.taskScheduler, req.CheckpointTs, req.IsNewChangefeed, req.KeyspaceId)
 		maintainer.managerHeartbeatCh = p.heartbeatCh
+		maintainer.controller.spanController.SetNodeLoadTracker(p.nodeLoads)
+		if maintainer.controller.redoSpanController != nil {
+			maintainer.controller.redoSpanController.SetNodeLoadTracker(p.nodeLoads)
+		}
 		return maintainer
 	}
 	registeredMaintainer := p.registerMaintainerForAdd(changefeedID, requestEpoch, newMaintainer)

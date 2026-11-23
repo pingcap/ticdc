@@ -16,12 +16,22 @@ package dispatcher
 import (
 	"container/list"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/pingcap/log"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"go.uber.org/zap"
 )
+
+var flushedEventBytes atomic.Uint64
+
+// FlushedEventBytes returns the process-wide cumulative event size, in the same
+// units as dispatcher EventSizePerSecond reports. Reading it never resets the
+// per-dispatcher sampling window.
+func FlushedEventBytes() uint64 {
+	return flushedEventBytes.Load()
+}
 
 // TableProgress maintains event timestamp information in the sink.
 // It provides the ability to:
@@ -132,6 +142,7 @@ func (p *TableProgress) remove(ts Ts, size int64) {
 		}
 	}
 	p.cumulateEventSize += size
+	flushedEventBytes.Add(uint64(size))
 }
 
 // Empty checks if the TableProgress is empty.

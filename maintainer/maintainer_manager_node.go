@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/pingcap/log"
+	"github.com/pingcap/ticdc/downstreamadapter/dispatcher"
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/pkg/liveness"
 	"github.com/pingcap/ticdc/pkg/messaging"
@@ -112,6 +113,7 @@ func (m *Manager) sendNodeHeartbeat(force bool) {
 		WriteLeaseRequestSeq:        requestSeq,
 		WriteLeaseProtocolVersion:   heartbeatpb.CurrentWriteLeaseProtocolVersion,
 		WriteLeaseWitnessAck:        m.node.pendingWitnessAck,
+		NodeLoad:                    &heartbeatpb.NodeLoad{FlushedEventBytes: dispatcher.FlushedEventBytes()},
 	}
 	target := m.newCoordinatorTopicMessage(hb)
 	if err := m.mc.SendCommand(target); err != nil {
@@ -190,6 +192,7 @@ func (m *Manager) onNodeHeartbeatResponse(msg *messaging.TargetMessage) {
 		m.writeGate.SetP2PRequired(true)
 	}
 	captureLeaseResponseCounter.WithLabelValues("accepted").Inc()
+	m.nodeLoads.Replace(response.NodeLoads, response.NodeLoadStatus, time.Now())
 	m.node.lastAppliedLeaseSeq = requestSeq
 	for seq := range m.node.writeLeaseRequestSentAt {
 		if seq <= requestSeq {

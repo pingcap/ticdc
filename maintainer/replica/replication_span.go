@@ -16,6 +16,7 @@ package replica
 import (
 	"bytes"
 	"sync"
+	"time"
 
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/heartbeatpb"
@@ -41,14 +42,31 @@ type SpanReplication struct {
 	enabledSplit bool
 
 	schemaID    int64
-	nodeIDMutex sync.Mutex // mutex for nodeID
+	nodeIDMutex sync.Mutex // protects nodeID and traffic
 	nodeID      node.ID
 	groupID     replica.GroupID
 	status      *atomic.Pointer[heartbeatpb.TableSpanStatus]
+	traffic     spanTraffic
 	blockState  *atomic.Pointer[heartbeatpb.State]
 	// committedCheckpointTs points to the controller owned committed checkpoint for this mode.
 	// It provides a monotonic lower bound for any recreated dispatcher StartTs.
 	committedCheckpointTs *atomic.Uint64
+}
+
+type spanTraffic struct {
+	bytesPerSecond float64
+	updatedAt      time.Time
+}
+
+// TrafficRate preserves complete traffic samples across status-only updates.
+// Zero means no recent sample; one is the dispatcher's idle sentinel.
+func (r *SpanReplication) TrafficRate(now time.Time) float64 {
+	r.nodeIDMutex.Lock()
+	defer r.nodeIDMutex.Unlock()
+	if now.Sub(r.traffic.updatedAt) > NodeLoadStaleThreshold {
+		return 0
+	}
+	return r.traffic.bytesPerSecond
 }
 
 func NewSpanReplication(cfID common.ChangeFeedID,
@@ -177,6 +195,11 @@ func (r *SpanReplication) UpdateStatus(newStatus *heartbeatpb.TableSpanStatus) b
 		return false
 	}
 	r.status.Store(newStatus)
+	if newStatus.EventSizePerSecond > 0 {
+		r.nodeIDMutex.Lock()
+		r.traffic = spanTraffic{bytesPerSecond: float64(newStatus.EventSizePerSecond), updatedAt: time.Now()}
+		r.nodeIDMutex.Unlock()
+	}
 	return newStatus.CheckpointTs != oldStatus.CheckpointTs
 }
 
@@ -227,6 +250,9 @@ func (r *SpanReplication) SetSchemaID(schemaID int64) {
 func (r *SpanReplication) SetNodeID(n node.ID) {
 	r.nodeIDMutex.Lock()
 	defer r.nodeIDMutex.Unlock()
+	if r.nodeID != n {
+		r.traffic = spanTraffic{}
+	}
 	r.nodeID = n
 }
 

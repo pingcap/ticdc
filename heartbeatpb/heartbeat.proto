@@ -209,6 +209,7 @@ message NodeHeartbeat {
     uint64 write_lease_request_seq = 5;
     uint32 write_lease_protocol_version = 6;
     WriteLeaseWitnessAck write_lease_witness_ack = 7;
+    NodeLoad node_load = 8;
 }
 
 message WriteLeaseWitnessChallenge {
@@ -233,6 +234,8 @@ message NodeHeartbeatResponse {
     uint64 request_seq = 3;
     uint64 lease_duration_ms = 4;
     WriteLeaseWitnessChallenge witness_challenge = 5;
+    repeated NodeLoad node_loads = 6;
+    NodeLoadStatus node_load_status = 7;
 }
 
 // SetNodeLivenessRequest asks a node to transition its local liveness.
@@ -548,4 +551,18 @@ message DispatcherSetChecksumUpdateRequest {
     int64 mode = 3;
     uint64 seq = 4;
     DispatcherSetChecksum checksum = 5;
+}
+
+// Requests report a process-wide cumulative counter. Coordinator responses
+// identify each node and report its derived rate, without dispatcher details.
+message NodeLoad {
+    string node_id = 1;
+    uint64 flushed_event_bytes = 2;
+    double bytes_per_second = 3;
+}
+
+enum NodeLoadStatus {
+    LOAD_UNSUPPORTED = 0;
+    LOAD_INCOMPLETE = 1;
+    LOAD_AVAILABLE = 2;
 }
