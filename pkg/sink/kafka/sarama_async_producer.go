@@ -69,11 +69,6 @@ func (p *saramaAsyncProducer) Close() {
 				zap.String("changefeed", p.changefeedID.Name()),
 				zap.Duration("duration", time.Since(start)),
 				zap.Error(err))
-		} else {
-			log.Info("kafka async producer client closed",
-				zap.String("keyspace", p.changefeedID.Keyspace()),
-				zap.String("changefeed", p.changefeedID.Name()),
-				zap.Duration("duration", time.Since(start)))
 		}
 
 		start = time.Now()

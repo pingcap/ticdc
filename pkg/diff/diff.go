@@ -1043,7 +1043,6 @@ func getChunkRows(ctx context.Context, db *sql.DB, schema, table string, tableIn
 	query := fmt.Sprintf("SELECT /*!40001 SQL_NO_CACHE */ %s FROM %s WHERE %s ORDER BY %s%s",
 		columns, dbutil.TableName(schema, table), where, strings.Join(orderKeys, ","), collation)
 
-	log.Debug("select data", zap.String("sql", query), zap.String("args", util.RedactArgs(args)))
 	rows, err := db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, nil, errors.Trace(err)

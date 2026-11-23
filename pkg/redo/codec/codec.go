@@ -84,12 +84,6 @@ func MarshalRedoLog(r *pevent.RedoLog, b []byte) (o []byte, err error) {
 	return
 }
 
-// MarshalDDLAsRedoLog converts a DDLEvent into RedoLog, and then marshals it.
-func MarshalDDLAsRedoLog(d *pevent.DDLEvent, b []byte) (o []byte, err error) {
-	o, err = MarshalRedoLog(d.ToRedoLog(), b)
-	return
-}
-
 func decodeVersion(bts []byte) (uint16, []byte) {
 	version := binary.BigEndian.Uint16(bts[0:versionFieldLength])
 	return version, bts[versionFieldLength:]

@@ -14,7 +14,6 @@
 package event
 
 import (
-	"bytes"
 	"time"
 
 	"github.com/pingcap/errors"
@@ -31,12 +30,6 @@ import (
 var (
 	tablePrefix = []byte{'t'}
 	metaPrefix  = []byte("m")
-)
-
-var (
-	intLen           = 8
-	tablePrefixLen   = len(tablePrefix)
-	prefixTableIDLen = tablePrefixLen + intLen /*tableID*/
 )
 
 // MetaType is for data structure meta/data flag.
@@ -58,18 +51,6 @@ const (
 	// ListData is the flag for list data.
 	ListData MetaType = 'l'
 )
-
-func decodeTableID(key []byte) (rest []byte, tableID int64, err error) {
-	if len(key) < prefixTableIDLen || !bytes.HasPrefix(key, tablePrefix) {
-		return nil, 0, cerror.ErrInvalidRecordKey.GenWithStackByArgs(key)
-	}
-	key = key[tablePrefixLen:]
-	rest, tableID, err = codec.DecodeInt(key)
-	if err != nil {
-		return nil, 0, cerror.WrapError(cerror.ErrCodecDecode, err)
-	}
-	return
-}
 
 // decodeRow decodes a byte slice into datums with an existing row map.
 func decodeRow(b []byte, recordID kv.Handle, tableInfo *common.TableInfo, tz *time.Location) (map[int64]types.Datum, error) {

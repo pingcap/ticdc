@@ -13,22 +13,5 @@
 
 package encryption
 
-import cerrors "github.com/pingcap/ticdc/pkg/errors"
-
 // DataKeyID represents a 3-byte data key identifier in the encryption header.
 type DataKeyID [3]byte
-
-// ToString converts DataKeyID to string.
-func (id DataKeyID) ToString() string {
-	return string(id[:])
-}
-
-// DataKeyIDFromString creates DataKeyID from string (must be 3 bytes).
-func DataKeyIDFromString(s string) (DataKeyID, error) {
-	if len(s) != 3 {
-		return DataKeyID{}, cerrors.ErrInvalidDataKeyID.GenWithStackByArgs("data key ID must be exactly 3 bytes")
-	}
-	var id DataKeyID
-	copy(id[:], s)
-	return id, nil
-}

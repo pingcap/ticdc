@@ -94,7 +94,6 @@ func (s *HttpServer) Run(ctx context.Context) error {
 }
 
 func (s *HttpServer) Close(ctx context.Context) error {
-	log.Info("http server is closing")
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 	err := s.server.Shutdown(ctx)
