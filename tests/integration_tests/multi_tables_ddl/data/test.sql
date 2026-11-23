@@ -177,3 +177,57 @@ rename table t13 to t14;
 /* error, t11 not match `filter.rule` and t9 match `filter.rule` */
 rename table t11 to t9;
 create table finish_mark(id int primary key);
+
+USE view_ddl_test;
+-- Regression for #6548: excluded views still pass through the shared SchemaStore.
+create database unselected_db;
+create view unselected_db.conflict_view as select 1 as id;
+create or replace view unselected_db.conflict_view as select 2 as id;
+rename table unselected_db.conflict_view to unselected_db.conflict_view_done;
+drop view unselected_db.conflict_view_done;
+drop database unselected_db;
+
+create table finish_mark(id int primary key);
+create table rename_view_base(id int primary key);
+insert into rename_view_base values(7);
+create view rename_view_single as select id from rename_view_base;
+rename table rename_view_single to rename_view_single_done;
+
+-- Mixed table/view renames must work in either order.
+create table rename_view_table_1(id int primary key);
+insert into rename_view_table_1 values(1);
+create view rename_view_mixed_1 as select id from rename_view_base;
+rename table rename_view_table_1 to rename_view_table_1_done, rename_view_mixed_1 to rename_view_mixed_1_done;
+insert into rename_view_table_1_done values(2);
+
+create table rename_view_table_2(id int primary key);
+insert into rename_view_table_2 values(1);
+create view rename_view_mixed_2 as select id from rename_view_base;
+rename table rename_view_mixed_2 to rename_view_mixed_2_done, rename_view_table_2 to rename_view_table_2_done;
+insert into rename_view_table_2_done values(2);
+
+-- Ignoring the table rename must preserve the emitted view rename metadata.
+create table rename_view_ignored_table_3(id int primary key);
+insert into rename_view_ignored_table_3 values(1);
+create view rename_view_mixed_3 as select id from rename_view_base;
+rename table rename_view_ignored_table_3 to rename_view_ignored_table_3_done, rename_view_mixed_3 to rename_view_mixed_3_done;
+
+create table rename_view_ignored_table_4(id int primary key);
+insert into rename_view_ignored_table_4 values(1);
+create view rename_view_mixed_4 as select id from rename_view_base;
+rename table rename_view_mixed_4 to rename_view_mixed_4_done, rename_view_ignored_table_4 to rename_view_ignored_table_4_done;
+
+-- Ignoring the view rename must not interfere with the table rename or its DML.
+create table rename_view_table_5(id int primary key);
+insert into rename_view_table_5 values(1);
+create view rename_view_ignored_view_5 as select id from rename_view_base;
+rename table rename_view_table_5 to rename_view_table_5_done, rename_view_ignored_view_5 to rename_view_ignored_view_5_done;
+insert into rename_view_table_5_done values(2);
+
+create table rename_view_table_6(id int primary key);
+insert into rename_view_table_6 values(1);
+create view rename_view_ignored_view_6 as select id from rename_view_base;
+rename table rename_view_ignored_view_6 to rename_view_ignored_view_6_done, rename_view_table_6 to rename_view_table_6_done;
+insert into rename_view_table_6_done values(2);
+
+insert into view_ddl_test.finish_mark values(100);

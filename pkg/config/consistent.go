@@ -85,7 +85,8 @@ func (c *ConsistentConfig) ValidateAndAdjust() error {
 }
 
 // validateAndAdjust is an internal helper that allows toggling redo storage
-// I/O checks. enableIOCheck=false is only used by CLI-side pre-validation.
+// I/O checks. Preflight validation paths disable the checks when they must not
+// access storage, while changefeed creation keeps them enabled.
 func (c *ConsistentConfig) validateAndAdjust(enableIOCheck bool) error {
 	if !redo.IsConsistentEnabled(util.GetOrZero(c.Level)) {
 		return nil

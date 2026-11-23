@@ -42,14 +42,29 @@ const (
 
 func TestKafkaClientSelection(t *testing.T) {
 	changefeedID := common.NewChangefeedID4Test(common.DefaultKeyspaceName, "client-selection")
-	require.Equal(t, KafkaClientSarama, NewOptions().Client)
+	originalConfig := config.GetGlobalServerConfig()
+	t.Cleanup(func() {
+		config.StoreGlobalServerConfig(originalConfig)
+	})
 
 	for _, test := range []struct {
-		name     string
-		uri      string
-		expected string
-		wantErr  bool
+		name          string
+		enableFranzGo bool
+		uri           string
+		expected      string
+		wantErr       bool
 	}{
+		{
+			name:     "default selects sarama",
+			uri:      "kafka://127.0.0.1:9092/topic",
+			expected: KafkaClientSarama,
+		},
+		{
+			name:          "server enables franz",
+			enableFranzGo: true,
+			uri:           "kafka://127.0.0.1:9092/topic",
+			expected:      KafkaClientFranz,
+		},
 		{
 			name:     "URI selects sarama",
 			uri:      "kafka://127.0.0.1:9092/topic?kafka-client=sarama",
@@ -61,12 +76,34 @@ func TestKafkaClientSelection(t *testing.T) {
 			expected: KafkaClientFranz,
 		},
 		{
+			name:          "URI selects sarama over server default",
+			enableFranzGo: true,
+			uri:           "kafka://127.0.0.1:9092/topic?kafka-client=sarama",
+			expected:      KafkaClientSarama,
+		},
+		{
+			name:          "URI selects franz with server enabled",
+			enableFranzGo: true,
+			uri:           "kafka://127.0.0.1:9092/topic?kafka-client=franz",
+			expected:      KafkaClientFranz,
+		},
+		{
 			name:    "invalid client",
 			uri:     "kafka://127.0.0.1:9092/topic?kafka-client=other",
 			wantErr: true,
 		},
+		{
+			name:          "invalid client with server enabled",
+			enableFranzGo: true,
+			uri:           "kafka://127.0.0.1:9092/topic?kafka-client=other",
+			wantErr:       true,
+		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
+			serverConfig := originalConfig.Clone()
+			serverConfig.Debug.EnableKafkaFranzGo = test.enableFranzGo
+			config.StoreGlobalServerConfig(serverConfig)
+
 			sinkURI, err := url.Parse(test.uri)
 			require.NoError(t, err)
 
@@ -583,6 +620,161 @@ func TestApplyRejectsNonPositiveMaxMessageBytes(t *testing.T) {
 			errCode, ok := errors.RFCCode(err)
 			require.True(t, ok)
 			require.Equal(t, errors.ErrKafkaInvalidConfig.RFCCode(), errCode)
+		})
+	}
+}
+
+func TestApplyAWSMSKIAM(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name        string
+		kafkaConfig *config.KafkaConfig
+		expectedErr string
+	}{
+		{
+			name: "default credential chain",
+			kafkaConfig: &config.KafkaConfig{
+				SASLMechanism:     aws.String(SASLTypeOAuth),
+				SASLOAuthProvider: aws.String("AWS_MSK_IAM"),
+				AWSMSKIAM: &config.AWSMSKIAMConfig{
+					Region: "ap-northeast-1",
+				},
+				EnableTLS: aws.Bool(true),
+			},
+		},
+		{
+			name: "assume role",
+			kafkaConfig: &config.KafkaConfig{
+				SASLMechanism:     aws.String(SASLTypeOAuth),
+				SASLOAuthProvider: aws.String(SASLOAuthProviderAWSMSKIAM),
+				AWSMSKIAM: &config.AWSMSKIAMConfig{
+					Region:          "ap-northeast-1",
+					RoleARN:         "arn:aws:iam::123456789012:role/TiCDCMSKProducer",
+					RoleSessionName: "ticdc",
+					ExternalID:      "external-id",
+				},
+				EnableTLS: aws.Bool(true),
+			},
+		},
+		{
+			name: "TLS disabled",
+			kafkaConfig: &config.KafkaConfig{
+				SASLMechanism:     aws.String(SASLTypeOAuth),
+				SASLOAuthProvider: aws.String(SASLOAuthProviderAWSMSKIAM),
+				AWSMSKIAM: &config.AWSMSKIAMConfig{
+					Region: "ap-northeast-1",
+				},
+			},
+			expectedErr: "AWS MSK IAM authentication requires TLS",
+		},
+		{
+			name: "missing region",
+			kafkaConfig: &config.KafkaConfig{
+				SASLMechanism:     aws.String(SASLTypeOAuth),
+				SASLOAuthProvider: aws.String(SASLOAuthProviderAWSMSKIAM),
+				AWSMSKIAM:         &config.AWSMSKIAMConfig{},
+				EnableTLS:         aws.Bool(true),
+			},
+			expectedErr: "AWS region cannot be empty",
+		},
+		{
+			name: "unsupported provider",
+			kafkaConfig: &config.KafkaConfig{
+				SASLMechanism:     aws.String(SASLTypeOAuth),
+				SASLOAuthProvider: aws.String("unknown"),
+				AWSMSKIAM: &config.AWSMSKIAMConfig{
+					Region: "ap-northeast-1",
+				},
+				EnableTLS: aws.Bool(true),
+			},
+			expectedErr: "unsupported SASL OAuth provider",
+		},
+		{
+			name: "wrong SASL mechanism",
+			kafkaConfig: &config.KafkaConfig{
+				SASLMechanism:     aws.String(SASLTypePlaintext),
+				SASLOAuthProvider: aws.String(SASLOAuthProviderAWSMSKIAM),
+				AWSMSKIAM: &config.AWSMSKIAMConfig{
+					Region: "ap-northeast-1",
+				},
+				EnableTLS: aws.Bool(true),
+			},
+			expectedErr: "AWS MSK IAM is only supported with SASL mechanism type OAUTHBEARER",
+		},
+		{
+			name: "external ID without role ARN",
+			kafkaConfig: &config.KafkaConfig{
+				SASLMechanism:     aws.String(SASLTypeOAuth),
+				SASLOAuthProvider: aws.String(SASLOAuthProviderAWSMSKIAM),
+				AWSMSKIAM: &config.AWSMSKIAMConfig{
+					Region:     "ap-northeast-1",
+					ExternalID: "external-id",
+				},
+				EnableTLS: aws.Bool(true),
+			},
+			expectedErr: "AWS role ARN is required",
+		},
+		{
+			name: "mixed OAuth providers",
+			kafkaConfig: &config.KafkaConfig{
+				SASLMechanism:     aws.String(SASLTypeOAuth),
+				SASLOAuthProvider: aws.String(SASLOAuthProviderAWSMSKIAM),
+				SASLOAuthClientID: aws.String("client-id"),
+				AWSMSKIAM: &config.AWSMSKIAMConfig{
+					Region: "ap-northeast-1",
+				},
+				EnableTLS: aws.Bool(true),
+			},
+			expectedErr: "cannot be used with standard OAuth2 configuration",
+		},
+		{
+			name: "AWS provider with standard OAuth scopes",
+			kafkaConfig: &config.KafkaConfig{
+				SASLMechanism:     aws.String(SASLTypeOAuth),
+				SASLOAuthProvider: aws.String(SASLOAuthProviderAWSMSKIAM),
+				SASLOAuthScopes:   []string{"scope"},
+				AWSMSKIAM: &config.AWSMSKIAMConfig{
+					Region: "ap-northeast-1",
+				},
+				EnableTLS: aws.Bool(true),
+			},
+			expectedErr: "cannot be used with standard OAuth2 configuration",
+		},
+		{
+			name: "AWS provider with standard OAuth CA",
+			kafkaConfig: &config.KafkaConfig{
+				SASLMechanism:     aws.String(SASLTypeOAuth),
+				SASLOAuthProvider: aws.String(SASLOAuthProviderAWSMSKIAM),
+				SASLOAuthCA:       aws.String("/etc/ssl/oauth-ca.pem"),
+				AWSMSKIAM: &config.AWSMSKIAMConfig{
+					Region: "ap-northeast-1",
+				},
+				EnableTLS: aws.Bool(true),
+			},
+			expectedErr: "cannot be used with standard OAuth2 configuration",
+		},
+	}
+
+	changefeedID := common.NewChangefeedID4Test(common.DefaultKeyspaceName, "test")
+	sinkURI, err := url.Parse("kafka://127.0.0.1:9092/topic")
+	require.NoError(t, err)
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			options := NewOptions()
+			err := options.Apply(changefeedID, sinkURI, &config.SinkConfig{
+				KafkaConfig: test.kafkaConfig,
+			})
+			if test.expectedErr != "" {
+				require.ErrorContains(t, err, test.expectedErr)
+				require.ErrorIs(t, err, errors.ErrKafkaInvalidConfig)
+				return
+			}
+			require.NoError(t, err)
+			require.Equal(t, SASLOAuthProviderAWSMSKIAM, options.sasl.oauthProvider)
+			require.Equal(t, test.kafkaConfig.AWSMSKIAM.Region, options.sasl.awsMSKIAM.Region)
+			require.True(t, options.EnableTLS)
 		})
 	}
 }

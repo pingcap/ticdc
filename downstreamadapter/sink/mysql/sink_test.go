@@ -17,11 +17,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/DATA-DOG/go-sqlmock"
+	dmysql "github.com/go-sql-driver/mysql"
 	"github.com/golang/mock/gomock"
 	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
@@ -472,6 +474,73 @@ func TestMysqlSinkMeetsDDLError(t *testing.T) {
 	require.Equal(t, count.Load(), int64(0))
 
 	require.Equal(t, sink.IsNormal(), false)
+}
+
+func TestMysqlSinkBatchCreateTablesAcknowledgement(t *testing.T) {
+	for _, failLastCreate := range []bool{false, true} {
+		name := "all creates accepted"
+		if failLastCreate {
+			name = "last create fails"
+		}
+		t.Run(name, func(t *testing.T) {
+			_, sink, mock := getMysqlSink()
+			defer sink.Close()
+			sink.cfg.EnableDDLTs = false
+			queries := []string{
+				"CREATE TABLE `t1` (`id` INT);",
+				"CREATE TABLE `t2` (`id` INT);",
+			}
+			event := &commonEvent.DDLEvent{
+				Type:       byte(timodel.ActionCreateTables),
+				SchemaName: "upstream",
+				Query:      strings.Join(queries, ""),
+				StartTs:    1,
+				FinishedTs: 2,
+			}
+			for _, tableName := range []string{"t1", "t2"} {
+				event.MultipleTableInfos = append(event.MultipleTableInfos, &common.TableInfo{
+					TableName: common.TableName{
+						Schema: "upstream", Table: tableName,
+						TargetSchema: "test", TargetTable: tableName,
+					},
+				})
+			}
+			flushCount := 0
+			event.AddPostFlushFunc(func() {
+				require.NoError(t, mock.ExpectationsWereMet())
+				flushCount++
+			})
+
+			for i, query := range queries {
+				mock.ExpectQuery("BEGIN; SET @ticdc_ts := TIDB_PARSE_TSO(@@tidb_current_ts); ROLLBACK; SELECT @ticdc_ts; SET @ticdc_ts=NULL;").
+					WillReturnRows(sqlmock.NewRows([]string{"@ticdc_ts"}))
+				mock.ExpectBegin()
+				mock.ExpectExec("USE `test`;").WillReturnResult(sqlmock.NewResult(0, 0))
+				mock.ExpectExec("SET TIMESTAMP = DEFAULT").WillReturnResult(sqlmock.NewResult(0, 0))
+				switch {
+				case i == 0:
+					mock.ExpectExec(query).WillReturnError(&dmysql.MySQLError{Number: 1050, Message: "Table already exists"})
+					mock.ExpectRollback()
+				case failLastCreate:
+					mock.ExpectExec(query).WillReturnError(&dmysql.MySQLError{Number: 1045, Message: "Access denied"})
+					mock.ExpectRollback()
+				default:
+					mock.ExpectExec(query).WillReturnResult(sqlmock.NewResult(0, 0))
+					mock.ExpectCommit()
+				}
+			}
+
+			err := sink.WriteBlockEvent(event)
+			if failLastCreate {
+				require.Error(t, err)
+				require.Zero(t, flushCount)
+			} else {
+				require.NoError(t, err)
+				require.Equal(t, 1, flushCount)
+			}
+			require.NoError(t, mock.ExpectationsWereMet())
+		})
+	}
 }
 
 func TestMysqlSinkFlushLargeBatchEvent(t *testing.T) {

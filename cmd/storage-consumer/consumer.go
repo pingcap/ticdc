@@ -14,10 +14,12 @@
 package main
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"fmt"
 	"math"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -451,6 +453,14 @@ func messageWithPhysicalTableID(message *common.DMLMessage, tableID int64) *comm
 	})
 }
 
+func sortDMLMessages(messages []*common.DMLMessage) {
+	// Key exchanges require deletes before inserts within each transaction.
+	// Keep transactions ordered and preserve order within each row type.
+	slices.SortStableFunc(messages, func(a, b *common.DMLMessage) int {
+		return cmp.Or(cmp.Compare(a.GetCommitTs(), b.GetCommitTs()), cmp.Compare(a.RowType, b.RowType))
+	})
+}
+
 func (c *consumer) flushDMLEvents(ctx context.Context, tableID int64) error {
 	group := c.eventsGroup[tableID]
 	if group == nil {
@@ -466,6 +476,9 @@ func (c *consumer) flushDMLEvents(ctx context.Context, tableID int64) error {
 		}
 		if batch == nil {
 			break
+		}
+		if c.codecCfg.Protocol == config.ProtocolCsv && c.codecCfg.OutputOldValue && c.codecCfg.IncludeCommitTs {
+			sortDMLMessages(batch.Messages)
 		}
 		events := util.DMLMessagesToEvents(batch.Messages)
 		if len(events) != 0 {
@@ -804,7 +817,7 @@ func (c *consumer) handleNewFiles(
 					zap.Uint64("tableVersion", key.TableVersion),
 					zap.Int64("partition", key.PartitionNum),
 					zap.String("date", key.Date),
-					zap.String("dispatcher", indexKey.DispatcherID),
+					zap.String("dispatcherID", indexKey.DispatcherID),
 					zap.Bool("enableTableAcrossNodes", indexKey.EnableTableAcrossNodes),
 					zap.Uint64("fileIndex", i),
 					zap.String("path", filePath))

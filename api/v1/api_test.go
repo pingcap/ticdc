@@ -22,13 +22,49 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/golang/mock/gomock"
+	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/config"
+	"github.com/pingcap/ticdc/pkg/config/kerneltype"
 	"github.com/pingcap/ticdc/pkg/etcd"
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/ticdc/pkg/server"
 	"github.com/stretchr/testify/require"
 	pd "github.com/tikv/pd/client"
+	"go.uber.org/zap/zapcore"
 )
+
+func TestLogLevelRouteRequiresAuthentication(t *testing.T) {
+	configureDrainCaptureAuth(t, true)
+
+	originalLogLevel := log.GetLevel()
+	t.Cleanup(func() { log.SetLevel(originalLogLevel) })
+	log.SetLevel(zapcore.InfoLevel)
+
+	ctrl := gomock.NewController(t)
+	mockEtcdClient := etcd.NewMockCDCEtcdClient(ctrl)
+	mockEtcdClient.EXPECT().GetEtcdClient().Return(nil)
+	apiServer := &mockAPIServer{etcdClient: mockEtcdClient}
+	path := "/api/v1/log"
+	if kerneltype.IsNextGen() {
+		// The request is rejected before the keyspace lookup, so the keyspace
+		// in the query must not be resolved.
+		path += "?keyspace=auth-keyspace"
+	}
+
+	router := gin.New()
+	RegisterOpenAPIV1Routes(router, NewOpenAPIV1(apiServer))
+	request := httptest.NewRequest(
+		http.MethodPost,
+		path,
+		bytes.NewBufferString(`{"log_level":"error"}`),
+	)
+	request.Header.Set("Content-Type", "application/json")
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, request)
+
+	require.Equal(t, http.StatusUnauthorized, response.Code, response.Body.String())
+	require.Equal(t, zapcore.InfoLevel, log.GetLevel())
+}
 
 func TestDrainCaptureRouteRequiresAuthentication(t *testing.T) {
 	configureDrainCaptureAuth(t, true)

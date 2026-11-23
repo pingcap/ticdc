@@ -21,7 +21,6 @@ import (
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/metrics"
-	"github.com/pingcap/ticdc/pkg/spanz"
 	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/ticdc/utils/dynstream"
 	"github.com/tikv/client-go/v2/oracle"
@@ -87,7 +86,7 @@ func (event *regionEvent) getSize() int {
 
 func (event regionEvent) mustFirstState() *regionFeedState {
 	if len(event.states) == 0 || event.states[0] == nil {
-		log.Panic("region event has empty states", zap.Any("event", event))
+		log.Panic("region event has empty states", zap.Int("stateCount", len(event.states)))
 	}
 	return event.states[0]
 }
@@ -148,7 +147,7 @@ func (h *regionEventHandler) Handle(span *subscribedSpan, events ...regionEvent)
 				}
 			}
 		} else {
-			log.Panic("should not reach", zap.Any("event", event), zap.Any("events", events))
+			log.Panic("should not reach", zap.Uint64("subscriptionID", uint64(span.subID)))
 		}
 	}
 	tryAdvanceResolvedTs := func() {
@@ -253,12 +252,18 @@ func (h *regionEventHandler) OnDrop(event regionEvent) interface{} {
 	}
 
 	state := event.states[0]
+	span := state.region.subscribedSpan
+	// Removing a subscription drops any events that are still queued in
+	// dynstream. These drops are expected and can be numerous for a busy span.
+	if span != nil && span.stopped.Load() {
+		return nil
+	}
 	fields := []zap.Field{
 		zap.Bool("hasEntries", event.entries != nil),
 		zap.Uint64("resolvedTs", event.resolvedTs),
 		zap.Int("states", len(event.states)),
 		zap.Uint64("regionID", state.getRegionID()),
-		zap.Uint64("requestID", state.requestID),
+		zap.Uint64("subscriptionID", state.requestID),
 		zap.Bool("stateIsStale", state.isStale()),
 		zap.Uint64("workerID", state.worker.workerID),
 	}
@@ -294,7 +299,8 @@ func handleEventEntries(span *subscribedSpan, state *regionFeedState, entries *c
 		case cdcpb.Event_Row_PUT:
 			opType = common.OpTypePut
 		default:
-			log.Panic("meet unknown op type", zap.Any("entry", entry))
+			log.Panic("meet unknown op type",
+				zap.Uint64("regionID", regionID), zap.String("opType", entry.GetOpType().String()))
 		}
 		return common.RawKVEntry{
 			OpType:   opType,
@@ -314,9 +320,7 @@ func handleEventEntries(span *subscribedSpan, state *regionFeedState, entries *c
 			log.Debug("region is initialized",
 				zap.Int64("tableID", span.span.TableID),
 				zap.Uint64("regionID", regionID),
-				zap.Uint64("requestID", state.requestID),
-				zap.String("startKey", spanz.HexKey(span.span.StartKey)),
-				zap.String("endKey", spanz.HexKey(span.span.EndKey)))
+				zap.Uint64("requestID", state.requestID))
 			for _, cachedEvent := range state.matcher.matchCachedRow(true) {
 				span.kvEventsCache = append(span.kvEventsCache, assembleRowEvent(regionID, cachedEvent))
 			}
@@ -324,12 +328,12 @@ func handleEventEntries(span *subscribedSpan, state *regionFeedState, entries *c
 		case cdcpb.Event_COMMITTED:
 			resolvedTs := state.getLastResolvedTs()
 			if entry.CommitTs <= resolvedTs {
-				log.Fatal("The CommitTs must be greater than the resolvedTs",
+				log.Panic("commit ts must be greater than resolved ts",
 					zap.Int64("tableID", span.span.TableID),
 					zap.Uint64("regionID", regionID),
 					zap.Uint64("requestID", state.requestID),
-					zap.String("EventType", "COMMITTED"),
-					zap.Uint64("CommitTs", entry.CommitTs),
+					zap.String("eventType", "COMMITTED"),
+					zap.Uint64("commitTs", entry.CommitTs),
 					zap.Uint64("resolvedTs", resolvedTs),
 					zap.String("key", util.RedactKey(entry.GetKey())))
 			}
@@ -361,12 +365,12 @@ func handleEventEntries(span *subscribedSpan, state *regionFeedState, entries *c
 			// NOTE: state.getLastResolvedTs() will never less than startTs.
 			resolvedTs := state.getLastResolvedTs()
 			if entry.CommitTs <= resolvedTs {
-				log.Fatal("The CommitTs must be greater than the resolvedTs",
+				log.Panic("commit ts must be greater than resolved ts",
 					zap.Int64("tableID", span.span.TableID),
 					zap.Uint64("regionID", regionID),
 					zap.Uint64("requestID", state.requestID),
-					zap.String("EventType", "COMMIT"),
-					zap.Uint64("CommitTs", entry.CommitTs),
+					zap.String("eventType", "COMMIT"),
+					zap.Uint64("commitTs", entry.CommitTs),
 					zap.Uint64("resolvedTs", resolvedTs),
 					zap.String("key", util.RedactKey(entry.GetKey())))
 			}
@@ -389,7 +393,7 @@ func handleResolvedTs(span *subscribedSpan, state *regionFeedState, resolvedTs u
 	regionID := state.getRegionID()
 	lastResolvedTs := state.getLastResolvedTs()
 	if resolvedTs < lastResolvedTs {
-		log.Debug("The resolvedTs is fallen back in subscription client",
+		log.Debug("resolved ts falls back in subscription client",
 			zap.Uint64("subscriptionID", uint64(state.region.subscribedSpan.subID)),
 			zap.Uint64("regionID", regionID),
 			zap.Uint64("resolvedTs", resolvedTs),
@@ -439,12 +443,12 @@ func handleResolvedTs(span *subscribedSpan, state *regionFeedState, resolvedTs u
 			const largeResolvedTsAdvanceStepInSecs = 30
 			if decreaseLag > largeResolvedTsAdvanceStepInSecs {
 				log.Warn("resolved ts advance step is too large",
-					zap.Uint64("subID", uint64(span.subID)),
+					zap.Uint64("subscriptionID", uint64(span.subID)),
 					zap.Int64("tableID", span.span.TableID),
 					zap.Uint64("regionID", regionID),
 					zap.Uint64("resolvedTs", ts),
 					zap.Uint64("lastResolvedTs", lastResolvedTs),
-					zap.Float64("decreaseLag(s)", decreaseLag))
+					zap.Float64("resolvedTsAdvanceSeconds", decreaseLag))
 			}
 			span.recordResolvedTs(ts)
 			return ts

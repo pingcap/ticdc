@@ -17,11 +17,9 @@ import (
 	"fmt"
 	"strconv"
 
-	"github.com/pingcap/log"
 	commonType "github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/errors"
-	"go.uber.org/zap"
 )
 
 func isNonEmptyUniqueOrHandleCol(col commonEvent.RedoColumnValue) bool {
@@ -113,31 +111,28 @@ func splitUpdateEvent(
 	deleteEvent := &commonEvent.RedoDMLEvent{
 		PreColumns: updateEvent.PreColumns,
 		Row: &commonEvent.DMLEventInRedoLog{
-			StartTs:      updateEvent.Row.StartTs,
-			CommitTs:     updateEvent.Row.CommitTs,
-			Table:        updateEvent.Row.Table,
-			PreColumns:   updateEvent.Row.PreColumns,
-			IndexColumns: updateEvent.Row.IndexColumns,
+			StartTs:            updateEvent.Row.StartTs,
+			CommitTs:           updateEvent.Row.CommitTs,
+			Table:              updateEvent.Row.Table,
+			SourceTable:        updateEvent.Row.SourceTable,
+			PreColumns:         updateEvent.Row.PreColumns,
+			IndexColumns:       updateEvent.Row.IndexColumns,
+			IndexColumnLengths: updateEvent.Row.IndexColumnLengths,
 		},
 	}
 
 	insertEvent := &commonEvent.RedoDMLEvent{
 		Columns: updateEvent.Columns,
 		Row: &commonEvent.DMLEventInRedoLog{
-			StartTs:      updateEvent.Row.StartTs,
-			CommitTs:     updateEvent.Row.CommitTs,
-			Table:        updateEvent.Row.Table,
-			Columns:      updateEvent.Row.Columns,
-			IndexColumns: updateEvent.Row.IndexColumns,
+			StartTs:            updateEvent.Row.StartTs,
+			CommitTs:           updateEvent.Row.CommitTs,
+			Table:              updateEvent.Row.Table,
+			SourceTable:        updateEvent.Row.SourceTable,
+			Columns:            updateEvent.Row.Columns,
+			IndexColumns:       updateEvent.Row.IndexColumns,
+			IndexColumnLengths: updateEvent.Row.IndexColumnLengths,
 		},
 	}
-
-	log.Debug("split update event", zap.Uint64("startTs", updateEvent.Row.StartTs),
-		zap.Uint64("commitTs", updateEvent.Row.CommitTs),
-		zap.String("schema", updateEvent.Row.Table.Schema),
-		zap.String("table", updateEvent.Row.Table.Table),
-		zap.Any("preCols", updateEvent.PreColumns),
-		zap.Any("cols", updateEvent.Columns))
 
 	return deleteEvent, insertEvent, nil
 }

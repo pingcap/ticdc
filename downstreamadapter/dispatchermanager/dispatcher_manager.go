@@ -307,6 +307,9 @@ func NewDispatcherManager(
 	manager.writePathMu.Unlock()
 
 	sinkType := manager.sink.SinkType()
+	if sinkType == common.MysqlSinkType {
+		filterCfg.TxnOrderTables = cfConfig.SinkConfig.GetTxnOrderTables(config.MySQLScheme)
+	}
 	if sinkType != common.KafkaSinkType {
 		ignoreUpdateOnlyColumnsRuleCount := countIgnoreUpdateOnlyColumnsRules(cfConfig.Filter)
 		if ignoreUpdateOnlyColumnsRuleCount > 0 {
@@ -683,7 +686,7 @@ func (e *DispatcherManager) newEventDispatchers(infos map[common.DispatcherID]di
 		log.Info("new dispatcher created",
 			zap.Stringer("changefeedID", e.changefeedID),
 			zap.Stringer("dispatcherID", id),
-			zap.String("tableSpan", common.FormatTableSpan(tableSpans[idx])),
+			zap.Int64("tableID", tableSpans[idx].TableID),
 			zap.Int64("startTs", newStartTsList[idx]),
 			zap.Bool("skipDMLAsStartTs", skipDMLAsStartTs))
 	}
@@ -1039,7 +1042,7 @@ func (e *DispatcherManager) mergeEventDispatcher(dispatcherIDs []common.Dispatch
 	log.Info("new dispatcher created(merge dispatcher)",
 		zap.Stringer("changefeedID", e.changefeedID),
 		zap.Stringer("dispatcherID", mergedDispatcherID),
-		zap.String("tableSpan", common.FormatTableSpan(mergedSpan)))
+		zap.Int64("tableID", mergedSpan.TableID))
 
 	e.writePathMu.Lock()
 	if e.writePathClosed.Load() {
@@ -1053,6 +1056,11 @@ func (e *DispatcherManager) mergeEventDispatcher(dispatcherIDs []common.Dispatch
 }
 
 // ==== remove and clean related functions ====
+
+// IsClosingOrClosed reports whether shutdown has started or completed.
+func (e *DispatcherManager) IsClosingOrClosed() bool {
+	return e.closing.Load() || e.closed.Load()
+}
 
 func (e *DispatcherManager) TryClose(removeChangefeed bool) bool {
 	if removeChangefeed {
@@ -1258,10 +1266,6 @@ func (e *DispatcherManager) cleanEventDispatcher(id common.DispatcherID, schemaI
 	e.dispatcherMap.Delete(id)
 	e.schemaIDToDispatchers.Delete(schemaID, id)
 	e.currentOperatorMap.Delete(id)
-	log.Debug("delete current working remove operator",
-		zap.String("changefeedID", e.changefeedID.String()),
-		zap.String("dispatcherID", id.String()),
-	)
 	tableTriggerEventDispatcher := e.GetTableTriggerEventDispatcher()
 	if tableTriggerEventDispatcher != nil && tableTriggerEventDispatcher.GetId() == id {
 		e.SetTableTriggerEventDispatcher(nil)
