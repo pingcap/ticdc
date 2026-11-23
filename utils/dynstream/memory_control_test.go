@@ -52,8 +52,13 @@ func TestMemControlAddRemovePath(t *testing.T) {
 	require.Equal(t, int64(1), path.areaMemStat.pathCount.Load())
 
 	// Test removing path
+	path.removed.Store(true)
 	mc.removePathFromArea(path)
 	require.Equal(t, int64(0), path.areaMemStat.pathCount.Load())
+	require.Len(t, mc.areaStatMap, 1, "the owner has not cleared the path yet")
+	handler := &mockHandler{}
+	eq := newEventQueue(handler, newTestBatchConfigRegistry())
+	eq.releasePath(path, true)
 	require.Empty(t, mc.areaStatMap)
 }
 
@@ -86,11 +91,11 @@ func TestRemovePathLateAppendDoesNotPolluteAreaPendingSize(t *testing.T) {
 	require.Equal(t, int64(10), path.areaMemStat.totalPendingSize.Load())
 	require.Equal(t, int64(10), path.pendingSize.Load())
 
-	// Remove path and deduct the current pending size immediately.
+	// Remove the path while its queued bytes still belong to the owner.
 	path.removed.Store(true)
 	mc.removePathFromArea(path)
-	require.Equal(t, int64(0), path.areaMemStat.totalPendingSize.Load())
-	require.Equal(t, int64(0), path.pendingSize.Load())
+	require.Equal(t, int64(10), path.areaMemStat.totalPendingSize.Load())
+	require.Equal(t, int64(10), path.pendingSize.Load())
 
 	// Simulate a stale in-flight append that races with RemovePath.
 	appendEvent(2, 7)

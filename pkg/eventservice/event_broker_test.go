@@ -38,6 +38,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/tikv/client-go/v2/oracle"
 	"go.uber.org/atomic"
+	"golang.org/x/time/rate"
 )
 
 const testTableTriggerKeyspaceID uint32 = 1
@@ -2139,4 +2140,64 @@ func TestAddDispatcherFailure(t *testing.T) {
 
 	_, ok := broker.changefeedMap.Load(dispInfo.GetChangefeedID())
 	require.False(t, ok, "changefeedStatus should be removed after failed registration")
+}
+
+func TestZeroDispatcherQuotaDoesNotSpendScanTokens(t *testing.T) {
+	broker, _, _, _ := newEventBrokerForTest()
+	defer broker.close()
+	info := newMockDispatcherInfoForTest(t)
+	info.startTs = 100
+	info.epoch = 1
+	status := broker.getOrSetChangefeedStatus(info)
+	disp := newDispatcherStat(info, 1, 1, nil, status)
+	disp.receivedResolvedTs.Store(102)
+	disp.eventStoreCommitTs.Store(101)
+	disp.availableMemoryQuota.Store(0)
+	shared := atomic.NewUint64(minScanLimitInBytes * 2)
+	status.availableMemoryQuota.Store(node.ID(info.GetServerID()), shared)
+	broker.scanRateLimiter = rate.NewLimiter(0, minScanLimitInBytes*2)
+	needScan, _ := broker.getScanTaskRequest(disp)
+	require.True(t, needScan)
+	before := broker.scanRateLimiter.Tokens()
+	cursor := disp.sentResolvedTs.Load()
+	disp.scanState = dispatcherScanQueued
+	broker.doScan(context.Background(), disp)
+	require.Equal(t, before, broker.scanRateLimiter.Tokens())
+	require.Equal(t, uint64(minScanLimitInBytes*2), shared.Load())
+	require.Equal(t, cursor, disp.sentResolvedTs.Load(), "unsent DML must not be bypassed by a resolved signal")
+}
+
+func TestDispatcherQuotaRecoverySchedulesScan(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		state dispatcherScanState
+	}{
+		{name: "idle", state: dispatcherScanIdle},
+		{name: "running", state: dispatcherScanRunning},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			broker, _, _, _ := newEventBrokerForTest()
+			defer broker.close()
+			info := newMockDispatcherInfoForTest(t)
+			info.startTs = 100
+			status := broker.getOrSetChangefeedStatus(info)
+			disp := newDispatcherStat(info, 1, 1, nil, status)
+			disp.availableMemoryQuota.Store(0)
+			disp.scanState = tc.state
+			ptr := &atomic.Pointer[dispatcherStat]{}
+			ptr.Store(disp)
+			broker.dispatchers.Store(info.id, ptr)
+
+			control := event.NewCongestionControl()
+			control.AddAvailableMemoryWithDispatchers(status.changefeedID.ID(), minScanLimitInBytes,
+				map[common.DispatcherID]uint64{info.id: minScanLimitInBytes})
+			broker.handleCongestionControl(node.ID(info.GetServerID()), control)
+			if tc.state == dispatcherScanRunning {
+				require.Equal(t, dispatcherScanRunningPending, disp.scanState)
+				broker.finishScan(disp, false, false, 0)
+			}
+			require.Equal(t, dispatcherScanQueued, disp.scanState)
+			require.Equal(t, 1, broker.scanTaskQueues[disp.scanWorkerIndex].len())
+		})
+	}
 }
