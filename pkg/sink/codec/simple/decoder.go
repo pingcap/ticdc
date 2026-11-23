@@ -301,8 +301,8 @@ func (d *Decoder) NextDDLEvent() *commonEvent.DDLEvent {
 	ddl := d.buildDDLEvent(d.msg)
 	d.msg = nil
 
-	d.memo.WriteInfo(ddl.TableInfo)
-	d.memo.WriteInfo(ddl.MultipleTableInfos[1])
+	d.memo.WriteTableInfo(ddl.TableInfo)
+	d.memo.WriteTableInfo(ddl.MultipleTableInfos[1])
 
 	for ele := d.cachedMessages.Front(); ele != nil; {
 		msg := ele.Value.(*message)

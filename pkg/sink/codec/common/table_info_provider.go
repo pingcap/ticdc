@@ -18,7 +18,7 @@ import (
 	"sort"
 	"sync"
 
-	commonType "github.com/pingcap/ticdc/pkg/common"
+	"github.com/pingcap/ticdc/pkg/common"
 )
 
 // TableInfoProvider keeps the TableInfo of every table version. Decoders may
@@ -38,8 +38,8 @@ func NewTableInfoProvider() *TableInfoProvider {
 	}
 }
 
-// WriteInfo stores the table info under its own version.
-func (c *TableInfoProvider) WriteInfo(info *commonType.TableInfo) {
+// WriteTableInfo stores the table info under its own version.
+func (c *TableInfoProvider) WriteTableInfo(info *common.TableInfo) {
 	if info == nil {
 		return
 	}
@@ -47,7 +47,7 @@ func (c *TableInfoProvider) WriteInfo(info *commonType.TableInfo) {
 }
 
 // Write stores the table info under the version the message belongs to.
-func (c *TableInfoProvider) Write(schema, table string, version uint64, info *commonType.TableInfo) {
+func (c *TableInfoProvider) Write(schema, table string, version uint64, info *common.TableInfo) {
 	if schema == "" || table == "" || info == nil {
 		return
 	}
@@ -57,7 +57,7 @@ func (c *TableInfoProvider) Write(schema, table string, version uint64, info *co
 }
 
 // Read returns the table info of exactly the requested version.
-func (c *TableInfoProvider) Read(schema, table string, version uint64) *commonType.TableInfo {
+func (c *TableInfoProvider) Read(schema, table string, version uint64) *common.TableInfo {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	return c.tables[accessKey{schema, table}].get(version)
@@ -66,7 +66,7 @@ func (c *TableInfoProvider) Read(schema, table string, version uint64) *commonTy
 // ReadAt returns the table info in effect for the commit ts, together with the
 // version it belongs to. A row at a DDL commit ts still reads the previous
 // version: it is flushed before that DDL.
-func (c *TableInfoProvider) ReadAt(schema, table string, commitTs uint64) (uint64, *commonType.TableInfo) {
+func (c *TableInfoProvider) ReadAt(schema, table string, commitTs uint64) (uint64, *common.TableInfo) {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	version, info := c.tables[accessKey{schema, table}].at(commitTs)
@@ -156,12 +156,12 @@ type tableVersions struct {
 
 type entry struct {
 	version uint64
-	info    *commonType.TableInfo
+	info    *common.TableInfo
 }
 
 // at returns the version in effect at the commit ts: the newest one below it.
 // A version without table info is a boundary the decoder has not filled in yet.
-func (t *tableVersions) at(commitTs uint64) (uint64, *commonType.TableInfo) {
+func (t *tableVersions) at(commitTs uint64) (uint64, *common.TableInfo) {
 	if t == nil {
 		return 0, nil
 	}
@@ -175,7 +175,7 @@ func (t *tableVersions) at(commitTs uint64) (uint64, *commonType.TableInfo) {
 	return entry.version, entry.info
 }
 
-func (t *tableVersions) get(version uint64) *commonType.TableInfo {
+func (t *tableVersions) get(version uint64) *common.TableInfo {
 	if t == nil {
 		return nil
 	}
@@ -188,7 +188,7 @@ func (t *tableVersions) get(version uint64) *commonType.TableInfo {
 	return t.entries[i].info
 }
 
-func (t *tableVersions) set(version uint64, info *commonType.TableInfo) {
+func (t *tableVersions) set(version uint64, info *common.TableInfo) {
 	i := sort.Search(len(t.entries), func(i int) bool {
 		return t.entries[i].version >= version
 	})
