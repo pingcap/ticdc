@@ -35,6 +35,7 @@ import (
 	cerrors "github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/pdutil"
+	"github.com/pingcap/ticdc/pkg/scheduler/resource"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/require"
@@ -1658,6 +1659,8 @@ func TestEventStoreCompressionAndIterDecodeBufferReuse(t *testing.T) {
 	}}
 
 	beforeMetric := testutil.ToFloat64(eventStoreCompressedRowsCount)
+	beforeWrite := resource.EventStoreWriteBytes.Load()
+	beforeWriteMetric := testutil.ToFloat64(eventStoreWriteBytes)
 
 	encoder, err := zstd.NewWriter(nil)
 	require.NoError(t, err)
@@ -1668,9 +1671,15 @@ func TestEventStoreCompressionAndIterDecodeBufferReuse(t *testing.T) {
 	require.NoError(t, err)
 	afterMetric := testutil.ToFloat64(eventStoreCompressedRowsCount)
 	require.InDelta(t, float64(len(expectedValues)), afterMetric-beforeMetric, 1e-9)
+	require.Equal(t, uint64(testutil.ToFloat64(eventStoreWriteBytes)-beforeWriteMetric), resource.EventStoreWriteBytes.Load()-beforeWrite)
 
 	innerIter, err := store.dbs[0].NewIter(&pebble.IterOptions{})
 	require.NoError(t, err)
+	var encodedBytes uint64
+	for innerIter.First(); innerIter.Valid(); innerIter.Next() {
+		encodedBytes += uint64(len(innerIter.Key()) + len(innerIter.Value()))
+	}
+	beforeRead := resource.EventStoreReadBytes.Load()
 	decoder := store.decoderPool.Get().(*zstd.Decoder)
 	iter := &eventStoreIter{
 		tableSpan: &heartbeatpb.TableSpan{
@@ -1708,9 +1717,45 @@ func TestEventStoreCompressionAndIterDecodeBufferReuse(t *testing.T) {
 		}
 	}
 	require.Len(t, records, len(expectedValues))
+	require.Equal(t, encodedBytes, resource.EventStoreReadBytes.Load()-beforeRead, "read load must use compressed stored bytes")
 	rowCount, err := iter.Close()
 	require.NoError(t, err)
 	require.Equal(t, int64(len(expectedValues)), rowCount)
+
+	// A shared subscription can scan rows outside the dispatcher's span.
+	// That work still contributes to EventStore read load.
+	iter.innerIter, err = store.dbs[0].NewIter(&pebble.IterOptions{})
+	require.NoError(t, err)
+	iter.decoder = store.decoderPool.Get().(*zstd.Decoder)
+	iter.needCheckSpan = true
+	iter.tableSpan.StartKey, iter.tableSpan.EndKey = []byte{0xFF}, []byte{0xFF, 0xFF}
+	require.True(t, iter.innerIter.First())
+	beforeRead = resource.EventStoreReadBytes.Load()
+	entry, _ := iter.Next()
+	require.Nil(t, entry)
+	require.Equal(t, encodedBytes, resource.EventStoreReadBytes.Load()-beforeRead)
+	_, err = iter.Close()
+	require.NoError(t, err)
+}
+
+func TestEventStoreFailedWriteDoesNotRecordLoad(t *testing.T) {
+	dir := t.TempDir()
+	db, err := pebble.Open(dir, &pebble.Options{})
+	require.NoError(t, err)
+	require.NoError(t, db.Close())
+	db, err = pebble.Open(dir, &pebble.Options{ReadOnly: true})
+	require.NoError(t, err)
+	defer db.Close()
+	encoder, err := zstd.NewWriter(nil)
+	require.NoError(t, err)
+	defer encoder.Close()
+	before := resource.EventStoreWriteBytes.Load()
+	store := &eventStore{}
+	err = store.writeEvents(db, []eventWithCallback{{subID: 1, tableID: 1, kvs: []common.RawKVEntry{
+		{OpType: common.OpTypePut, StartTs: 1, CRTs: 2, Key: []byte("key"), Value: []byte("value")},
+	}}}, encoder, nil, nil)
+	require.ErrorIs(t, err, pebble.ErrReadOnly)
+	require.Equal(t, before, resource.EventStoreWriteBytes.Load())
 }
 
 func TestEventStoreKVEntryCount(t *testing.T) {

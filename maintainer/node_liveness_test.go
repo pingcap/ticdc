@@ -27,6 +27,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/liveness"
 	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/node"
+	"github.com/pingcap/ticdc/pkg/scheduler/resource"
 	"github.com/pingcap/ticdc/pkg/writelease"
 	"github.com/stretchr/testify/require"
 )
@@ -323,6 +324,11 @@ func TestNodeHeartbeatResponseRenewsP2PWriteLease(t *testing.T) {
 	require.Equal(t, heartbeatpb.CurrentWriteLeaseProtocolVersion, heartbeat.WriteLeaseProtocolVersion)
 	require.NotZero(t, heartbeat.WriteLeaseRequestSeq)
 	require.NotNil(t, heartbeat.NodeLoad)
+	counters, valid := resource.Counters(heartbeat.NodeLoad)
+	require.True(t, valid)
+	require.Contains(t, counters, resource.Sink)
+	require.Contains(t, counters, resource.EventStoreWrite)
+	require.Contains(t, counters, resource.EventStoreRead)
 
 	responseMessage := messaging.NewSingleTargetMessage(
 		m.nodeInfo.ID,
@@ -342,7 +348,7 @@ func TestNodeHeartbeatResponseRenewsP2PWriteLease(t *testing.T) {
 	require.True(t, gate.IsWritable())
 	rates, status := m.nodeLoads.Snapshot(map[node.ID]*node.Info{"n1": {ID: "n1"}}, time.Now())
 	require.Equal(t, heartbeatpb.NodeLoadStatus_LOAD_AVAILABLE, status)
-	require.Equal(t, float64(1234), rates["n1"])
+	require.Equal(t, float64(1234), rates["n1"][resource.Sink])
 
 	// An old coordinator response cannot renew a new request.
 	m.writeGate.InvalidateP2P()
@@ -351,14 +357,14 @@ func TestNodeHeartbeatResponseRenewsP2PWriteLease(t *testing.T) {
 	m.onNodeHeartbeatResponse(responseMessage)
 	require.False(t, gate.IsWritable())
 	rates, _ = m.nodeLoads.Snapshot(map[node.ID]*node.Info{"n1": {ID: "n1"}}, time.Now())
-	require.Equal(t, float64(1234), rates["n1"], "stale coordinator cannot replace node load")
+	require.Equal(t, float64(1234), rates["n1"][resource.Sink], "stale coordinator cannot replace node load")
 
 	// Replaying an already applied sequence from the current coordinator is also rejected.
 	responseMessage.Message[0].(*heartbeatpb.NodeHeartbeatResponse).CoordinatorVersion = 10
 	m.onNodeHeartbeatResponse(responseMessage)
 	require.False(t, gate.IsWritable())
 	rates, _ = m.nodeLoads.Snapshot(map[node.ID]*node.Info{"n1": {ID: "n1"}}, time.Now())
-	require.Equal(t, float64(1234), rates["n1"], "replayed response cannot replace node load")
+	require.Equal(t, float64(1234), rates["n1"][resource.Sink], "replayed response cannot replace node load")
 }
 
 func TestNodeHeartbeatResponseUpdatesClusterP2PMode(t *testing.T) {

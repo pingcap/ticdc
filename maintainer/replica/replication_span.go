@@ -63,7 +63,7 @@ type spanTraffic struct {
 func (r *SpanReplication) TrafficRate(now time.Time) float64 {
 	r.nodeIDMutex.Lock()
 	defer r.nodeIDMutex.Unlock()
-	if now.Sub(r.traffic.updatedAt) > NodeLoadStaleThreshold {
+	if now.Sub(r.traffic.updatedAt) > DispatcherTrafficStaleThreshold {
 		return 0
 	}
 	return r.traffic.bytesPerSecond

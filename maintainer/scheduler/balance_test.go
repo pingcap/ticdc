@@ -22,6 +22,7 @@ import (
 	"github.com/pingcap/ticdc/maintainer/replica"
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/node"
+	"github.com/pingcap/ticdc/pkg/scheduler/resource"
 	"github.com/stretchr/testify/require"
 )
 
@@ -227,7 +228,7 @@ func TestBalanceSchedulerBalancesWholeTableTraffic(t *testing.T) {
 			before := time.Now()
 			s.Execute()
 			require.Zero(t, oc.OperatorSize())
-			require.False(t, s.trafficBalanceNotBefore.Before(before.Add(replica.NodeLoadStaleThreshold)))
+			require.False(t, s.trafficBalanceNotBefore.Before(before.Add(3*heartbeatpb.DispatcherTrafficSampleInterval)))
 		}
 	}
 	counts, hotCounts := map[node.ID]int{}, map[node.ID]int{}
@@ -285,7 +286,7 @@ func TestBalanceSchedulerUsesNodeTotalsAcrossChangefeeds(t *testing.T) {
 		r.UpdateStatus(&heartbeatpb.TableSpanStatus{CheckpointTs: 1, ComponentStatus: heartbeatpb.ComponentState_Working, EventSizePerSecond: 100})
 	}
 	tracker := replica.NewNodeLoadTracker()
-	tracker.Replace([]*heartbeatpb.NodeLoad{{NodeId: self.String(), BytesPerSecond: 1000}, {NodeId: "busy", BytesPerSecond: 2000}, {NodeId: "idle", BytesPerSecond: 100}}, heartbeatpb.NodeLoadStatus_LOAD_AVAILABLE, time.Now())
+	tracker.Replace([]*heartbeatpb.NodeLoad{{NodeId: self.String(), BytesPerSecond: 1500}, {NodeId: "busy", BytesPerSecond: 2000}, {NodeId: "idle", BytesPerSecond: 100}}, heartbeatpb.NodeLoadStatus_LOAD_AVAILABLE, time.Now())
 	sc.SetNodeLoadTracker(tracker)
 	s := NewBalanceScheduler(cfID, nil, oc, sc, time.Second, common.DefaultMode, ds, 5)
 	s.Execute()
@@ -311,4 +312,35 @@ func TestBalanceSchedulerDoesNotMoveAnIndivisibleHotTable(t *testing.T) {
 	s := NewBalanceScheduler(cfID, nil, oc, sc, time.Second, common.DefaultMode, ds, 5)
 	s.Execute()
 	require.Zero(t, oc.OperatorSize())
+}
+
+func TestBalanceSchedulerAvoidsBusyEventStoreTargets(t *testing.T) {
+	for _, kind := range []resource.Type{resource.EventStoreWrite, resource.EventStoreRead, resource.Type(100)} {
+		t.Run(kind.String(), func(t *testing.T) {
+			cfID, nm, oc, sc, ds, self := newDrainSchedulerTestHarness(t)
+			for i, id := range []node.ID{self, "busy-store", "idle"} {
+				nm.GetAliveNodes()[id] = &node.Info{ID: id}
+				r := addReplicatingSpan(t, cfID, sc, int64(i+1), id)
+				rate := float32(1)
+				if id == self {
+					rate = 100
+				}
+				r.UpdateStatus(&heartbeatpb.TableSpanStatus{CheckpointTs: 1, ComponentStatus: heartbeatpb.ComponentState_Working, EventSizePerSecond: rate})
+			}
+			tracker := replica.NewNodeLoadTracker()
+			tracker.Replace([]*heartbeatpb.NodeLoad{
+				resource.Load{resource.Sink: 1000, kind: 100}.ToNodeLoad(self.String()),
+				resource.Load{resource.Sink: 0, kind: 2000}.ToNodeLoad("busy-store"),
+				resource.Load{resource.Sink: 0, kind: 0}.ToNodeLoad("idle"),
+			}, heartbeatpb.NodeLoadStatus_LOAD_AVAILABLE, time.Now())
+			sc.SetNodeLoadTracker(tracker)
+			s := NewBalanceScheduler(cfID, nil, oc, sc, time.Second, common.DefaultMode, ds, 5)
+			s.Execute()
+			require.Equal(t, 1, oc.OperatorSize())
+			op := oc.GetAllOperators()[0]
+			require.Equal(t, self, op.Schedule().To)
+			op.Check(self, &heartbeatpb.TableSpanStatus{CheckpointTs: 1, ComponentStatus: heartbeatpb.ComponentState_Stopped})
+			require.Equal(t, node.ID("idle"), op.Schedule().To)
+		})
+	}
 }

@@ -14,21 +14,25 @@
 package replica
 
 import (
-	"math"
 	"sync"
 	"time"
 
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/pkg/node"
+	"github.com/pingcap/ticdc/pkg/scheduler/resource"
 )
 
-const NodeLoadStaleThreshold = 5 * time.Second
+const (
+	NodeLoadStaleThreshold = 5 * time.Second
+	// Allow the next complete heartbeat to refresh an otherwise live dispatcher.
+	DispatcherTrafficStaleThreshold = 2 * heartbeatpb.DispatcherTrafficSampleInterval
+)
 
 // NodeLoadTracker shares an immutable coordinator snapshot among all maintainers
 // on a capture. It contains node totals only, never dispatcher placement.
 type NodeLoadTracker struct {
 	mu        sync.RWMutex
-	rates     map[node.ID]float64
+	rates     map[node.ID]resource.Load
 	status    heartbeatpb.NodeLoadStatus
 	updatedAt time.Time
 }
@@ -41,11 +45,10 @@ func (t *NodeLoadTracker) Replace(loads []*heartbeatpb.NodeLoad, status heartbea
 	if t == nil {
 		return
 	}
-	rates := make(map[node.ID]float64, len(loads))
+	rates := make(map[node.ID]resource.Load, len(loads))
 	if status == heartbeatpb.NodeLoadStatus_LOAD_AVAILABLE {
 		for _, load := range loads {
-			if load == nil || load.NodeId == "" || load.BytesPerSecond < 0 ||
-				math.IsNaN(load.BytesPerSecond) || math.IsInf(load.BytesPerSecond, 0) {
+			if load == nil || load.NodeId == "" {
 				status = heartbeatpb.NodeLoadStatus_LOAD_INCOMPLETE
 				break
 			}
@@ -54,7 +57,12 @@ func (t *NodeLoadTracker) Replace(loads []*heartbeatpb.NodeLoad, status heartbea
 				status = heartbeatpb.NodeLoadStatus_LOAD_INCOMPLETE
 				break
 			}
-			rates[id] = load.BytesPerSecond
+			values, valid := resource.Rates(load)
+			if !valid {
+				status = heartbeatpb.NodeLoadStatus_LOAD_INCOMPLETE
+				break
+			}
+			rates[id] = values
 		}
 	} else if status != heartbeatpb.NodeLoadStatus_LOAD_UNSUPPORTED {
 		status = heartbeatpb.NodeLoadStatus_LOAD_INCOMPLETE
@@ -66,7 +74,7 @@ func (t *NodeLoadTracker) Replace(loads []*heartbeatpb.NodeLoad, status heartbea
 
 // Snapshot returns immutable rates. Callers must copy them before projecting
 // local moves; those projections must not influence other maintainers.
-func (t *NodeLoadTracker) Snapshot(nodes map[node.ID]*node.Info, now time.Time) (map[node.ID]float64, heartbeatpb.NodeLoadStatus) {
+func (t *NodeLoadTracker) Snapshot(nodes map[node.ID]*node.Info, now time.Time) (map[node.ID]resource.Load, heartbeatpb.NodeLoadStatus) {
 	if t == nil {
 		return nil, heartbeatpb.NodeLoadStatus_LOAD_UNSUPPORTED
 	}
@@ -84,6 +92,22 @@ func (t *NodeLoadTracker) Snapshot(nodes map[node.ID]*node.Info, now time.Time) 
 	for id := range nodes {
 		if _, ok := t.rates[id]; !ok {
 			return nil, heartbeatpb.NodeLoadStatus_LOAD_INCOMPLETE
+		}
+	}
+	// Reject partial vectors instead of silently assigning zero to a missing
+	// resource. The coordinator sends the cluster-wide common resource set.
+	var expected resource.Load
+	for id := range nodes {
+		if expected == nil {
+			expected = t.rates[id]
+		}
+		if len(t.rates[id]) != len(expected) {
+			return nil, heartbeatpb.NodeLoadStatus_LOAD_INCOMPLETE
+		}
+		for kind := range expected {
+			if _, ok := t.rates[id][kind]; !ok {
+				return nil, heartbeatpb.NodeLoadStatus_LOAD_INCOMPLETE
+			}
 		}
 	}
 	return t.rates, t.status

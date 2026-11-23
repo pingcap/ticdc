@@ -19,6 +19,7 @@ import (
 
 	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
+	"github.com/pingcap/ticdc/pkg/scheduler/resource"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -197,21 +198,21 @@ func TestMultiSameCommitTsStartTsPair(t *testing.T) {
 	assert.Equal(t, 0, tp.Len())
 }
 
-func TestFlushedEventBytesPreservesDispatcherSamples(t *testing.T) {
-	initial := FlushedEventBytes()
+func TestResourceCountersPreserveDispatcherSamples(t *testing.T) {
+	initial := resource.SinkBytes.Load()
 	a, b := NewTableProgress(), NewTableProgress()
 	first := &commonEvent.DMLEvent{StartTs: 1, CommitTs: 2, ApproximateSize: 100}
 	second := &commonEvent.DMLEvent{StartTs: 1, CommitTs: 3, ApproximateSize: 200}
 	a.Add(first)
 	b.Add(second)
-	require.Equal(t, initial, FlushedEventBytes())
+	require.Equal(t, initial, resource.SinkBytes.Load())
 	first.PostFlush()
 	second.PostFlush()
-	require.Equal(t, initial+300, FlushedEventBytes())
+	require.Equal(t, initial+300, resource.Snapshot().FlushedEventBytes)
 	// Node-level reads never consume the per-dispatcher traffic samples.
 	a.lastQueryTime = time.Now().Add(-time.Second)
 	b.lastQueryTime = a.lastQueryTime
 	require.InDelta(t, float64(100), a.GetEventSizePerSecond(), 1)
 	require.InDelta(t, float64(200), b.GetEventSizePerSecond(), 1)
-	require.Equal(t, initial+300, FlushedEventBytes())
+	require.Equal(t, initial+300, resource.Snapshot().FlushedEventBytes)
 }

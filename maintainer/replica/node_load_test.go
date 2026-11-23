@@ -21,6 +21,7 @@ import (
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/node"
+	"github.com/pingcap/ticdc/pkg/scheduler/resource"
 	"github.com/stretchr/testify/require"
 )
 
@@ -34,17 +35,31 @@ func TestNodeLoadTracker(t *testing.T) {
 	tracker.Replace(loads, heartbeatpb.NodeLoadStatus_LOAD_AVAILABLE, now)
 	rates, status := tracker.Snapshot(nodes, now)
 	require.Equal(t, heartbeatpb.NodeLoadStatus_LOAD_AVAILABLE, status)
-	require.Equal(t, float64(100), rates["a"])
+	require.Equal(t, float64(100), rates["a"][resource.Sink])
 	// Mutating a protobuf or replacing the tracker never mutates old snapshots.
 	loads[0].BytesPerSecond = 200
 	tracker.Replace(loads, heartbeatpb.NodeLoadStatus_LOAD_AVAILABLE, now)
-	require.Equal(t, float64(100), rates["a"])
+	require.Equal(t, float64(100), rates["a"][resource.Sink])
 	_, status = tracker.Snapshot(nodes, now.Add(NodeLoadStaleThreshold+1))
 	require.Equal(t, heartbeatpb.NodeLoadStatus_LOAD_INCOMPLETE, status)
 	nodes["new"] = &node.Info{ID: "new"}
 	_, status = tracker.Snapshot(nodes, now)
 	require.Equal(t, heartbeatpb.NodeLoadStatus_LOAD_INCOMPLETE, status)
 	delete(nodes, "new")
+	// Resource vectors must be complete and must not alias incoming protobufs.
+	loads = []*heartbeatpb.NodeLoad{
+		resource.Load{resource.Sink: 100, resource.EventStoreRead: 200}.ToNodeLoad("a"),
+		resource.Load{resource.Sink: 0, resource.EventStoreRead: 300}.ToNodeLoad("b"),
+	}
+	tracker.Replace(loads, heartbeatpb.NodeLoadStatus_LOAD_AVAILABLE, now)
+	rates, status = tracker.Snapshot(nodes, now)
+	require.Equal(t, heartbeatpb.NodeLoadStatus_LOAD_AVAILABLE, status)
+	loads[0].Resources[1].BytesPerSecond = 999
+	require.Equal(t, float64(200), rates["a"][resource.EventStoreRead])
+	loads[1] = resource.Load{resource.Sink: 0}.ToNodeLoad("b")
+	tracker.Replace(loads, heartbeatpb.NodeLoadStatus_LOAD_AVAILABLE, now)
+	_, status = tracker.Snapshot(nodes, now)
+	require.Equal(t, heartbeatpb.NodeLoadStatus_LOAD_INCOMPLETE, status)
 	for _, invalid := range [][]*heartbeatpb.NodeLoad{
 		{nil},
 		{{NodeId: ""}},
@@ -72,7 +87,10 @@ func TestSpanTrafficSamples(t *testing.T) {
 	r.UpdateStatus(&heartbeatpb.TableSpanStatus{CheckpointTs: 12})
 	r.UpdateStatus(&heartbeatpb.TableSpanStatus{CheckpointTs: 9, EventSizePerSecond: 200})
 	require.Equal(t, float64(100), r.TrafficRate(time.Now()))
-	require.Zero(t, r.TrafficRate(time.Now().Add(NodeLoadStaleThreshold+time.Second)))
+	// Complete dispatcher samples arrive every ten seconds, independently of
+	// the more frequent node heartbeat carrying the shared resource view.
+	require.Equal(t, float64(100), r.TrafficRate(time.Now().Add(heartbeatpb.DispatcherTrafficSampleInterval)))
+	require.Zero(t, r.TrafficRate(time.Now().Add(DispatcherTrafficStaleThreshold+time.Second)))
 	r.UpdateStatus(&heartbeatpb.TableSpanStatus{CheckpointTs: 12, EventSizePerSecond: 1})
 	require.Equal(t, float64(1), r.TrafficRate(time.Now()))
 	r.SetNodeID("another")

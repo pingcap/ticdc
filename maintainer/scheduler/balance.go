@@ -15,7 +15,6 @@ package scheduler
 
 import (
 	"context"
-	"maps"
 	"math/rand"
 	"time"
 
@@ -107,8 +106,10 @@ func (s *balanceScheduler) Execute() time.Time {
 	if s.trafficMovePending {
 		// Start the observation window after the operator finishes, so a slow
 		// move cannot consume the cooldown before its new placement is sampled.
+		// Three report windows also let the node smoother settle before choosing
+		// another destination from rates that still include the old placement.
 		s.trafficMovePending = false
-		s.trafficBalanceNotBefore = now.Add(max(s.checkBalanceInterval, replica.NodeLoadStaleThreshold))
+		s.trafficBalanceNotBefore = now.Add(max(s.checkBalanceInterval, 3*heartbeatpb.DispatcherTrafficSampleInterval))
 	}
 
 	// 1. check whether we have spans in defaultGroupID need to be splitted.
@@ -155,14 +156,12 @@ func (s *balanceScheduler) schedulerDefaultGroup(
 		return 0
 	}
 	moveSize := pkgScheduler.CheckBalanceStatus(s.spanController.GetTaskSizePerNodeByGroup(group), nodes)
-	average, overloaded := float64(0), false
+	var loadView *resourceLoadView
+	overloaded := false
 	if status == heartbeatpb.NodeLoadStatus_LOAD_AVAILABLE {
+		loadView = newResourceLoadView(loads, nodes)
 		for id := range nodes {
-			average += loads[id]
-		}
-		average /= float64(len(nodes))
-		for id := range nodes {
-			if loads[id] > average*1.2 {
+			if loadView.sinkOverloaded(id) {
 				overloaded = true
 				break
 			}
@@ -176,8 +175,7 @@ func (s *balanceScheduler) schedulerDefaultGroup(
 	if status == heartbeatpb.NodeLoadStatus_LOAD_AVAILABLE {
 		// Project only this maintainer's accepted moves. Other maintainers keep
 		// using the coordinator snapshot until the next node sample arrives.
-		loads = maps.Clone(loads)
-		if overloaded && s.balanceTraffic(nodes, replicas, loads, average, now) {
+		if overloaded && s.balanceTraffic(nodes, replicas, loadView, now) {
 			s.trafficMovePending = true
 			return 1
 		}
@@ -189,34 +187,29 @@ func (s *balanceScheduler) schedulerDefaultGroup(
 	return pkgScheduler.Balance(maxSize, s.random, nodes, replicas, func(r *replica.SpanReplication, target node.ID) bool {
 		if status == heartbeatpb.NodeLoadStatus_LOAD_AVAILABLE {
 			rate := r.TrafficRate(now)
-			if rate == 0 || (rate > 1 && !improvesNodeLoad(loads[r.GetNodeID()], loads[target], rate)) {
+			if rate == 0 {
 				return false
 			}
 			if rate == 1 {
 				rate = 0 // The idle sentinel contributes no actual traffic.
 			}
+			if !loadView.canMove(r.GetNodeID(), target, rate) {
+				return false
+			}
 			if !s.doMove(r, target) {
 				return false
 			}
-			loads[r.GetNodeID()] = max(0, loads[r.GetNodeID()]-rate)
-			loads[target] += rate
+			loadView.project(r.GetNodeID(), target, rate)
 			return true
 		}
 		return s.doMove(r, target)
 	})
 }
 
-// improvesNodeLoad requires a meaningful reduction in the pair's imbalance.
-// A single indivisible hot table must not bounce between otherwise idle nodes.
-func improvesNodeLoad(source, target, rate float64) bool {
-	return rate > 0 && rate < (source-target)*0.9
-}
-
 func (s *balanceScheduler) balanceTraffic(
 	nodes map[node.ID]*node.Info,
 	replicas []*replica.SpanReplication,
-	loads map[node.ID]float64,
-	average float64,
+	loads *resourceLoadView,
 	now time.Time,
 ) bool {
 	// Randomize both dispatcher and destination choice so independent
@@ -224,7 +217,7 @@ func (s *balanceScheduler) balanceTraffic(
 	s.random.Shuffle(len(replicas), func(i, j int) { replicas[i], replicas[j] = replicas[j], replicas[i] })
 	for _, r := range replicas {
 		source := r.GetNodeID()
-		if _, alive := nodes[source]; !alive || !r.IsWorking() || loads[source] <= average*1.2 {
+		if _, alive := nodes[source]; !alive || !r.IsWorking() || !loads.sinkOverloaded(source) {
 			continue
 		}
 		rate := r.TrafficRate(now)
@@ -234,7 +227,7 @@ func (s *balanceScheduler) balanceTraffic(
 		var target node.ID
 		candidates := 0
 		for id := range nodes {
-			if id == source || loads[id] >= average || !improvesNodeLoad(loads[source], loads[id], rate) {
+			if id == source || !loads.sinkUnderloaded(id) || !loads.canMove(source, id, rate) {
 				continue
 			}
 			candidates++

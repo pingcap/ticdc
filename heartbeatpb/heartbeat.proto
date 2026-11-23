@@ -553,12 +553,28 @@ message DispatcherSetChecksumUpdateRequest {
     DispatcherSetChecksum checksum = 5;
 }
 
-// Requests report a process-wide cumulative counter. Coordinator responses
-// identify each node and report its derived rate, without dispatcher details.
+enum ResourceType {
+    RESOURCE_UNKNOWN = 0;
+    RESOURCE_SINK = 1;
+    RESOURCE_EVENT_STORE_WRITE = 2;
+    RESOURCE_EVENT_STORE_READ = 3;
+}
+
+// Each resource is sampled independently. Requests carry cumulative byte
+// counters; coordinator responses carry smoothed bytes per second.
+message ResourceUsage {
+    ResourceType resource = 1;
+    uint64 total_bytes = 2;
+    double bytes_per_second = 3;
+}
+
+// Node totals never include dispatcher placement. Keep the scalar sink fields
+// for captures that do not support the resource vector during rolling upgrades.
 message NodeLoad {
     string node_id = 1;
     uint64 flushed_event_bytes = 2;
     double bytes_per_second = 3;
+    repeated ResourceUsage resources = 4;
 }
 
 enum NodeLoadStatus {

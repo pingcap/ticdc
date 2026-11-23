@@ -16,22 +16,13 @@ package dispatcher
 import (
 	"container/list"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/pingcap/log"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
+	"github.com/pingcap/ticdc/pkg/scheduler/resource"
 	"go.uber.org/zap"
 )
-
-var flushedEventBytes atomic.Uint64
-
-// FlushedEventBytes returns the process-wide cumulative event size, in the same
-// units as dispatcher EventSizePerSecond reports. Reading it never resets the
-// per-dispatcher sampling window.
-func FlushedEventBytes() uint64 {
-	return flushedEventBytes.Load()
-}
 
 // TableProgress maintains event timestamp information in the sink.
 // It provides the ability to:
@@ -142,7 +133,7 @@ func (p *TableProgress) remove(ts Ts, size int64) {
 		}
 	}
 	p.cumulateEventSize += size
-	flushedEventBytes.Add(uint64(size))
+	resource.SinkBytes.Add(uint64(size))
 }
 
 // Empty checks if the TableProgress is empty.
@@ -210,8 +201,8 @@ func (p *TableProgress) GetEventSizePerSecond() float32 {
 	p.lastQueryTime = time.Now()
 
 	if eventSizePerSecond == 0 {
-		// The event size will only send to maintainer once per second.
-		// So if no data is write, we use a tiny value instead of 0 to distinguish it from the status without eventSize
+		// Use a tiny value for idle dispatchers to distinguish a complete traffic
+		// sample from a status-only heartbeat without eventSize.
 		return 1
 	}
 

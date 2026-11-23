@@ -40,6 +40,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/ticdc/pkg/pdutil"
+	"github.com/pingcap/ticdc/pkg/scheduler/resource"
 	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/ticdc/utils/chann"
 	"github.com/pingcap/ticdc/utils/heap"
@@ -1525,6 +1526,9 @@ func (e *eventStore) writeEvents(
 	eventStoreWritePrepareDurationHistogram.Observe(time.Since(prepareStart).Seconds())
 	start := time.Now()
 	err := batch.Commit(pebble.NoSync)
+	if err == nil {
+		resource.EventStoreWriteBytes.Add(uint64(batch.Len()))
+	}
 	eventStoreWriteDurationHistogram.Observe(time.Since(start).Seconds())
 	return err
 }
@@ -1620,6 +1624,7 @@ func (iter *eventStoreIter) NextWithScanPosition() (*common.RawKVEntry, ScanPosi
 		}
 		key := iter.innerIter.Key()
 		value := iter.innerIter.Value()
+		resource.EventStoreReadBytes.Add(uint64(len(key) + len(value)))
 
 		if KeyUsesEncryptionLayer(key) {
 			if iter.encryptionManager == nil {
