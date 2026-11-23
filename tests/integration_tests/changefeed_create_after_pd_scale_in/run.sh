@@ -6,10 +6,6 @@ CUR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 source "$CUR/../_utils/test_prepare"
 
 SINK_TYPE=$1
-if [ "$NEXT_GEN" = 1 ]; then
-	echo "[$(date)] skip $TEST_NAME: PD scale-in regression only applies to the classic architecture"
-	exit 0
-fi
 if [ "$SINK_TYPE" != "mysql" ]; then
 	exit 0
 fi
@@ -83,7 +79,7 @@ prepare() {
 
 	local initial_pd_addrs
 	initial_pd_addrs="http://${UP_PD_HOST_1}:${UP_PD_PORT_1},http://${UP_PD_HOST_2}:${UP_PD_PORT_2},http://${UP_PD_HOST_3}:${UP_PD_PORT_3}"
-	TICDC_NEWARCH=false run_cdc_server \
+	run_cdc_server \
 		--workdir "$WORK_DIR" \
 		--binary "$CDC_BINARY" \
 		--pd "$initial_pd_addrs"
