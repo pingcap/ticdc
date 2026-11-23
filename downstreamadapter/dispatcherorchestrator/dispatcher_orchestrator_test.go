@@ -488,6 +488,37 @@ func TestGetPendingMessageKey_SupportedTypes(t *testing.T) {
 	require.Equal(t, pendingMessageKey{changefeedID: cfID, msgType: messaging.TypeMaintainerCloseRequest}, key)
 }
 
+func TestRecvMaintainerRequestRejectsMissingChangefeedID(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		request messaging.IOTypeT
+	}{
+		{name: "bootstrap", request: &heartbeatpb.MaintainerBootstrapRequest{}},
+		{name: "post bootstrap", request: &heartbeatpb.MaintainerPostBootstrapRequest{}},
+		{name: "close", request: &heartbeatpb.MaintainerCloseRequest{}},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			orchestrator := newTestDispatcherOrchestrator()
+			msg := messaging.NewSingleTargetMessage(
+				node.ID("to"),
+				messaging.DispatcherManagerManagerTopic,
+				tc.request,
+			)
+
+			_, ok := getPendingMessageKey(msg)
+			require.False(t, ok)
+			require.NoError(t, orchestrator.RecvMaintainerRequest(t.Context(), msg))
+			for _, shard := range orchestrator.shards {
+				require.Empty(t, shard.queue.pending)
+			}
+		})
+	}
+}
+
 func TestDispatcherOrchestratorLocalFenceDropsNewMessages(t *testing.T) {
 	mc, _, stop := messaging.NewMessageCenterForTest(t)
 	defer stop()

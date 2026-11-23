@@ -107,9 +107,8 @@ func (m *DispatcherOrchestrator) RecvMaintainerRequest(
 
 	key, ok := getPendingMessageKey(msg)
 	if !ok {
-		log.Warn("unknown message type, drop message",
-			zap.String("type", msg.Type.String()),
-			zap.Any("message", msg.Message))
+		log.Warn("invalid maintainer request, drop message",
+			zap.String("type", msg.Type.String()))
 		return nil
 	}
 
@@ -134,12 +133,15 @@ func getPendingMessageKey(msg *messaging.TargetMessage) (pendingMessageKey, bool
 	var changefeedID *heartbeatpb.ChangefeedID
 	switch req := msg.Message[0].(type) {
 	case *heartbeatpb.MaintainerBootstrapRequest:
-		changefeedID = req.ChangefeedID
+		changefeedID = req.GetChangefeedID()
 	case *heartbeatpb.MaintainerPostBootstrapRequest:
-		changefeedID = req.ChangefeedID
+		changefeedID = req.GetChangefeedID()
 	case *heartbeatpb.MaintainerCloseRequest:
-		changefeedID = req.ChangefeedID
+		changefeedID = req.GetChangefeedID()
 	default:
+		return pendingMessageKey{}, false
+	}
+	if changefeedID == nil {
 		return pendingMessageKey{}, false
 	}
 	return pendingMessageKey{
