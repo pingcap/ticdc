@@ -16,6 +16,8 @@ package config
 import (
 	"fmt"
 	"net/url"
+	"slices"
+	"strings"
 
 	"github.com/pingcap/ticdc/pkg/compression"
 	"github.com/pingcap/ticdc/pkg/errors"
@@ -159,11 +161,38 @@ func (c *ConsistentConfig) validateAndAdjust(enableIOCheck bool) error {
 
 // MaskSensitiveData masks sensitive data in ConsistentConfig
 func (c *ConsistentConfig) MaskSensitiveData() {
-	redactedStorage := objstore.RedactURL(util.GetOrZero(c.Storage))
+	storage := util.GetOrZero(c.Storage)
+	redactedStorage := objstore.RedactURL(storage)
 	parsed, err := url.Parse(redactedStorage)
 	if err == nil {
 		query := parsed.Query()
-		maskedEndpoint := false
+		changedQuery := false
+		// objstore.RedactURL masks even credential-free Azure endpoints.
+		if strings.EqualFold(parsed.Scheme, "azure") || strings.EqualFold(parsed.Scheme, "azblob") {
+			original, err := url.Parse(storage)
+			if err == nil {
+				originalQuery, err := url.ParseQuery(original.RawQuery)
+				if err == nil {
+					for key, endpoints := range originalQuery {
+						if objstore.NormalizeQueryParameterKey(key) != "endpoint" || len(endpoints) == 0 {
+							continue
+						}
+						if _, exists := query[key]; !exists {
+							continue
+						}
+						if slices.ContainsFunc(endpoints, func(endpoint string) bool {
+							u, err := url.Parse(endpoint)
+							return err != nil || (!strings.EqualFold(u.Scheme, "https") && !strings.EqualFold(u.Scheme, "http")) ||
+								u.Host == "" || u.User != nil || u.RawQuery != "" || u.ForceQuery || u.Fragment != ""
+						}) {
+							continue
+						}
+						query[key] = endpoints
+						changedQuery = true
+					}
+				}
+			}
+		}
 		for key, endpoints := range query {
 			if objstore.NormalizeQueryParameterKey(key) != "endpoint" {
 				continue
@@ -171,12 +200,12 @@ func (c *ConsistentConfig) MaskSensitiveData() {
 			for _, endpoint := range endpoints {
 				if objstore.RedactURL(endpoint) != endpoint {
 					query.Set(key, "xxxxxx")
-					maskedEndpoint = true
+					changedQuery = true
 					break
 				}
 			}
 		}
-		if maskedEndpoint {
+		if changedQuery {
 			parsed.RawQuery = query.Encode()
 			redactedStorage = parsed.String()
 		}

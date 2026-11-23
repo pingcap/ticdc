@@ -310,6 +310,27 @@ func TestChangefeedConfigStringMasksNestedRedoStorageCredential(t *testing.T) {
 			wantDisplay: "endpoint=xxxxxx",
 		},
 		{
+			name:        "Azure plain endpoint with account key",
+			storage:     "azblob://container/prefix?account-name=account&account-key=azure-key-secret-sentinel&endpoint=https%3A%2F%2Faccount.blob.core.windows.net",
+			secret:      "azure-key-secret-sentinel",
+			wantOuter:   "account-name=account",
+			wantDisplay: "endpoint=https%3A%2F%2Faccount.blob.core.windows.net",
+		},
+		{
+			name:        "Azure endpoint userinfo",
+			storage:     "azblob://container/prefix?endpoint=https%3A%2F%2Fuser%3Aazure-endpoint-secret-sentinel%40account.blob.core.windows.net",
+			secret:      "azure-endpoint-secret-sentinel",
+			wantOuter:   "azblob://container/prefix",
+			wantDisplay: "endpoint=xxxxxx",
+		},
+		{
+			name:        "Azure endpoint fragment",
+			storage:     "azblob://container/prefix?endpoint=https%3A%2F%2Faccount.blob.core.windows.net%23sig%3Dazure-fragment-secret-sentinel",
+			secret:      "azure-fragment-secret-sentinel",
+			wantOuter:   "azblob://container/prefix",
+			wantDisplay: "endpoint=xxxxxx",
+		},
+		{
 			name:        "S3 endpoint userinfo",
 			storage:     "s3://bucket/prefix?region=us-east-1&endpoint=https%3A%2F%2Fuser%3Aendpoint-secret-sentinel%40storage.example",
 			secret:      "endpoint-secret-sentinel",
