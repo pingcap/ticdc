@@ -42,6 +42,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/filter"
 	"github.com/pingcap/ticdc/pkg/keyspace"
 	"github.com/pingcap/ticdc/pkg/node"
+	"github.com/pingcap/ticdc/pkg/ordering"
 	"github.com/pingcap/ticdc/pkg/routing"
 	"github.com/pingcap/ticdc/pkg/txnutil/gc"
 	"github.com/pingcap/ticdc/pkg/util"
@@ -199,6 +200,11 @@ func (h *OpenAPIV2) CreateChangefeed(c *gin.Context) {
 
 	// do not shadow err after this point
 	pdClient := h.server.GetPdClient()
+	if err = hasRunningImport(ctx, h.server.GetEtcdClient().GetEtcdClient(), pdClient.GetClusterID(ctx)); err != nil {
+		_ = c.Error(err)
+		return
+	}
+
 	tmpInfo := &config.ChangeFeedInfo{
 		ChangefeedID: changefeedID,
 		SinkURI:      cfg.SinkURI,
@@ -377,6 +383,18 @@ func (h *OpenAPIV2) ListChangeFeeds(c *gin.Context) {
 		_ = c.Error(err)
 		return
 	}
+	if len(changefeeds) == 0 {
+		c.JSON(http.StatusOK, toListResponse(c, []ChangefeedCommonInfo{}))
+		return
+	}
+	info := changefeeds[0]
+	middleware.SetKeyspaceInContext(c, &keyspacepb.KeyspaceMeta{
+		Keyspace: &keyspacepb.KeyspaceMeta_Id{Id: info.KeyspaceID},
+		Name:     info.ChangefeedID.Keyspace(),
+	})
+	if !middleware.AuthenticateRequest(c, h.server) {
+		return
+	}
 	state := c.Query(api.APIOpVarChangefeedState)
 	commonInfos := make([]ChangefeedCommonInfo, 0)
 	for idx, changefeed := range changefeeds {
@@ -455,6 +473,10 @@ func (h *OpenAPIV2) VerifyTable(c *gin.Context) {
 
 	// fill replicaConfig
 	replicaCfg := cfg.ReplicaConfig.ToInternalReplicaConfig()
+	// VerifyTable is a preflight API. Keep configuration validation free of
+	// storage side effects; CreateChangefeed performs the actual accessibility
+	// check before persisting the changefeed.
+	replicaCfg.EnableRedoIOCheck = new(false)
 
 	// verify replicaConfig
 	sinkURIParsed, err := url.Parse(cfg.SinkURI)
@@ -533,6 +555,13 @@ func (h *OpenAPIV2) GetChangeFeed(c *gin.Context) {
 	cfInfo, status, err := co.GetChangefeed(c, changefeedDisplayName)
 	if err != nil {
 		_ = c.Error(err)
+		return
+	}
+	middleware.SetKeyspaceInContext(c, &keyspacepb.KeyspaceMeta{
+		Keyspace: &keyspacepb.KeyspaceMeta_Id{Id: cfInfo.KeyspaceID},
+		Name:     cfInfo.ChangefeedID.Keyspace(),
+	})
+	if !middleware.AuthenticateRequest(c, h.server) {
 		return
 	}
 
@@ -785,7 +814,7 @@ func (h *OpenAPIV2) ResumeChangefeed(c *gin.Context) {
 		log.Info("resume changefeed config is empty, using defaults")
 	} else {
 		if err = json.Unmarshal(body, cfg); err != nil {
-			log.Error("failed to bind resume changefeed config", zap.Error(err), zap.String("body", string(body)))
+			log.Error("failed to bind resume changefeed config", zap.Error(err))
 			_ = c.Error(errors.WrapError(errors.ErrAPIInvalidParam, err))
 			return
 		}
@@ -1822,6 +1851,20 @@ func verifyTablesForSink(
 	protocol config.Protocol,
 	tableInfos []*common.TableInfo,
 ) error {
+	if config.IsMySQLCompatibleScheme(scheme) {
+		matcher, err := ordering.NewTxnOrderMatcher(replicaConfig.Sink.GetTxnOrderTables(scheme), util.GetOrZero(replicaConfig.CaseSensitive))
+		if err != nil {
+			return err
+		}
+		for _, tableInfo := range tableInfos {
+			if tableInfo.IsEligible(util.GetOrZero(replicaConfig.ForceReplicate)) && tableInfo.IsPartitionTable() &&
+				matcher.Match(tableInfo.GetSchemaName(), tableInfo.GetTableName()) {
+				return errors.ErrInvalidReplicaConfig.GenWithStackByArgs(
+					"sink.mysql-config.txn-order-tables does not support partitioned table " + tableInfo.TableName.String())
+			}
+		}
+		return nil
+	}
 	if config.IsStorageScheme(scheme) {
 		selectors, err := columnselector.New(replicaConfig.Sink, util.GetOrZero(replicaConfig.CaseSensitive))
 		if err != nil {

@@ -36,6 +36,82 @@ import (
 	"go.uber.org/zap"
 )
 
+func TestHandleStatusIgnoresInvalidBlockStatus(t *testing.T) {
+	testutil.SetUpTestServices(t)
+	tableTriggerEventDispatcherID := common.NewDispatcherID()
+	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
+	ddlSpan := replica.NewWorkingSpanReplication(cfID, tableTriggerEventDispatcherID,
+		common.DDLSpanSchemaID,
+		common.KeyspaceDDLSpan(common.DefaultKeyspaceID), &heartbeatpb.TableSpanStatus{
+			ID:              tableTriggerEventDispatcherID.ToPB(),
+			ComponentStatus: heartbeatpb.ComponentState_Working,
+			CheckpointTs:    1,
+		}, "node1", false)
+	spanController := span.NewController(cfID, ddlSpan, nil, nil, nil, common.DefaultKeyspaceID, common.DefaultMode)
+	operatorController := operator.NewOperatorController(cfID, spanController, 1000, common.DefaultMode)
+	barrier := NewBarrier(spanController, operatorController, false, nil, common.DefaultMode, nil)
+	require.NotPanics(t, func() {
+		require.Nil(t, barrier.HandleStatus("node1", nil))
+		require.Nil(t, barrier.HandleStatus("node1", &heartbeatpb.BlockStatusRequest{}))
+	})
+
+	tests := []struct {
+		name   string
+		status *heartbeatpb.TableSpanBlockStatus
+	}{
+		{name: "nil status"},
+		{
+			name: "nil dispatcher ID",
+			status: &heartbeatpb.TableSpanBlockStatus{
+				State: &heartbeatpb.State{BlockTs: 10},
+			},
+		},
+		{
+			name: "nil state",
+			status: &heartbeatpb.TableSpanBlockStatus{
+				ID: tableTriggerEventDispatcherID.ToPB(),
+			},
+		},
+		{
+			name: "zero block ts",
+			status: &heartbeatpb.TableSpanBlockStatus{
+				ID:    tableTriggerEventDispatcherID.ToPB(),
+				State: &heartbeatpb.State{},
+			},
+		},
+		{
+			name: "nil block tables for blocked status",
+			status: &heartbeatpb.TableSpanBlockStatus{
+				ID: tableTriggerEventDispatcherID.ToPB(),
+				State: &heartbeatpb.State{
+					IsBlocked: true,
+					BlockTs:   10,
+					Stage:     heartbeatpb.BlockStage_WAITING,
+				},
+			},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			var msgs []*messaging.TargetMessage
+			require.NotPanics(t, func() {
+				msgs = barrier.HandleStatus("node1", &heartbeatpb.BlockStatusRequest{
+					ChangefeedID:  cfID.ToPB(),
+					BlockStatuses: []*heartbeatpb.TableSpanBlockStatus{tc.status},
+				})
+			})
+
+			require.Len(t, msgs, 1)
+			resp := msgs[0].Message[0].(*heartbeatpb.HeartBeatResponse)
+			require.Empty(t, resp.DispatcherStatuses)
+			require.Zero(t, barrier.blockedEvents.Len())
+			require.Equal(t, uint64(1), ddlSpan.GetStatus().CheckpointTs)
+			require.Nil(t, ddlSpan.GetBlockState())
+		})
+	}
+}
+
 func TestOneBlockEvent(t *testing.T) {
 	testutil.SetUpTestServices(t)
 	tableTriggerEventDispatcherID := common.NewDispatcherID()

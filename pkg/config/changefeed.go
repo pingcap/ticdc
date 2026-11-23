@@ -281,6 +281,16 @@ type ChangeFeedInfo struct {
 }
 
 func (info *ChangeFeedInfo) ToChangefeedConfig() *ChangefeedConfig {
+	sinkConfig := info.Config.Sink
+	if sinkConfig != nil && info.Config.Integrity != nil {
+		// Keep integrity in the existing wire location without mutating the replica config.
+		clonedSinkConfig := *sinkConfig
+		sinkConfig = &clonedSinkConfig
+		sinkConfig.Integrity = &IntegrityConfig{
+			IntegrityCheckLevel:   util.GetOrZero(info.Config.Integrity.IntegrityCheckLevel),
+			CorruptionHandleLevel: util.GetOrZero(info.Config.Integrity.CorruptionHandleLevel),
+		}
+	}
 	return &ChangefeedConfig{
 		ChangefeedID:                  info.ChangefeedID,
 		PerformanceMode:               util.GetOrZero(info.Config.PerformanceMode),
@@ -289,7 +299,7 @@ func (info *ChangeFeedInfo) ToChangefeedConfig() *ChangefeedConfig {
 		SinkURI:                       info.SinkURI,
 		CaseSensitive:                 util.GetOrZero(info.Config.CaseSensitive),
 		ForceReplicate:                util.GetOrZero(info.Config.ForceReplicate),
-		SinkConfig:                    info.Config.Sink,
+		SinkConfig:                    sinkConfig,
 		Filter:                        info.Config.Filter,
 		EnableSyncPoint:               util.GetOrZero(info.Config.EnableSyncPoint),
 		SyncPointInterval:             util.GetOrZero(info.Config.SyncPointInterval),
@@ -348,10 +358,7 @@ func (info *ChangeFeedInfo) String() (str string) {
 		return str
 	}
 
-	clone.SinkURI = util.MaskSensitiveDataInURI(clone.SinkURI)
-	if clone.Config != nil {
-		clone.Config.MaskSensitiveData()
-	}
+	clone.maskSensitiveData()
 
 	str, err = clone.Marshal()
 	if err != nil {
@@ -366,11 +373,21 @@ func MaskChangefeedInfo(data []byte) (string, error) {
 	if err := info.Unmarshal(data); err != nil {
 		return "", err
 	}
+	info.maskSensitiveData()
+	return info.Marshal()
+}
+
+func (info *ChangeFeedInfo) maskSensitiveData() {
 	info.SinkURI = util.MaskSensitiveDataInURI(info.SinkURI)
 	if info.Config != nil {
 		info.Config.MaskSensitiveData()
 	}
-	return info.Marshal()
+	if info.Error != nil {
+		info.Error.Message = util.RedactValue(info.Error.Message)
+	}
+	if info.Warning != nil {
+		info.Warning.Message = util.RedactValue(info.Warning.Message)
+	}
 }
 
 // GetStartTs returns StartTs if it's specified or using the

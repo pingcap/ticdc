@@ -77,5 +77,5 @@ func TestGenKeyListUsesSchemaIndexWithVirtualGeneratedColumn(t *testing.T) {
 
 	row := chk.GetRow(0)
 	key := genKeyList(&row, tableInfo)
-	require.Equal(t, []byte("1\x00"), key)
+	require.Equal(t, []byte{1, '1'}, key)
 }

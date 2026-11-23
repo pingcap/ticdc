@@ -23,6 +23,7 @@ import (
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/encryption/kms"
 	cerrors "github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/util"
 	"go.uber.org/zap"
 )
 
@@ -272,17 +273,6 @@ func (m *encryptionMetaManager) getMeta(ctx context.Context, keyspaceID uint32) 
 		if time.Since(cached.timestamp) < m.ttl {
 			meta := cached.meta
 			m.metaMu.RUnlock()
-			if meta == nil {
-				log.Debug("using cached empty encryption meta",
-					zap.Uint32("keyspaceID", keyspaceID))
-			} else {
-				log.Debug("using cached encryption meta",
-					zap.Uint32("keyspaceID", keyspaceID),
-					zap.Uint32("metaKeyspaceID", meta.KeyspaceId),
-					zap.Uint32("currentDataKeyID", meta.Current.DataKeyId),
-					zap.Uint8("version", byte(meta.Current.DataKeyId&0xFF)),
-					zap.Int("dataKeyCount", len(meta.DataKeys)))
-			}
 			return meta, nil
 		}
 	}
@@ -357,7 +347,7 @@ func (m *encryptionMetaManager) decryptDataKey(ctx context.Context, masterKey *M
 			zap.String("kmsVendor", masterKey.Vendor),
 			zap.String("cmekID", masterKey.CmekId),
 			zap.String("region", masterKey.Region),
-			zap.String("endpoint", masterKey.Endpoint),
+			zap.String("endpoint", util.MaskSensitiveDataInURIForError(masterKey.Endpoint)),
 			zap.Error(err))
 		return nil, cerrors.ErrDecodeFailed.Wrap(err)
 	}

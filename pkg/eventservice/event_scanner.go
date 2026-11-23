@@ -17,6 +17,7 @@ import (
 	"context"
 	"time"
 
+	"github.com/pingcap/failpoint"
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/logservice/eventstore"
 	"github.com/pingcap/ticdc/logservice/schemastore"
@@ -27,6 +28,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/filter"
 	"github.com/pingcap/ticdc/pkg/integrity"
 	"github.com/pingcap/ticdc/pkg/metrics"
+	"github.com/pingcap/ticdc/pkg/ordering"
 	"github.com/pingcap/tidb/pkg/util/chunk"
 	"go.uber.org/zap"
 )
@@ -40,8 +42,8 @@ type eventGetter interface {
 // schemaGetter is the interface for getting schema info and ddl events
 // The implementation of schemaGetter is schemastore.SchemaStore
 type schemaGetter interface {
-	FetchTableDDLEvents(keyspace common.KeyspaceMeta, dispatcherID common.DispatcherID, tableID int64, filter filter.Filter, startTs, endTs uint64) ([]event.DDLEvent, error)
-	GetTableInfo(keyspace common.KeyspaceMeta, tableID int64, ts uint64) (*common.TableInfo, error)
+	FetchTableDDLEvents(keyspace common.KeyspaceMeta, dispatcherID common.DispatcherID, tableID int64, filter filter.Filter, txnOrderMatcher *ordering.TxnOrderMatcher, startTs, endTs uint64) ([]event.DDLEvent, error)
+	GetTableInfo(ctx context.Context, keyspace common.KeyspaceMeta, tableID int64, ts uint64) (*common.TableInfo, error)
 }
 
 // ScanLimit defines the limits for a scan operation
@@ -153,6 +155,7 @@ func (s *eventScanner) scan(
 		dispatcherStat.info.IsOutputRawChangeEvent(),
 		s.mode,
 		dispatcherStat.info.EnableIgnoreUpdateOnlyColumns())
+	scanCtx.processor.txnOrderMatcher = dispatcherStat.txnOrderMatcher
 	scanCtx.processor.ctx = ctx
 	scanCtx.processor.dispatcherStat = dispatcherStat
 
@@ -200,6 +203,7 @@ func (s *eventScanner) fetchDDLEvents(stat *dispatcherStat, dataRange common.Dat
 		dispatcherID,
 		dataRange.Span.TableID,
 		stat.filter,
+		stat.txnOrderMatcher,
 		dataRange.CommitTsStart,
 		dataRange.CommitTsEnd,
 	)
@@ -211,9 +215,25 @@ func (s *eventScanner) fetchDDLEvents(stat *dispatcherStat, dataRange common.Dat
 
 	result := make([]event.Event, 0, len(ddlEvents))
 	for _, item := range ddlEvents {
+		// A rename can select a table that was previously allowed to have split spans.
+		if stat.isSplitSpan && item.Err == "" && item.TableStateChange != nil &&
+			item.TableStateChange.Kind == event.TableStateUpdated && matchesTxnOrder(stat.txnOrderMatcher, stat.filter, item.TableInfo) &&
+			(stat.filter == nil || stat.filter.IsEligibleTable(item.TableInfo)) {
+			return nil, txnOrderSplitSpanError(item.TableInfo)
+		}
 		result = append(result, &item)
 	}
 	return result, nil
+}
+
+func matchesTxnOrder(matcher *ordering.TxnOrderMatcher, tableFilter filter.Filter, info *common.TableInfo) bool {
+	return matcher != nil && info != nil && matcher.Match(info.GetSchemaName(), info.GetTableName()) &&
+		(tableFilter == nil || !tableFilter.ShouldIgnoreTable(info.GetSchemaName(), info.GetTableName()))
+}
+
+func txnOrderSplitSpanError(info *common.TableInfo) error {
+	return errors.ErrInvalidReplicaConfig.GenWithStackByArgs(
+		"sink.mysql-config.txn-order-tables does not support split spans for table " + info.TableName.String())
 }
 
 // closeIterator closes the event iterator and records metrics.
@@ -271,7 +291,7 @@ func (s *eventScanner) scanAndMergeEvents(
 		}
 
 		if isNewTxn {
-			tableInfo, err := s.getTableInfo4Txn(dispatcher, tableID, rawEvent.CRTs-1)
+			tableInfo, err := s.getTableInfo4Txn(session.ctx, dispatcher, tableID, rawEvent.CRTs-1)
 			if err != nil {
 				return false, err
 			}
@@ -348,12 +368,12 @@ func (s *eventScanner) checkScanConditions(session *session) (bool, error) {
 	return session.dispatcherStat.isRemoved.Load(), nil
 }
 
-func (s *eventScanner) getTableInfo4Txn(dispatcher *dispatcherStat, tableID int64, ts uint64) (*common.TableInfo, error) {
+func (s *eventScanner) getTableInfo4Txn(ctx context.Context, dispatcher *dispatcherStat, tableID int64, ts uint64) (*common.TableInfo, error) {
 	keyspaceMeta := common.KeyspaceMeta{
 		ID:   dispatcher.info.GetTableSpan().KeyspaceID,
 		Name: dispatcher.info.GetChangefeedID().Keyspace(),
 	}
-	tableInfo, err := s.schemaGetter.GetTableInfo(keyspaceMeta, tableID, ts)
+	tableInfo, err := s.schemaGetter.GetTableInfo(ctx, keyspaceMeta, tableID, ts)
 	if err == nil {
 		return tableInfo, nil
 	}
@@ -806,10 +826,11 @@ type dmlProcessor struct {
 	mounter      event.Mounter
 	schemaGetter schemaGetter
 
-	filter         filter.Filter
-	filterContext  filter.DMLFilterContext
-	dispatcherStat *dispatcherStat
-	spillDir       string
+	filter          filter.Filter
+	txnOrderMatcher *ordering.TxnOrderMatcher
+	filterContext   filter.DMLFilterContext
+	dispatcherStat  *dispatcherStat
+	spillDir        string
 
 	// dmlTypeFilterCache caches the pre-decode filter result within the current transaction.
 	// The cache is reset when a new transaction starts. It is safe because tableInfo
@@ -838,6 +859,12 @@ func newDMLProcessor(
 	dmlFilter filter.Filter, outputRawChangeEvent bool, mode int64,
 	enableIgnoreUpdateOnlyColumns bool,
 ) *dmlProcessor {
+	// Preserve legacy raw UPDATE records for redo applier integration tests.
+	failpoint.Inject("OutputRawRedoUpdates", func() {
+		if common.IsRedoMode(mode) {
+			outputRawChangeEvent = true
+		}
+	})
 	filterContext := filter.DMLFilterContext{}
 	if enableIgnoreUpdateOnlyColumns {
 		filterContext.EnableIgnoreUpdateOnlyColumns = true
@@ -865,6 +892,16 @@ func (p *dmlProcessor) startTxn(
 	commitTs uint64,
 	shouldSplitTxn bool,
 ) error {
+	if matchesTxnOrder(p.txnOrderMatcher, p.filter, tableInfo) {
+		if tableInfo.IsPartitionTable() {
+			return errors.ErrInvalidReplicaConfig.GenWithStackByArgs(
+				"sink.mysql-config.txn-order-tables does not support partitioned table " + tableInfo.TableName.String())
+		}
+		if p.dispatcherStat != nil && p.dispatcherStat.isSplitSpan {
+			return txnOrderSplitSpanError(tableInfo)
+		}
+		shouldSplitTxn = false
+	}
 	if p.currentTxn != nil {
 		log.Panic("there is a transaction not flushed yet")
 	}
@@ -980,9 +1017,6 @@ func (p *dmlProcessor) appendRow(rawEvent *common.RawKVEntry) error {
 		return p.currentTxn.AppendRow(rawEvent, p.mounter.DecodeToChunk, p.filter, p.filterContext)
 	}
 
-	log.Debug("split update event", zap.Uint64("startTs", rawEvent.StartTs),
-		zap.Uint64("commitTs", rawEvent.CRTs),
-		zap.String("table", p.currentTxn.CurrentDMLEvent.TableInfo.TableName.String()))
 	deleteRow, insertRow, err := rawEvent.SplitUpdate()
 	if err != nil {
 		return err

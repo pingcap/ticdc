@@ -45,6 +45,12 @@ if [[ -z "$addr" ]]; then
 	addr="${host}:${port}"
 fi
 
+# The debug API requires a keyspace in next-gen mode.
+keyspace_query=""
+if [ "${NEXT_GEN:-0}" = "1" ]; then
+	keyspace_query="?keyspace=${KEYSPACE_NAME}"
+fi
+
 function json_escape() {
 	local s="$1"
 	s=${s//\\/\\\\}
@@ -58,7 +64,7 @@ function json_escape() {
 payload=$(printf '{"name":"%s","expr":"%s"}' "$(json_escape "$name")" "$(json_escape "$expr")")
 tmpfile=$(mktemp)
 http_code=$(curl -s -o "$tmpfile" -w "%{http_code}" \
-	-X POST "http://${addr}/debug/failpoints" \
+	-X POST "http://${addr}/debug/failpoints${keyspace_query}" \
 	-H "Content-Type: application/json" \
 	--data "$payload")
 

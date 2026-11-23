@@ -37,9 +37,9 @@ type admin struct {
 const adminMetadataMinAge = 100 * time.Millisecond
 
 func newAdmin(ctx context.Context, changefeedID common.ChangeFeedID, clientOpts []kgo.Opt) (*admin, error) {
-	opts := make([]kgo.Opt, 0, len(clientOpts)+3)
+	opts := make([]kgo.Opt, 0, len(clientOpts)+2)
 	opts = append(opts, clientOpts...)
-	opts = append(opts, kgo.WithContext(ctx), kgo.WithLogger(newClientLogger(changefeedID)))
+	opts = append(opts, kgo.WithContext(ctx))
 	// It must stay below the visibility retry interval to avoid retrying a cached topic-not-found result.
 	opts = append(opts, kgo.MetadataMinAge(adminMetadataMinAge))
 

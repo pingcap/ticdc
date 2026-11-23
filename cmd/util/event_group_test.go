@@ -282,6 +282,67 @@ func TestAppendOrMergeDMLEvent(t *testing.T) {
 	})
 }
 
+func TestAppendOrMergeDMLEventSparseChecksums(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		checksums []*integrity.Checksum
+	}{
+		{name: "historical update between checksummed rows", checksums: []*integrity.Checksum{{Current: 1}, nil, {Current: 3}}},
+		{name: "historical update before first checksum", checksums: []*integrity.Checksum{nil, nil, {Current: 3}}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			tableInfo := newMergeTestTableInfo(1, 10, 1)
+			first := newMergeTestDMLEvent(100, tableInfo, 1)
+			update := newMergeTestDMLEvent(100, tableInfo, 2)
+			last := newMergeTestDMLEvent(100, tableInfo, 3)
+			update.RowTypes = []common.RowType{common.RowTypeUpdate, common.RowTypeUpdate}
+			update.Rows.AppendInt64(0, 20)
+			first.RowKeys = [][]byte{[]byte("first")}
+			last.RowKeys = [][]byte{[]byte("last")}
+			inputs := []*commonEvent.DMLEvent{first, update, last}
+			messages := make([]*codeccommon.DMLMessage, len(inputs))
+			for i, input := range inputs {
+				input.Version = commonEvent.DMLEventVersion1
+				if tc.checksums[i] != nil {
+					input.Checksum = []*integrity.Checksum{tc.checksums[i]}
+				}
+				messages[i] = newMergeTestDMLMessage(input)
+			}
+
+			events := DMLMessagesToEvents(messages)
+			require.Len(t, events, 1)
+			merged := events[0]
+			require.Equal(t, int32(3), merged.Length)
+			require.Len(t, merged.RowTypes, 4)
+			require.Equal(t, 4, merged.Rows.NumRows())
+			require.Equal(t, tc.checksums, merged.Checksum)
+			require.Equal(t, [][]byte{[]byte("first"), nil, nil, []byte("last")}, merged.RowKeys)
+
+			for i, rowType := range []common.RowType{common.RowTypeInsert, common.RowTypeUpdate, common.RowTypeInsert} {
+				row, ok := merged.GetNextRow()
+				require.True(t, ok, "logical row %d must not be skipped", i)
+				require.Equal(t, rowType, row.RowType)
+				require.Equal(t, tc.checksums[i], row.Checksum)
+				if rowType == common.RowTypeUpdate {
+					require.Equal(t, int64(2), row.PreRow.GetInt64(0))
+					require.Equal(t, int64(20), row.Row.GetInt64(0))
+				} else {
+					require.Equal(t, int64(i+1), row.Row.GetInt64(0))
+				}
+			}
+			_, ok := merged.GetNextRow()
+			require.False(t, ok)
+
+			data, err := merged.Marshal()
+			require.NoError(t, err)
+			var decoded commonEvent.DMLEvent
+			require.NoError(t, decoded.Unmarshal(data))
+			require.Equal(t, merged.Length, decoded.Length)
+			require.Equal(t, tc.checksums, decoded.Checksum)
+		})
+	}
+}
+
 func TestEventsGroupSharesRawMessageData(t *testing.T) {
 	first := newTestDMLMessage(10)
 	second := newTestDMLMessage(10)

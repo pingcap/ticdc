@@ -14,6 +14,7 @@
 package mysql
 
 import (
+	"fmt"
 	"reflect"
 	"strings"
 	"testing"
@@ -21,10 +22,13 @@ import (
 
 	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
+	"github.com/pingcap/ticdc/pkg/config"
 	tidbmodel "github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/tidb/pkg/parser/ast"
 	tidbmysql "github.com/pingcap/tidb/pkg/parser/mysql"
 	"github.com/pingcap/tidb/pkg/parser/types"
+	"github.com/pingcap/tidb/pkg/util/chunk"
+	tfilter "github.com/pingcap/tidb/pkg/util/table-filter"
 	"github.com/stretchr/testify/require"
 )
 
@@ -271,9 +275,9 @@ func TestGenerateBatchSQL(t *testing.T) {
 	require.Equal(t, 2, len(args))
 	require.Equal(t, 2, len(rowTypes))
 	require.Equal(t, "INSERT INTO `test`.`t` (`id`,`name`) VALUES (?,?),(?,?)", sql[0])
-	require.Equal(t, []interface{}{int64(16), "test", int64(17), "test"}, args[0])
+	require.Equal(t, []any{int64(16), "test", int64(17), "test"}, args[0])
 	require.Equal(t, "INSERT INTO `test`.`t` (`id`,`name`) VALUES (?,?)", sql[1])
-	require.Equal(t, []interface{}{int64(18), "test"}, args[1])
+	require.Equal(t, []any{int64(18), "test"}, args[1])
 
 	writer.cfg.SafeMode = true
 	writer.cfg.MaxTxnRow = 3
@@ -281,18 +285,18 @@ func TestGenerateBatchSQL(t *testing.T) {
 	require.Equal(t, 1, len(sql))
 	require.Equal(t, 1, len(args))
 	require.Equal(t, "REPLACE INTO `test`.`t` (`id`,`name`) VALUES (?,?),(?,?),(?,?)", sql[0])
-	expected1 := []interface{}{int64(16), "test", int64(17), "test", int64(18), "test"}
-	expected2 := []interface{}{int64(16), "test", int64(18), "test", int64(17), "test"}
-	expected3 := []interface{}{int64(17), "test", int64(16), "test", int64(18), "test"}
-	expected4 := []interface{}{int64(17), "test", int64(18), "test", int64(16), "test"}
-	expected5 := []interface{}{int64(18), "test", int64(16), "test", int64(17), "test"}
-	expected6 := []interface{}{int64(18), "test", int64(17), "test", int64(16), "test"}
-	require.True(t, (reflect.DeepEqual(expected1, args[0])) ||
-		(reflect.DeepEqual(expected2, args[0])) ||
-		(reflect.DeepEqual(expected3, args[0])) ||
-		(reflect.DeepEqual(expected4, args[0])) ||
-		(reflect.DeepEqual(expected5, args[0])) ||
-		(reflect.DeepEqual(expected6, args[0])),
+	expected1 := []any{int64(16), "test", int64(17), "test", int64(18), "test"}
+	expected2 := []any{int64(16), "test", int64(18), "test", int64(17), "test"}
+	expected3 := []any{int64(17), "test", int64(16), "test", int64(18), "test"}
+	expected4 := []any{int64(17), "test", int64(18), "test", int64(16), "test"}
+	expected5 := []any{int64(18), "test", int64(16), "test", int64(17), "test"}
+	expected6 := []any{int64(18), "test", int64(17), "test", int64(16), "test"}
+	require.True(t, reflect.DeepEqual(expected1, args[0]) ||
+		reflect.DeepEqual(expected2, args[0]) ||
+		reflect.DeepEqual(expected3, args[0]) ||
+		reflect.DeepEqual(expected4, args[0]) ||
+		reflect.DeepEqual(expected5, args[0]) ||
+		reflect.DeepEqual(expected6, args[0]),
 		"args[0] should be one of the expected combinations: %v", args[0])
 
 	// Test performance with 1000 rows event
@@ -334,6 +338,409 @@ func TestGenerateBatchSQL(t *testing.T) {
 	require.Equal(t, 2000, len(args[0]), "Should have 2000 arguments (1000 rows * 2 columns)")
 }
 
+func TestGenerateBatchSQLWithFilteredEvents(t *testing.T) {
+	writer, db, _ := newTestMysqlWriter(t)
+	defer db.Close()
+	writer.cfg.deleteEventFilters = []tfilter.Filter{tfilter.All()}
+	helper := commonEvent.NewEventTestHelper(t)
+	defer helper.Close()
+
+	helper.Tk().MustExec("use test")
+	require.NotNil(t, helper.DDL2Job("create table t (id int primary key, name varchar(32), unique key uk_name (name));"))
+
+	deleteEvent := helper.DML2DeleteEvent("test", "t", "insert into t values (1, 'deleted')", "delete from t where id = 1")
+	insertEvent := helper.DML2Event("test", "t", "insert into t values (1, 'first')")
+	helper.ExecuteDeleteDml("test", "t", "delete from t where id = 1")
+	updateEvent, _ := helper.DML2UpdateEvent("test", "t", "insert into t values (1, 'before')", "update t set name = 'updated' where id = 1")
+	// Omit the delete event to reproduce DELETE filtering before a same-key insert.
+	helper.ExecuteDeleteDml("test", "t", "delete from t where id = 1")
+	insertEvent2 := helper.DML2Event("test", "t", "insert into t values (1, 'last')", "insert into t values (2, 'other')")
+	insertEvent3 := helper.DML2Event("test", "t", "insert into t values (3, 'third')")
+
+	const (
+		updateSQL   = "UPDATE `test`.`t` SET `id` = ?,`name` = ? WHERE `id` = ? LIMIT 1"
+		deleteSQL   = "DELETE FROM `test`.`t` WHERE `id` = ? LIMIT 1"
+		insertSQL   = "INSERT INTO `test`.`t` (`id`,`name`) VALUES (?,?)"
+		insertsSQL  = "INSERT INTO `test`.`t` (`id`,`name`) VALUES (?,?),(?,?)"
+		replaceSQL  = "REPLACE INTO `test`.`t` (`id`,`name`) VALUES (?,?)"
+		replacesSQL = "REPLACE INTO `test`.`t` (`id`,`name`) VALUES (?,?),(?,?)"
+	)
+	tests := []struct {
+		name            string
+		events          []*commonEvent.DMLEvent
+		unsafeSQLs      []string
+		safeSQLs        []string
+		args            [][]any
+		rowTypes        []common.RowType
+		safeArgs        [][]any
+		safeRowTypes    []common.RowType
+		disableBatch    bool
+		invalidSequence bool
+	}{
+		{
+			name:         "single update",
+			events:       []*commonEvent.DMLEvent{updateEvent},
+			unsafeSQLs:   []string{updateSQL},
+			safeSQLs:     []string{deleteSQL, replaceSQL},
+			args:         [][]any{{int64(1), "updated", int64(1)}},
+			rowTypes:     []common.RowType{common.RowTypeUpdate},
+			safeArgs:     [][]any{{int64(1)}, {int64(1), "updated"}},
+			safeRowTypes: []common.RowType{common.RowTypeDelete, common.RowTypeInsert},
+		},
+		{
+			name:         "single update without batching",
+			events:       []*commonEvent.DMLEvent{updateEvent},
+			unsafeSQLs:   []string{updateSQL},
+			safeSQLs:     []string{deleteSQL, replaceSQL},
+			args:         [][]any{{int64(1), "updated", int64(1)}},
+			rowTypes:     []common.RowType{common.RowTypeUpdate},
+			safeArgs:     [][]any{{int64(1)}, {int64(1), "updated"}},
+			safeRowTypes: []common.RowType{common.RowTypeDelete, common.RowTypeInsert},
+			disableBatch: true,
+		},
+		{
+			name:       "distinct inserts stay in separate events",
+			events:     []*commonEvent.DMLEvent{insertEvent, insertEvent3},
+			unsafeSQLs: []string{insertSQL, insertSQL},
+			safeSQLs:   []string{replaceSQL, replaceSQL},
+			args:       [][]any{{int64(1), "first"}, {int64(3), "third"}},
+			rowTypes:   []common.RowType{common.RowTypeInsert, common.RowTypeInsert},
+		},
+		{
+			name:            "update then insert",
+			events:          []*commonEvent.DMLEvent{updateEvent, insertEvent2},
+			unsafeSQLs:      []string{updateSQL, insertsSQL},
+			safeSQLs:        []string{deleteSQL, replaceSQL, replacesSQL},
+			args:            [][]any{{int64(1), "updated", int64(1)}, {int64(1), "last", int64(2), "other"}},
+			rowTypes:        []common.RowType{common.RowTypeUpdate, common.RowTypeInsert},
+			safeArgs:        [][]any{{int64(1)}, {int64(1), "updated"}, {int64(1), "last", int64(2), "other"}},
+			safeRowTypes:    []common.RowType{common.RowTypeDelete, common.RowTypeInsert, common.RowTypeInsert},
+			invalidSequence: true,
+		},
+		{
+			name:            "insert then insert",
+			events:          []*commonEvent.DMLEvent{insertEvent, insertEvent2},
+			unsafeSQLs:      []string{insertSQL, insertsSQL},
+			safeSQLs:        []string{replaceSQL, replacesSQL},
+			args:            [][]any{{int64(1), "first"}, {int64(1), "last", int64(2), "other"}},
+			rowTypes:        []common.RowType{common.RowTypeInsert, common.RowTypeInsert},
+			invalidSequence: true,
+		},
+		{
+			name:            "delete then insert then insert",
+			events:          []*commonEvent.DMLEvent{deleteEvent, insertEvent, insertEvent2},
+			unsafeSQLs:      []string{deleteSQL, insertSQL, insertsSQL},
+			safeSQLs:        []string{deleteSQL, replaceSQL, replacesSQL},
+			args:            [][]any{{int64(1)}, {int64(1), "first"}, {int64(1), "last", int64(2), "other"}},
+			rowTypes:        []common.RowType{common.RowTypeDelete, common.RowTypeInsert, common.RowTypeInsert},
+			invalidSequence: true,
+		},
+	}
+
+	for _, mode := range []string{"unsafe", "configured safe mode", "error caused safe mode", "recovery safe mode"} {
+		t.Run(mode, func(t *testing.T) {
+			writer.cfg.SafeMode = mode == "configured safe mode"
+			writer.isInErrorCausedSafeMode = mode == "error caused safe mode"
+			for _, tt := range tests {
+				t.Run(tt.name, func(t *testing.T) {
+					writer.cfg.BatchDMLEnable = !tt.disableBatch
+					for i, event := range tt.events {
+						event.CommitTs = uint64(i + 2)
+						event.ReplicatingTs = 1
+						if mode == "recovery safe mode" {
+							event.ReplicatingTs = 10
+						}
+					}
+					// Preparing twice verifies every event is rewound for retries.
+					for range 2 {
+						require.NotPanics(t, func() {
+							dmls, err := writer.prepareDMLs(tt.events)
+							defer dmlsPool.Put(dmls)
+							require.NoError(t, err)
+							if mode == "unsafe" {
+								require.Equal(t, tt.unsafeSQLs, dmls.sqls)
+							} else {
+								require.Equal(t, tt.safeSQLs, dmls.sqls)
+							}
+							if mode != "unsafe" && tt.safeArgs != nil {
+								require.Equal(t, tt.safeArgs, dmls.values)
+								require.Equal(t, tt.safeRowTypes, dmls.rowTypes)
+							} else {
+								require.Equal(t, tt.args, dmls.values)
+								require.Equal(t, tt.rowTypes, dmls.rowTypes)
+							}
+						})
+					}
+				})
+			}
+		})
+	}
+
+	// The same incomplete sequences without delete filtering must still expose
+	// an invariant violation instead of silently switching SQL generation paths.
+	writer.cfg.deleteEventFilters = nil
+	writer.isInErrorCausedSafeMode = false
+	for _, safeMode := range []bool{false, true} {
+		writer.cfg.SafeMode = safeMode
+		for _, tt := range tests {
+			if !tt.invalidSequence {
+				continue
+			}
+			for _, event := range tt.events {
+				event.CommitTs = 2
+				event.ReplicatingTs = 1
+			}
+			expectedPanic := "invalid rows when generating batch SQL in unsafe mode"
+			if safeMode {
+				expectedPanic = "invalid row changes"
+			}
+			require.PanicsWithValue(t, expectedPanic, func() { writer.generateBatchSQL(tt.events) })
+		}
+	}
+}
+
+func TestDeleteFilterSelectsTableDMLMode(t *testing.T) {
+	writer, db, _ := newTestMysqlWriter(t)
+	defer db.Close()
+	filters, err := buildDeleteEventFilters(&config.ChangefeedConfig{
+		Filter: &config.FilterConfig{EventFilters: []*config.EventFilterRule{
+			{Matcher: []string{"test.filtered"}, IgnoreDeleteValueExpr: new("id > 0")},
+		}},
+	})
+	require.NoError(t, err)
+	writer.cfg.deleteEventFilters = filters
+	helper := commonEvent.NewEventTestHelper(t)
+	defer helper.Close()
+	helper.Tk().MustExec("use test")
+	var inserts, updates []*commonEvent.DMLEvent
+	for _, table := range []string{"filtered", "regular"} {
+		require.NotNil(t, helper.DDL2Job("create table "+table+" (id int primary key, name varchar(32));"))
+		inserts = append(inserts,
+			helper.DML2Event("test", table, "insert into "+table+" values (1, 'first')"),
+			helper.DML2Event("test", table, "insert into "+table+" values (2, 'second')"))
+		update, _ := helper.DML2UpdateEvent("test", table,
+			"insert into "+table+" values (3, 'before')", "update "+table+" set name = 'after' where id = 3")
+		updates = append(updates, update)
+	}
+	for _, event := range append(inserts, updates...) {
+		event.CommitTs = 2
+		event.ReplicatingTs = 1
+	}
+	checkSQLs := func(t *testing.T, events []*commonEvent.DMLEvent, expected map[string][][]any) {
+		t.Helper()
+		dmls, err := writer.prepareDMLs(events)
+		require.NoError(t, err)
+		defer dmlsPool.Put(dmls)
+		actual := make(map[string][][]any)
+		for i, sql := range dmls.sqls {
+			actual[sql] = append(actual[sql], dmls.values[i])
+		}
+		require.Len(t, actual, len(expected))
+		for sql, want := range expected {
+			got, ok := actual[sql]
+			require.True(t, ok, "missing SQL: %s", sql)
+			if strings.HasSuffix(sql, "VALUES (?,?),(?,?)") {
+				// Cross-event safe-mode batching may reorder independent rows.
+				require.Len(t, got, 1)
+				require.Len(t, got[0], 4)
+				require.ElementsMatch(t, [][]any{want[0][:2], want[0][2:]}, [][]any{got[0][:2], got[0][2:]})
+			} else {
+				// Per-event statements must preserve their original order.
+				require.Equal(t, want, got, "SQL: %s", sql)
+			}
+		}
+	}
+	for _, safeMode := range []bool{false, true} {
+		t.Run(fmt.Sprintf("safeMode=%t", safeMode), func(t *testing.T) {
+			writer.cfg.SafeMode = safeMode
+			insert := "INSERT"
+			if safeMode {
+				insert = "REPLACE"
+			}
+			// Both tables share one flush; only the unfiltered table merges events.
+			checkSQLs(t, inserts, map[string][][]any{
+				insert + " INTO `test`.`filtered` (`id`,`name`) VALUES (?,?)":      {{int64(1), "first"}, {int64(2), "second"}},
+				insert + " INTO `test`.`regular` (`id`,`name`) VALUES (?,?),(?,?)": {{int64(1), "first", int64(2), "second"}},
+			})
+			expected := map[string][][]any{
+				"UPDATE `test`.`filtered` SET `id` = ?,`name` = ? WHERE `id` = ? LIMIT 1": {{int64(3), "after", int64(3)}},
+			}
+			if safeMode {
+				delete(expected, "UPDATE `test`.`filtered` SET `id` = ?,`name` = ? WHERE `id` = ? LIMIT 1")
+				expected["DELETE FROM `test`.`filtered` WHERE `id` = ? LIMIT 1"] = [][]any{{int64(3)}}
+				expected["REPLACE INTO `test`.`filtered` (`id`,`name`) VALUES (?,?)"] = [][]any{{int64(3), "after"}}
+				expected["DELETE FROM `test`.`regular` WHERE `id` = ? LIMIT 1"] = [][]any{{int64(3)}}
+				expected["REPLACE INTO `test`.`regular` (`id`,`name`) VALUES (?,?)"] = [][]any{{int64(3), "after"}}
+			} else {
+				expected["UPDATE `test`.`regular` SET `id` = ?,`name` = ? WHERE `id` = ? LIMIT 1"] = [][]any{{int64(3), "after", int64(3)}}
+			}
+			checkSQLs(t, updates, expected)
+		})
+	}
+}
+
+func TestGenerateBatchSQLKeyMismatch(t *testing.T) {
+	writer, db, _ := newTestMysqlWriter(t)
+	defer db.Close()
+	writer.cfg.SafeMode = false
+	helper := commonEvent.NewEventTestHelper(t)
+	defer helper.Close()
+	helper.Tk().MustExec("use test")
+	require.NotNil(t, helper.DDL2Job("create table t (id int primary key, name varchar(32));"))
+
+	updateEvent, _ := helper.DML2UpdateEvent("test", "t", "insert into t values (1, 'before')", "update t set name = 'after' where id = 1")
+	insertEvent := helper.DML2Event("test", "t", "insert into t values (2, 'other')")
+	// A primary-key change must have been split before reaching the batch merger.
+	updateEvent.Rows.TruncateTo(1)
+	updateEvent.Rows.AppendRow(insertEvent.Rows.GetRow(0))
+	for _, event := range []*commonEvent.DMLEvent{updateEvent, insertEvent} {
+		event.CommitTs = 2
+		event.ReplicatingTs = 1
+	}
+
+	for _, events := range [][]*commonEvent.DMLEvent{
+		{updateEvent, insertEvent},
+		{insertEvent, insertEvent, updateEvent},
+	} {
+		require.PanicsWithValue(t, "invalid rows when generating batch SQL in unsafe mode", func() {
+			writer.generateBatchSQL(events)
+		})
+	}
+}
+
+func TestSQLGenerationSafeModeBoundary(t *testing.T) {
+	writer, db, _ := newTestMysqlWriter(t)
+	defer db.Close()
+	writer.cfg.SafeMode = false
+
+	helper := commonEvent.NewEventTestHelper(t)
+	defer helper.Close()
+	helper.Tk().MustExec("use test")
+	helper.DDL2Job("create table t (id int primary key, name varchar(32))")
+	events := []*commonEvent.DMLEvent{
+		helper.DML2Event("test", "t", "insert into t values (1, 'first')"),
+		helper.DML2Event("test", "t", "insert into t values (2, 'second')"),
+	}
+
+	for _, generator := range []struct {
+		name     string
+		generate func([]*commonEvent.DMLEvent) ([]string, [][]any, []common.RowType)
+	}{
+		{name: "normal", generate: writer.generateNormalSQLs},
+		{name: "per-event batch", generate: writer.generateBatchSQLsPerEvent},
+		{name: "cross-event batch", generate: writer.generateBatchSQL},
+	} {
+		for _, tc := range []struct {
+			name     string
+			commitTs uint64
+			verb     string
+		}{
+			{name: "before replicating ts", commitTs: 90, verb: "REPLACE"},
+			{name: "at replicating ts", commitTs: 100, verb: "REPLACE"},
+			{name: "after replicating ts", commitTs: 110, verb: "INSERT"},
+		} {
+			t.Run(generator.name+"/"+tc.name, func(t *testing.T) {
+				for _, event := range events {
+					event.CommitTs = tc.commitTs
+					event.StartTs = tc.commitTs - 1
+					event.ReplicatingTs = 100
+				}
+				queries, args, rowTypes := generator.generate(events)
+				require.NotEmpty(t, queries)
+				require.Len(t, args, len(queries))
+				require.Len(t, rowTypes, len(queries))
+				var rows [][]any
+				for i, query := range queries {
+					require.True(t, strings.HasPrefix(query, tc.verb+" INTO `test`.`t` "), query)
+					require.Equal(t, common.RowTypeInsert, rowTypes[i])
+					for j := 0; j < len(args[i]); j += 2 {
+						rows = append(rows, args[i][j:j+2])
+					}
+				}
+				require.ElementsMatch(t, [][]any{{int64(1), "first"}, {int64(2), "second"}}, rows)
+			})
+		}
+	}
+}
+
+func TestPrepareDMLsSafeModeBoundary(t *testing.T) {
+	writer, db, _ := newTestMysqlWriter(t)
+	defer db.Close()
+	writer.cfg.SafeMode = false
+	writer.cfg.MaxTxnRow = 1
+
+	helper := commonEvent.NewEventTestHelper(t)
+	defer helper.Close()
+	helper.Tk().MustExec("use test")
+	helper.DDL2Job("create table t (id int primary key, name varchar(32))")
+	events := []*commonEvent.DMLEvent{
+		helper.DML2Event("test", "t", "insert into t values (1, 'first')"),
+		helper.DML2Event("test", "t", "insert into t values (2, 'second')"),
+	}
+	events[0].CommitTs = 100
+	events[0].StartTs = 99
+	events[1].CommitTs = 110
+	events[1].StartTs = 109
+
+	for _, batchDML := range []bool{false, true} {
+		writer.cfg.BatchDMLEnable = batchDML
+		for _, tc := range []struct {
+			name          string
+			replicatingTs [2]uint64
+			verbs         [2]string
+			canBatch      bool
+		}{
+			{name: "equal then replay", replicatingTs: [2]uint64{100, 120}, verbs: [2]string{"REPLACE", "REPLACE"}, canBatch: true},
+			{name: "replay then equal", replicatingTs: [2]uint64{110, 110}, verbs: [2]string{"REPLACE", "REPLACE"}, canBatch: true},
+			{name: "equal then new", replicatingTs: [2]uint64{100, 100}, verbs: [2]string{"REPLACE", "INSERT"}},
+			{name: "replay then new", replicatingTs: [2]uint64{110, 100}, verbs: [2]string{"REPLACE", "INSERT"}},
+		} {
+			t.Run(fmt.Sprintf("batchDML=%t/%s", batchDML, tc.name), func(t *testing.T) {
+				for i, event := range events {
+					event.ReplicatingTs = tc.replicatingTs[i]
+				}
+				require.Equal(t, batchDML && tc.canBatch, writer.shouldGenBatchSQL(events[0].TableInfo, events))
+				dmls, err := writer.prepareDMLs(events)
+				require.NoError(t, err)
+				defer dmlsPool.Put(dmls)
+				require.Len(t, dmls.sqls, 2)
+				require.Len(t, dmls.values, 2)
+				require.Equal(t, []common.RowType{common.RowTypeInsert, common.RowTypeInsert}, dmls.rowTypes)
+				var ids []int64
+				for i, query := range dmls.sqls {
+					id := dmls.values[i][0].(int64)
+					ids = append(ids, id)
+					require.Equal(t, tc.verbs[id-1]+" INTO `test`.`t` (`id`,`name`) VALUES (?,?)", query)
+				}
+				require.ElementsMatch(t, []int64{1, 2}, ids)
+			})
+		}
+	}
+
+	update, _ := helper.DML2UpdateEvent("test", "t", "insert into t values (3, 'old')", "update t set name = 'new' where id = 3")
+	update.CommitTs = 100
+	update.StartTs = 99
+	update.ReplicatingTs = update.CommitTs
+	for _, batchDML := range []bool{false, true} {
+		t.Run(fmt.Sprintf("batchDML=%t/update at replicating ts", batchDML), func(t *testing.T) {
+			writer.cfg.BatchDMLEnable = batchDML
+			events[1].ReplicatingTs = events[1].CommitTs
+			dmls, err := writer.prepareDMLs([]*commonEvent.DMLEvent{update, events[1]})
+			require.NoError(t, err)
+			defer dmlsPool.Put(dmls)
+			var rows [][]any
+			for i, query := range dmls.sqls {
+				require.NotEqual(t, common.RowTypeUpdate, dmls.rowTypes[i], query)
+				if dmls.rowTypes[i] == common.RowTypeInsert {
+					require.Equal(t, "REPLACE INTO `test`.`t` (`id`,`name`) VALUES (?,?)", query)
+					rows = append(rows, dmls.values[i])
+				}
+			}
+			require.ElementsMatch(t, [][]any{{int64(3), "new"}, {int64(2), "second"}}, rows)
+		})
+	}
+}
+
 func TestGenerateBatchSQLInUnSafeMode(t *testing.T) {
 	writer, _, _ := newTestMysqlWriter(t)
 	defer writer.db.Close()
@@ -353,9 +760,9 @@ func TestGenerateBatchSQLInUnSafeMode(t *testing.T) {
 	require.Equal(t, 2, len(args))
 	require.Equal(t, 2, len(rowTypes))
 	require.Equal(t, "DELETE FROM `test`.`t` WHERE (`id`) IN ((?))", sql[0])
-	require.Equal(t, []interface{}{int64(1)}, args[0])
+	require.Equal(t, []any{int64(1)}, args[0])
 	require.Equal(t, "INSERT INTO `test`.`t` (`id`,`name`) VALUES (?,?)", sql[1])
-	require.Equal(t, []interface{}{int64(1), "test"}, args[1])
+	require.Equal(t, []any{int64(1), "test"}, args[1])
 
 	// Delete A + Update A
 	dmlDeleteEvent = helper.DML2DeleteEvent("test", "t", "insert into t values (2, 'test')", "delete from t where id = 2")
@@ -365,7 +772,7 @@ func TestGenerateBatchSQLInUnSafeMode(t *testing.T) {
 	require.Equal(t, 2, len(args))
 	require.Equal(t, 2, len(rowTypes))
 	require.Equal(t, "DELETE FROM `test`.`t` WHERE (`id`) IN ((?))", sql[0])
-	require.Equal(t, []interface{}{int64(2)}, args[0])
+	require.Equal(t, []any{int64(2)}, args[0])
 	require.Equal(t, "UPDATE `test`.`t` SET `id` = ?, `name` = ? WHERE `id` = ? LIMIT 1", sql[1])
 
 	// Insert A + Delete A
@@ -375,7 +782,7 @@ func TestGenerateBatchSQLInUnSafeMode(t *testing.T) {
 	require.Equal(t, 1, len(sql))
 	require.Equal(t, 1, len(args))
 	require.Equal(t, "DELETE FROM `test`.`t` WHERE (`id`) IN ((?))", sql[0])
-	require.Equal(t, []interface{}{int64(3)}, args[0])
+	require.Equal(t, []any{int64(3)}, args[0])
 
 	// Insert A + Update A
 	dmlInsertEvent = helper.DML2Event("test", "t", "insert into t values (4, 'test')")
@@ -385,7 +792,7 @@ func TestGenerateBatchSQLInUnSafeMode(t *testing.T) {
 	require.Equal(t, 1, len(sql))
 	require.Equal(t, 1, len(args))
 	require.Equal(t, "INSERT INTO `test`.`t` (`id`,`name`) VALUES (?,?)", sql[0])
-	require.Equal(t, []interface{}{int64(4), "test4"}, args[0])
+	require.Equal(t, []any{int64(4), "test4"}, args[0])
 
 	// Update A + Delete A
 	dmlDeleteEvent = helper.DML2DeleteEvent("test", "t", "insert into t values (5, 'test5')", "delete from t where id = 5")
@@ -394,7 +801,7 @@ func TestGenerateBatchSQLInUnSafeMode(t *testing.T) {
 	require.Equal(t, 1, len(sql))
 	require.Equal(t, 1, len(args))
 	require.Equal(t, "DELETE FROM `test`.`t` WHERE (`id`) IN ((?))", sql[0])
-	require.Equal(t, []interface{}{int64(5)}, args[0])
+	require.Equal(t, []any{int64(5)}, args[0])
 
 	// Update A + Update A
 	dmlUpdateEvent, _ = helper.DML2UpdateEvent("test", "t", "insert into t values (6, 'test')", "update t set name = 'test6' where id = 6")
@@ -404,7 +811,7 @@ func TestGenerateBatchSQLInUnSafeMode(t *testing.T) {
 	require.Equal(t, 1, len(sql))
 	require.Equal(t, 1, len(args))
 	require.Equal(t, "UPDATE `test`.`t` SET `id` = ?, `name` = ? WHERE `id` = ? LIMIT 1", sql[0])
-	require.Equal(t, []interface{}{int64(6), "test7", int64(6)}, args[0])
+	require.Equal(t, []any{int64(6), "test7", int64(6)}, args[0])
 
 	// Delete A  + Insert A + Delete A + Insert A
 	dmlDeleteEvent = helper.DML2DeleteEvent("test", "t", "insert into t values (7, 'test')", "delete from t where id = 7")
@@ -416,9 +823,9 @@ func TestGenerateBatchSQLInUnSafeMode(t *testing.T) {
 	require.Equal(t, 2, len(args))
 	require.Equal(t, 2, len(rowTypes))
 	require.Equal(t, "DELETE FROM `test`.`t` WHERE (`id`) IN ((?),(?))", sql[0])
-	require.Equal(t, []interface{}{int64(7), int64(7)}, args[0])
+	require.Equal(t, []any{int64(7), int64(7)}, args[0])
 	require.Equal(t, "INSERT INTO `test`.`t` (`id`,`name`) VALUES (?,?)", sql[1])
-	require.Equal(t, []interface{}{int64(7), "test2"}, args[1])
+	require.Equal(t, []any{int64(7), "test2"}, args[1])
 
 	// Delete A + Insert A + Update A + Delete A
 	dmlDeleteEvent = helper.DML2DeleteEvent("test", "t", "insert into t values (8, 'test')", "delete from t where id = 8")
@@ -431,7 +838,7 @@ func TestGenerateBatchSQLInUnSafeMode(t *testing.T) {
 	require.Equal(t, 1, len(sql))
 	require.Equal(t, 1, len(args))
 	require.Equal(t, "DELETE FROM `test`.`t` WHERE (`id`) IN ((?),(?))", sql[0])
-	require.Equal(t, []interface{}{int64(8), int64(8)}, args[0])
+	require.Equal(t, []any{int64(8), int64(8)}, args[0])
 
 	// Delete A + Insert A + Update A  + Update A + Delete A
 	dmlDeleteEvent = helper.DML2DeleteEvent("test", "t", "insert into t values (9, 'test')", "delete from t where id = 9")
@@ -446,7 +853,7 @@ func TestGenerateBatchSQLInUnSafeMode(t *testing.T) {
 	require.Equal(t, 1, len(sql))
 	require.Equal(t, 1, len(args))
 	require.Equal(t, "DELETE FROM `test`.`t` WHERE (`id`) IN ((?),(?))", sql[0])
-	require.Equal(t, []interface{}{int64(9), int64(9)}, args[0])
+	require.Equal(t, []any{int64(9), int64(9)}, args[0])
 
 	// Insert A + Delete A + Insert A
 	dmlInsertEvent = helper.DML2Event("test", "t", "insert into t values (10, 'test')")
@@ -458,9 +865,9 @@ func TestGenerateBatchSQLInUnSafeMode(t *testing.T) {
 	require.Equal(t, 2, len(args))
 	require.Equal(t, 2, len(rowTypes))
 	require.Equal(t, "DELETE FROM `test`.`t` WHERE (`id`) IN ((?))", sql[0])
-	require.Equal(t, []interface{}{int64(10)}, args[0])
+	require.Equal(t, []any{int64(10)}, args[0])
 	require.Equal(t, "INSERT INTO `test`.`t` (`id`,`name`) VALUES (?,?)", sql[1])
-	require.Equal(t, []interface{}{int64(10), "test2"}, args[1])
+	require.Equal(t, []any{int64(10), "test2"}, args[1])
 
 	// Insert A + Update A + Delete A
 	dmlInsertEvent = helper.DML2Event("test", "t", "insert into t values (11, 'test')")
@@ -472,7 +879,7 @@ func TestGenerateBatchSQLInUnSafeMode(t *testing.T) {
 	require.Equal(t, 1, len(sql))
 	require.Equal(t, 1, len(args))
 	require.Equal(t, "DELETE FROM `test`.`t` WHERE (`id`) IN ((?))", sql[0])
-	require.Equal(t, []interface{}{int64(11)}, args[0])
+	require.Equal(t, []any{int64(11)}, args[0])
 
 	// Insert A + Update A + Update A
 	dmlInsertEvent = helper.DML2Event("test", "t", "insert into t values (12, 'test')")
@@ -484,7 +891,7 @@ func TestGenerateBatchSQLInUnSafeMode(t *testing.T) {
 	require.Equal(t, 1, len(sql))
 	require.Equal(t, 1, len(args))
 	require.Equal(t, "INSERT INTO `test`.`t` (`id`,`name`) VALUES (?,?)", sql[0])
-	require.Equal(t, []interface{}{int64(12), "test13"}, args[0])
+	require.Equal(t, []any{int64(12), "test13"}, args[0])
 
 	// Insert A + Delete B + Update C
 	dmlInsertEvent = helper.DML2Event("test", "t", "insert into t values (13, 'test')")
@@ -495,11 +902,11 @@ func TestGenerateBatchSQLInUnSafeMode(t *testing.T) {
 	require.Equal(t, 3, len(sql))
 	require.Equal(t, 3, len(args))
 	require.Equal(t, "DELETE FROM `test`.`t` WHERE (`id`) IN ((?))", sql[0])
-	require.Equal(t, []interface{}{int64(14)}, args[0])
+	require.Equal(t, []any{int64(14)}, args[0])
 	require.Equal(t, "UPDATE `test`.`t` SET `id` = ?, `name` = ? WHERE `id` = ? LIMIT 1", sql[1])
-	require.Equal(t, []interface{}{int64(15), "test15", int64(15)}, args[1])
+	require.Equal(t, []any{int64(15), "test15", int64(15)}, args[1])
 	require.Equal(t, "INSERT INTO `test`.`t` (`id`,`name`) VALUES (?,?)", sql[2])
-	require.Equal(t, []interface{}{int64(13), "test"}, args[2])
+	require.Equal(t, []any{int64(13), "test"}, args[2])
 
 	// Insert A + Insert B + Insert C
 	dmlInsertEvent = helper.DML2Event("test", "t", "insert into t values (16, 'test')")
@@ -511,7 +918,7 @@ func TestGenerateBatchSQLInUnSafeMode(t *testing.T) {
 	require.Equal(t, 1, len(sql))
 	require.Equal(t, 1, len(args))
 	require.Equal(t, "INSERT INTO `test`.`t` (`id`,`name`) VALUES (?,?),(?,?),(?,?)", sql[0])
-	require.Equal(t, []interface{}{int64(16), "test", int64(17), "test", int64(18), "test"}, args[0])
+	require.Equal(t, []any{int64(16), "test", int64(17), "test", int64(18), "test"}, args[0])
 }
 
 func TestGenerateBatchSQLInSafeMode(t *testing.T) {
@@ -532,7 +939,7 @@ func TestGenerateBatchSQLInSafeMode(t *testing.T) {
 	require.Equal(t, 1, len(sql))
 	require.Equal(t, 1, len(args))
 	require.Equal(t, "REPLACE INTO `test`.`t` (`id`,`name`) VALUES (?,?)", sql[0])
-	require.Equal(t, []interface{}{int64(1), "test"}, args[0])
+	require.Equal(t, []any{int64(1), "test"}, args[0])
 
 	// Insert A + Delete A
 	dmlDeleteEvent = helper.DML2DeleteEvent("test", "t", "insert into t values (3, 'test')", "delete from t where id = 3")
@@ -541,7 +948,7 @@ func TestGenerateBatchSQLInSafeMode(t *testing.T) {
 	require.Equal(t, 1, len(sql))
 	require.Equal(t, 1, len(args))
 	require.Equal(t, "DELETE FROM `test`.`t` WHERE (`id`) IN ((?))", sql[0])
-	require.Equal(t, []interface{}{int64(3)}, args[0])
+	require.Equal(t, []any{int64(3)}, args[0])
 
 	// Insert A + Update A
 	dmlInsertEvent = helper.DML2Event("test", "t", "insert into t values (4, 'test')")
@@ -551,7 +958,7 @@ func TestGenerateBatchSQLInSafeMode(t *testing.T) {
 	require.Equal(t, 1, len(sql))
 	require.Equal(t, 1, len(args))
 	require.Equal(t, "REPLACE INTO `test`.`t` (`id`,`name`) VALUES (?,?)", sql[0])
-	require.Equal(t, []interface{}{int64(4), "test4"}, args[0])
+	require.Equal(t, []any{int64(4), "test4"}, args[0])
 
 	// Update A + Delete A
 	dmlDeleteEvent = helper.DML2DeleteEvent("test", "t", "insert into t values (5, 'test5')", "delete from t where id = 5")
@@ -560,7 +967,7 @@ func TestGenerateBatchSQLInSafeMode(t *testing.T) {
 	require.Equal(t, 1, len(sql))
 	require.Equal(t, 1, len(args))
 	require.Equal(t, "DELETE FROM `test`.`t` WHERE (`id`) IN ((?))", sql[0])
-	require.Equal(t, []interface{}{int64(5)}, args[0])
+	require.Equal(t, []any{int64(5)}, args[0])
 
 	// Update A + Update A
 	dmlUpdateEvent, _ = helper.DML2UpdateEvent("test", "t", "insert into t values (6, 'test')", "update t set name = 'test6' where id = 6")
@@ -570,7 +977,7 @@ func TestGenerateBatchSQLInSafeMode(t *testing.T) {
 	require.Equal(t, 1, len(sql))
 	require.Equal(t, 1, len(args))
 	require.Equal(t, "REPLACE INTO `test`.`t` (`id`,`name`) VALUES (?,?)", sql[0])
-	require.Equal(t, []interface{}{int64(6), "test7"}, args[0])
+	require.Equal(t, []any{int64(6), "test7"}, args[0])
 
 	// Delete A  + Insert A + Delete A + Insert A
 	dmlDeleteEvent = helper.DML2DeleteEvent("test", "t", "insert into t values (7, 'test')", "delete from t where id = 7")
@@ -581,7 +988,7 @@ func TestGenerateBatchSQLInSafeMode(t *testing.T) {
 	require.Equal(t, 1, len(sql))
 	require.Equal(t, 1, len(args))
 	require.Equal(t, "REPLACE INTO `test`.`t` (`id`,`name`) VALUES (?,?)", sql[0])
-	require.Equal(t, []interface{}{int64(7), "test2"}, args[0])
+	require.Equal(t, []any{int64(7), "test2"}, args[0])
 
 	// Delete A + Insert A + Update A + Delete A
 	dmlDeleteEvent = helper.DML2DeleteEvent("test", "t", "insert into t values (8, 'test')", "delete from t where id = 8")
@@ -594,7 +1001,7 @@ func TestGenerateBatchSQLInSafeMode(t *testing.T) {
 	require.Equal(t, 1, len(sql))
 	require.Equal(t, 1, len(args))
 	require.Equal(t, "DELETE FROM `test`.`t` WHERE (`id`) IN ((?))", sql[0])
-	require.Equal(t, []interface{}{int64(8)}, args[0])
+	require.Equal(t, []any{int64(8)}, args[0])
 
 	// Delete A + Insert A + Update A  + Update A + Delete A
 	dmlDeleteEvent = helper.DML2DeleteEvent("test", "t", "insert into t values (9, 'test')", "delete from t where id = 9")
@@ -609,7 +1016,7 @@ func TestGenerateBatchSQLInSafeMode(t *testing.T) {
 	require.Equal(t, 1, len(sql))
 	require.Equal(t, 1, len(args))
 	require.Equal(t, "DELETE FROM `test`.`t` WHERE (`id`) IN ((?))", sql[0])
-	require.Equal(t, []interface{}{int64(9)}, args[0])
+	require.Equal(t, []any{int64(9)}, args[0])
 
 	// Insert A + Delete A + Insert A
 	dmlInsertEvent = helper.DML2Event("test", "t", "insert into t values (10, 'test')")
@@ -620,7 +1027,7 @@ func TestGenerateBatchSQLInSafeMode(t *testing.T) {
 	require.Equal(t, 1, len(sql))
 	require.Equal(t, 1, len(args))
 	require.Equal(t, "REPLACE INTO `test`.`t` (`id`,`name`) VALUES (?,?)", sql[0])
-	require.Equal(t, []interface{}{int64(10), "test2"}, args[0])
+	require.Equal(t, []any{int64(10), "test2"}, args[0])
 
 	// Insert A + Update A + Delete A
 	dmlInsertEvent = helper.DML2Event("test", "t", "insert into t values (11, 'test')")
@@ -632,7 +1039,7 @@ func TestGenerateBatchSQLInSafeMode(t *testing.T) {
 	require.Equal(t, 1, len(sql))
 	require.Equal(t, 1, len(args))
 	require.Equal(t, "DELETE FROM `test`.`t` WHERE (`id`) IN ((?))", sql[0])
-	require.Equal(t, []interface{}{int64(11)}, args[0])
+	require.Equal(t, []any{int64(11)}, args[0])
 
 	// Insert A + Update A + Update A
 	dmlInsertEvent = helper.DML2Event("test", "t", "insert into t values (12, 'test')")
@@ -644,7 +1051,7 @@ func TestGenerateBatchSQLInSafeMode(t *testing.T) {
 	require.Equal(t, 1, len(sql))
 	require.Equal(t, 1, len(args))
 	require.Equal(t, "REPLACE INTO `test`.`t` (`id`,`name`) VALUES (?,?)", sql[0])
-	require.Equal(t, []interface{}{int64(12), "test13"}, args[0])
+	require.Equal(t, []any{int64(12), "test13"}, args[0])
 
 	// Insert A + Delete B + Update C
 	dmlInsertEvent = helper.DML2Event("test", "t", "insert into t values (13, 'test')")
@@ -656,14 +1063,14 @@ func TestGenerateBatchSQLInSafeMode(t *testing.T) {
 	require.Equal(t, 2, len(args))
 	require.Equal(t, 2, len(rowTypes))
 	require.Equal(t, "DELETE FROM `test`.`t` WHERE (`id`) IN ((?))", sql[0])
-	require.Equal(t, []interface{}{int64(14)}, args[0])
+	require.Equal(t, []any{int64(14)}, args[0])
 	require.Equal(t, "REPLACE INTO `test`.`t` (`id`,`name`) VALUES (?,?),(?,?)", sql[1])
 	// The order of args in unsafe mode is not deterministic due to map iteration
 	// Check that both expected combinations are possible
-	expected1 := []interface{}{int64(13), "test", int64(15), "test15"}
-	expected2 := []interface{}{int64(15), "test15", int64(13), "test"}
+	expected1 := []any{int64(13), "test", int64(15), "test15"}
+	expected2 := []any{int64(15), "test15", int64(13), "test"}
 	require.Equal(t, 4, len(args[1]), "args[1] should have 4 elements")
-	require.True(t, (reflect.DeepEqual(expected1, args[1])) || (reflect.DeepEqual(expected2, args[1])),
+	require.True(t, reflect.DeepEqual(expected1, args[1]) || reflect.DeepEqual(expected2, args[1]),
 		"args[1] should be one of the expected combinations: %v", args[1])
 
 	// Insert A + Insert B + Insert C
@@ -676,18 +1083,18 @@ func TestGenerateBatchSQLInSafeMode(t *testing.T) {
 	require.Equal(t, 1, len(sql))
 	require.Equal(t, 1, len(args))
 	require.Equal(t, "REPLACE INTO `test`.`t` (`id`,`name`) VALUES (?,?),(?,?),(?,?)", sql[0])
-	expected1 = []interface{}{int64(16), "test", int64(17), "test", int64(18), "test"}
-	expected2 = []interface{}{int64(16), "test", int64(18), "test", int64(17), "test"}
-	expected3 := []interface{}{int64(17), "test", int64(16), "test", int64(18), "test"}
-	expected4 := []interface{}{int64(17), "test", int64(18), "test", int64(16), "test"}
-	expected5 := []interface{}{int64(18), "test", int64(16), "test", int64(17), "test"}
-	expected6 := []interface{}{int64(18), "test", int64(17), "test", int64(16), "test"}
-	require.True(t, (reflect.DeepEqual(expected1, args[0])) ||
-		(reflect.DeepEqual(expected2, args[0])) ||
-		(reflect.DeepEqual(expected3, args[0])) ||
-		(reflect.DeepEqual(expected4, args[0])) ||
-		(reflect.DeepEqual(expected5, args[0])) ||
-		(reflect.DeepEqual(expected6, args[0])),
+	expected1 = []any{int64(16), "test", int64(17), "test", int64(18), "test"}
+	expected2 = []any{int64(16), "test", int64(18), "test", int64(17), "test"}
+	expected3 := []any{int64(17), "test", int64(16), "test", int64(18), "test"}
+	expected4 := []any{int64(17), "test", int64(18), "test", int64(16), "test"}
+	expected5 := []any{int64(18), "test", int64(16), "test", int64(17), "test"}
+	expected6 := []any{int64(18), "test", int64(17), "test", int64(16), "test"}
+	require.True(t, reflect.DeepEqual(expected1, args[0]) ||
+		reflect.DeepEqual(expected2, args[0]) ||
+		reflect.DeepEqual(expected3, args[0]) ||
+		reflect.DeepEqual(expected4, args[0]) ||
+		reflect.DeepEqual(expected5, args[0]) ||
+		reflect.DeepEqual(expected6, args[0]),
 		"args[0] should be one of the expected combinations: %v", args[0])
 }
 
@@ -1002,6 +1409,86 @@ func TestGroupEventsByTable(t *testing.T) {
 	})
 }
 
+func TestPrepareDMLsMaxMultiUpdateRowSize(t *testing.T) {
+	helper := commonEvent.NewEventTestHelper(t)
+	defer helper.Close()
+	helper.Tk().MustExec("use test")
+	job := helper.DDL2Job("CREATE TABLE t (id INT PRIMARY KEY, payload TEXT)")
+	tableInfo := helper.GetTableInfo(job)
+
+	testCases := []struct {
+		name                  string
+		prePayloadSize        int
+		payloadSize           int
+		maxMultiUpdateRowSize int
+		isTiDB                bool
+		expectedStatements    int
+	}{
+		{"large rows default threshold", 16384, 16384, 1024, true, 2},
+		{"large rows maximum threshold", 16384, 16384, 8192, true, 2},
+		{"small rows", 16, 16, 1024, true, 1},
+		{"batch updates disabled", 16, 16, 0, true, 2},
+		// Each row image also contains an eight-byte primary key.
+		{"below threshold", 503, 503, 1024, true, 1},
+		{"at threshold", 504, 504, 1024, true, 2},
+		{"large previous row", 16384, 16, 1024, true, 2},
+		{"large current row", 16, 16384, 1024, true, 2},
+		{"mysql downstream", 16, 16, 1024, false, 2},
+	}
+	for _, rowsPerEvent := range []int{1, 2} {
+		for _, tc := range testCases {
+			t.Run(fmt.Sprintf("rowsPerEvent=%d/%s", rowsPerEvent, tc.name), func(t *testing.T) {
+				writer, db, _ := newTestMysqlWriter(t)
+				defer db.Close()
+				writer.cfg.BatchDMLEnable = true
+				writer.cfg.SafeMode = false
+				writer.cfg.IsTiDB = tc.isTiDB
+				writer.cfg.MaxMultiUpdateRowCount = 40
+				writer.cfg.MaxMultiUpdateRowSize = tc.maxMultiUpdateRowSize
+
+				prePayload := strings.Repeat("a", tc.prePayloadSize)
+				payload := strings.Repeat("b", tc.payloadSize)
+				dispatcherID := common.NewDispatcherID()
+				var events []*commonEvent.DMLEvent
+				for startID := 1; startID <= 2; startID += rowsPerEvent {
+					commitTs := uint64(100 + startID)
+					event := commonEvent.NewDMLEvent(dispatcherID, tableInfo.TableName.TableID, commitTs-1, commitTs, tableInfo)
+					event.ReplicatingTs = 1
+					event.Length = int32(rowsPerEvent)
+					event.Rows = chunk.NewChunkWithCapacity(tableInfo.GetFieldSlice(), 2*rowsPerEvent)
+					for id := startID; id < startID+rowsPerEvent; id++ {
+						event.RowTypes = append(event.RowTypes, common.RowTypeUpdate, common.RowTypeUpdate)
+						event.Rows.AppendInt64(0, int64(id))
+						event.Rows.AppendString(1, prePayload)
+						event.Rows.AppendInt64(0, int64(id))
+						event.Rows.AppendString(1, payload)
+					}
+					events = append(events, event)
+				}
+
+				require.True(t, writer.shouldGenBatchSQL(tableInfo, events))
+				dmls, err := writer.prepareDMLs(events)
+				require.NoError(t, err)
+				defer dmlsPool.Put(dmls)
+				require.Len(t, dmls.sqls, tc.expectedStatements)
+				require.Len(t, dmls.values, tc.expectedStatements)
+				require.Len(t, dmls.rowTypes, tc.expectedStatements)
+				for i, sql := range dmls.sqls {
+					require.Equal(t, common.RowTypeUpdate, dmls.rowTypes[i])
+					if tc.expectedStatements == 1 {
+						require.Contains(t, sql, "CASE WHEN")
+						require.Equal(t, []any{int64(1), int64(1), int64(2), int64(2), int64(1), payload, int64(2), payload, int64(1), int64(2)}, dmls.values[i])
+					} else {
+						require.Equal(t, "UPDATE `test`.`t` SET `id` = ?, `payload` = ? WHERE `id` = ? LIMIT 1", sql)
+						id := int64(i + 1)
+						require.Equal(t, []any{id, payload, id}, dmls.values[i])
+					}
+				}
+			})
+		}
+	}
+}
+
 func TestPrepareDMLsWithNotNullUniqueKey(t *testing.T) {
 	writer, _, _ := newTestMysqlWriter(t)
 	defer writer.db.Close()
@@ -1101,10 +1588,74 @@ func TestPrepareDMLsWithExpressionIndex(t *testing.T) {
 	}, dmls.sqls)
 	require.Len(t, dmls.values, 1)
 
-	expected := []interface{}{
+	expected := []any{
 		int64(1), `[1, 2, 3]`,
 		int64(2), `[4, 5, 6]`,
 	}
 	require.True(t, reflect.DeepEqual(expected, dmls.values[0]),
 		"unexpected REPLACE args: %v %v", dmls.values[0], expected)
+}
+
+func TestPrepareDMLsCompositeKeyNUL(t *testing.T) {
+	helper := commonEvent.NewEventTestHelper(t)
+	defer helper.Close()
+	helper.Tk().MustExec("use test")
+	job := helper.DDL2Job("CREATE TABLE t (a VARBINARY(32) NOT NULL, b VARBINARY(32) NOT NULL, PRIMARY KEY (a, b))")
+	tableInfo := helper.GetTableInfo(job)
+
+	testCases := []struct {
+		name      string
+		insertKey [2]string
+		deleteKey [2]string
+	}{
+		{name: "embedded NUL", insertKey: [2]string{"a\x00b", "c"}, deleteKey: [2]string{"a", "b\x00c"}},
+		{name: "empty column", insertKey: [2]string{"", "\x00"}, deleteKey: [2]string{"\x00", ""}},
+	}
+	for _, safeMode := range []bool{false, true} {
+		for _, batchDML := range []bool{true, false} {
+			for _, tc := range testCases {
+				t.Run(fmt.Sprintf("safeMode=%t/batchDML=%t/%s", safeMode, batchDML, tc.name), func(t *testing.T) {
+					writer, db, _ := newTestMysqlWriter(t)
+					defer db.Close()
+					writer.cfg.SafeMode = safeMode
+					writer.cfg.BatchDMLEnable = batchDML
+					dispatcherID := common.NewDispatcherID()
+					makeEvent := func(rowType common.RowType, commitTs uint64, key [2]string) *commonEvent.DMLEvent {
+						event := commonEvent.NewDMLEvent(dispatcherID, tableInfo.TableName.TableID, commitTs-1, commitTs, tableInfo)
+						event.ReplicatingTs = 1
+						event.Length = 1
+						event.RowTypes = []common.RowType{rowType}
+						event.Rows = chunk.NewChunkWithCapacity(tableInfo.GetFieldSlice(), 1)
+						event.Rows.AppendBytes(0, []byte(key[0]))
+						event.Rows.AppendBytes(1, []byte(key[1]))
+						return event
+					}
+					events := []*commonEvent.DMLEvent{
+						makeEvent(common.RowTypeInsert, 100, tc.insertKey),
+						makeEvent(common.RowTypeDelete, 101, tc.deleteKey),
+					}
+					require.Equal(t, batchDML, writer.shouldGenBatchSQL(tableInfo, events))
+					dmls, err := writer.prepareDMLs(events)
+					require.NoError(t, err)
+					defer dmlsPool.Put(dmls)
+					require.ElementsMatch(t, []common.RowType{common.RowTypeInsert, common.RowTypeDelete}, dmls.rowTypes,
+						"INSERT and DELETE of distinct composite keys must both survive")
+					require.Len(t, dmls.sqls, 2)
+					require.Len(t, dmls.values, 2)
+					for i, rowType := range dmls.rowTypes {
+						if rowType == common.RowTypeInsert {
+							verb := "INSERT"
+							if safeMode {
+								verb = "REPLACE"
+							}
+							require.Equal(t, verb+" INTO `test`.`t` (`a`,`b`) VALUES (?,?)", dmls.sqls[i])
+							require.Equal(t, []any{[]byte(tc.insertKey[0]), []byte(tc.insertKey[1])}, dmls.values[i])
+						} else {
+							require.Equal(t, []any{[]byte(tc.deleteKey[0]), []byte(tc.deleteKey[1])}, dmls.values[i])
+						}
+					}
+				})
+			}
+		}
+	}
 }

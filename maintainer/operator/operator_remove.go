@@ -98,9 +98,9 @@ func (m *removeDispatcherOperator) Check(from node.ID, status *heartbeatpb.Table
 		from == m.nodeID &&
 		(status.ComponentStatus == heartbeatpb.ComponentState_Stopped ||
 			status.ComponentStatus == heartbeatpb.ComponentState_Removed) {
-		m.replicaSet.UpdateStatus(status)
+		m.replicaSet.UpdateRemovedStatus(status)
 		log.Info("dispatcher report non-working status",
-			zap.String("replicaSet", m.replicaSet.ID.String()))
+			zap.String("dispatcherID", m.replicaSet.ID.String()))
 		m.finished.Store(true)
 	}
 }
@@ -145,12 +145,12 @@ func (m *removeDispatcherOperator) OnTaskRemoved() {
 
 func (m *removeDispatcherOperator) Start() {
 	log.Info("start remove dispatcher operator",
-		zap.String("replicaSet", m.replicaSet.ID.String()))
+		zap.String("dispatcherID", m.replicaSet.ID.String()))
 }
 
 func (m *removeDispatcherOperator) PostFinish() {
 	log.Info("remove dispatcher operator finished",
-		zap.String("replicaSet", m.replicaSet.ID.String()),
+		zap.String("dispatcherID", m.replicaSet.ID.String()),
 		zap.String("changefeed", m.replicaSet.ChangefeedID.String()),
 		zap.Bool("taskRemoved", m.removed.Load()))
 

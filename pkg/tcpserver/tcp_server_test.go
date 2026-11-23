@@ -347,6 +347,7 @@ func TestTcpServerClose(t *testing.T) {
 
 	cli, err := httputil.NewClient(&security.Credential{})
 	require.NoError(t, err)
+	defer cli.CloseIdleConnections()
 
 	uri := fmt.Sprintf("http://%s/", addr)
 	resp, err := cli.Get(context.Background(), uri)
@@ -355,6 +356,8 @@ func TestTcpServerClose(t *testing.T) {
 		_ = resp.Body.Close()
 	}()
 	require.Equal(t, 200, resp.StatusCode)
+	require.NoError(t, resp.Body.Close())
+	cli.CloseIdleConnections()
 
 	// Close should be idempotent.
 	for i := 0; i < 3; i++ {

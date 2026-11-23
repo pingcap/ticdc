@@ -18,12 +18,15 @@ import (
 	"database/sql"
 	"fmt"
 	"math"
+	"sort"
 	"strconv"
 	"strings"
+	"time"
 	"unsafe"
 
 	mysqlDriver "github.com/go-sql-driver/mysql"
 	"github.com/pingcap/log"
+	commonType "github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/util"
@@ -31,6 +34,7 @@ import (
 	"github.com/pingcap/tidb/pkg/parser/mysql"
 	ptypes "github.com/pingcap/tidb/pkg/parser/types"
 	"github.com/pingcap/tidb/pkg/types"
+	"github.com/pingcap/tidb/pkg/util/rowcodec"
 	"go.uber.org/zap"
 )
 
@@ -229,7 +233,7 @@ func queryRowChecksum(
 					}
 				}
 			}
-			result := queryRowChecksumAux(ctx, conn, commitTs, schema, table, conditions)
+			result := queryRowChecksumAux(ctx, conn, commitTs, schema, table, conditions, columns)
 			if result != 0 && result != row.Checksum.Current {
 				log.Error("verify upstream TiDB columns-level checksum, current checksum mismatch",
 					zap.Uint32("expected", row.Checksum.Current),
@@ -248,7 +252,7 @@ func queryRowChecksum(
 					}
 				}
 			}
-			result := queryRowChecksumAux(ctx, conn, commitTs-1, schema, table, conditions)
+			result := queryRowChecksumAux(ctx, conn, commitTs-1, schema, table, conditions, columns)
 			if result != 0 && result != row.Checksum.Previous {
 				log.Error("verify upstream TiDB columns-level checksum, previous checksum mismatch",
 					zap.Uint32("expected", row.Checksum.Previous),
@@ -262,6 +266,7 @@ func queryRowChecksum(
 
 func queryRowChecksumAux(
 	ctx context.Context, conn *sql.Conn, commitTs uint64, schema string, table string, conditions map[string]any,
+	columns []*model.ColumnInfo,
 ) uint32 {
 	var result uint32
 	// 1. set snapshot read
@@ -300,6 +305,13 @@ func queryRowChecksumAux(
 	query += whereClause
 
 	err = conn.QueryRowContext(ctx, query).Scan(&result)
+	var mysqlErr *mysqlDriver.MySQLError
+	if errors.As(err, &mysqlErr) && mysqlErr.Number == mysql.ErrNotSupportedYet &&
+		mysqlErr.Message == "FUNCTION tidb_row_checksum can only be used as a select field in a fast point plan" {
+		// A DDL backfill snapshot can contain non-public columns, which prevent
+		// a fast point plan. Verify the same snapshot using the event's columns.
+		result, err = queryRowChecksumFromColumns(ctx, conn, query, columns)
+	}
 	if err != nil {
 		log.Panic("scan row failed",
 			zap.String("query", util.RedactValue(query)),
@@ -307,6 +319,78 @@ func queryRowChecksumAux(
 			zap.Uint64("commitTs", commitTs), zap.Error(err))
 	}
 	return result
+}
+
+func queryRowChecksumFromColumns(
+	ctx context.Context, conn *sql.Conn, query string, columns []*model.ColumnInfo,
+) (checksum uint32, err error) {
+	// Read TIMESTAMP values in UTC, as required by TiDB's checksum algorithm.
+	// Restore the time zone before returning this connection to the pool.
+	var timezone string
+	if err = conn.QueryRowContext(ctx, "select @@session.time_zone").Scan(&timezone); err != nil {
+		return 0, errors.WrapError(errors.ErrMySQLQueryError, err)
+	}
+	if _, err = conn.ExecContext(ctx, "set @@session.time_zone = '+00:00'"); err != nil {
+		return 0, errors.WrapError(errors.ErrMySQLQueryError, err)
+	}
+	defer func() {
+		_, restoreErr := conn.ExecContext(ctx, "set @@session.time_zone = ?", timezone)
+		if err == nil {
+			err = errors.WrapError(errors.ErrMySQLQueryError, restoreErr)
+		}
+	}()
+
+	names := make([]string, len(columns))
+	values := make([]any, len(columns))
+	pointers := make([]any, len(columns))
+	for i, col := range columns {
+		names[i] = commonType.QuoteName(col.Name.O)
+		if col.GetType() == mysql.TypeEnum || col.GetType() == mysql.TypeSet {
+			// The checksum uses the numeric value, including the empty ENUM value.
+			names[i] = "CAST(" + names[i] + " AS UNSIGNED)"
+		}
+		pointers[i] = &values[i]
+	}
+	query = strings.Replace(query, "tidb_row_checksum()", strings.Join(names, ","), 1)
+	if err = conn.QueryRowContext(ctx, query).Scan(pointers...); err != nil {
+		return 0, errors.WrapError(errors.ErrMySQLQueryError, err)
+	}
+
+	data := rowcodec.RowData{Cols: make([]rowcodec.ColData, len(columns))}
+	for i, col := range columns {
+		datum := types.NewDatum(values[i])
+		fieldType := col.FieldType
+		switch col.GetType() {
+		case mysql.TypeEnum, mysql.TypeSet:
+			fieldType.SetType(mysql.TypeLonglong)
+			fieldType.AddFlag(mysql.UnsignedFlag)
+		case mysql.TypeFloat, mysql.TypeDouble, mysql.TypeNewDecimal:
+			// Protocol schemas can omit numeric precision. The SQL result already
+			// has the stored precision; do not round it using those defaults.
+			fieldType.SetFlen(types.UnspecifiedLength)
+			fieldType.SetDecimal(types.UnspecifiedLength)
+		}
+		// SQL has already decoded character columns into the connection charset.
+		// Preserve those bytes instead of decoding them again as the column charset.
+		if fieldType.EvalType() != types.ETString {
+			datum, err = datum.ConvertTo(types.DefaultStmtNoWarningContext, &fieldType)
+			if err != nil {
+				return 0, errors.WrapError(errors.ErrDecodeFailed, err)
+			}
+		}
+		if !datum.IsNull() {
+			switch col.GetType() {
+			case mysql.TypeEnum:
+				datum.SetMysqlEnum(types.Enum{Value: datum.GetUint64()}, col.GetCollate())
+			case mysql.TypeSet:
+				datum.SetMysqlSet(types.Set{Value: datum.GetUint64()}, col.GetCollate())
+			}
+		}
+		data.Cols[i] = rowcodec.ColData{ColumnInfo: col, Datum: &datum}
+	}
+	sort.Slice(data.Cols, func(i, j int) bool { return data.Cols[i].ID < data.Cols[j].ID })
+	checksum, err = data.Checksum(time.UTC)
+	return checksum, errors.WrapError(errors.ErrDecodeFailed, err)
 }
 
 // MustSnapshotQuery query the db by the snapshot read with the given commitTs

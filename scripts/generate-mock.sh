@@ -47,7 +47,7 @@ run_mockgen() {
 run_mockgen -source coordinator/changefeed/changefeed_db_backend.go -destination coordinator/changefeed/mock/changefeed_db_backend.go
 run_mockgen -source pkg/etcd/etcd.go -destination pkg/etcd/etcd_mock.go -package etcd
 run_mockgen -source pkg/etcd/client.go -destination pkg/etcd/client_mock.go -package etcd
-run_mockgen -source pkg/server/server.go -destination pkg/server/mock/server_mock.go -package mock
+run_mockgen -source pkg/server/server.go -destination pkg/server/mock/server_mock.go -package mock -imports pd=github.com/tikv/pd/client
 run_mockgen -source pkg/api/v2/tso.go -destination pkg/api/v2/mock/tso_mock.go -package mock
 run_mockgen -source pkg/api/v2/unsafe.go -destination pkg/api/v2/mock/unsafe_mock.go -package mock
 run_mockgen -source pkg/api/v2/status.go -destination pkg/api/v2/mock/status_mock.go -package mock
@@ -61,6 +61,7 @@ run_mockgen -source pkg/sink/kafka/admin_client.go -destination pkg/sink/kafka/a
 run_mockgen -source pkg/sink/kafka/factory.go -destination pkg/sink/kafka/factory_mock.go -package kafka
 run_mockgen -source pkg/sink/kafka/admin.go -destination pkg/sink/kafka/sarama_admin_mock.go -package kafka
 run_mockgen -source pkg/sink/kafka/sarama_sync_producer.go -destination pkg/sink/kafka/sarama_sync_producer_mock.go -package kafka
+run_mockgen -destination pkg/sink/mysql/mock/mysql_result.go -package mock github.com/go-sql-driver/mysql Result
 run_mockgen -source downstreamadapter/sink/topicmanager/topic_manager.go -destination downstreamadapter/sink/topicmanager/topic_manager_mock.go -package topicmanager
 run_mockgen -source pkg/keyspace/keyspace_manager.go -destination pkg/keyspace/keyspace_manager_mock.go -package keyspace
 run_mockgen -source pkg/txnutil/gc/gc_manager.go -destination pkg/txnutil/gc/gc_manager_mock.go -package gc

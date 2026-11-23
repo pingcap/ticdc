@@ -152,6 +152,7 @@ type Maintainer struct {
 		m map[node.ID]*heartbeatpb.RunningError
 	}
 
+	ctx    context.Context
 	cancel context.CancelFunc
 
 	checkpointTsGauge    prometheus.Gauge
@@ -261,6 +262,7 @@ func NewMaintainer(cfID common.ChangeFeedID,
 
 	metrics.MaintainerGauge.WithLabelValues(keyspaceName, name).Inc()
 	ctx, cancel := context.WithCancel(context.Background())
+	m.ctx = ctx
 	m.cancel = cancel
 
 	go m.runHandleEvents(ctx)
@@ -278,7 +280,7 @@ func NewMaintainer(cfID common.ChangeFeedID,
 		zap.Stringer("changefeedID", cfID),
 		zap.String("state", string(info.State)),
 		zap.Uint64("checkpointTs", checkpointTs),
-		zap.String("ddlDispatcherID", tableTriggerEventDispatcherID.String()),
+		zap.String("dispatcherID", tableTriggerEventDispatcherID.String()),
 		zap.String("redoTs", m.redoMetaTs.String()),
 		zap.Bool("newChangefeed", newChangefeed),
 	)
@@ -557,8 +559,7 @@ func (m *Maintainer) onMessage(msg *messaging.TargetMessage) {
 	default:
 		log.Warn("unknown message type, ignore it",
 			zap.Stringer("changefeedID", m.changefeedID),
-			zap.String("type", msg.Type.String()),
-			zap.Any("message", msg.Message))
+			zap.String("type", msg.Type.String()))
 	}
 }
 
@@ -885,7 +886,9 @@ func (m *Maintainer) sendMessages(msgs []*messaging.TargetMessage) {
 		if err != nil {
 			log.Debug("failed to send maintainer request",
 				zap.Stringer("changefeedID", m.changefeedID),
-				zap.Any("msg", msg), zap.Error(err))
+				zap.Stringer("to", msg.To),
+				zap.String("type", msg.Type.String()),
+				zap.Error(err))
 		}
 	}
 }
@@ -1136,7 +1139,7 @@ func (m *Maintainer) onBootstrapResponses(responses map[node.ID]*heartbeatpb.Mai
 		m.handleError(err)
 		return
 	}
-	postBootstrapRequest, err := m.controller.FinishBootstrap(responses, isMySQLSinkCompatible)
+	postBootstrapRequest, err := m.controller.FinishBootstrap(m.ctx, responses, isMySQLSinkCompatible)
 	if err != nil {
 		m.handleError(err)
 		return

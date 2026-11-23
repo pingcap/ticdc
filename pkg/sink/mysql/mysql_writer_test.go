@@ -16,12 +16,14 @@ package mysql
 import (
 	"context"
 	"database/sql"
+	"database/sql/driver"
 	"fmt"
 	"testing"
 	"time"
 
 	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/go-sql-driver/mysql"
+	"github.com/golang/mock/gomock"
 	lru "github.com/hashicorp/golang-lru"
 	"github.com/pingcap/errors"
 	"github.com/pingcap/log"
@@ -33,14 +35,24 @@ import (
 	cerror "github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/routing"
+	mysqlmock "github.com/pingcap/ticdc/pkg/sink/mysql/mock"
 	"github.com/pingcap/ticdc/pkg/writelease"
 	"github.com/pingcap/tidb/br/pkg/version"
 	ticonfig "github.com/pingcap/tidb/pkg/config"
 	"github.com/pingcap/tidb/pkg/dxf/framework/handle"
 	timodel "github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/tidb/pkg/sessionctx/vardef"
+	tfilter "github.com/pingcap/tidb/pkg/util/table-filter"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/require"
 )
+
+func newTestMysqlResult(t *testing.T, rowsAffected ...int64) *mysqlmock.MockResult {
+	t.Helper()
+	result := mysqlmock.NewMockResult(gomock.NewController(t))
+	result.EXPECT().AllRowsAffected().Return(rowsAffected)
+	return result
+}
 
 func newTestMysqlWriter(t *testing.T) (*Writer, *sql.DB, sqlmock.Sqlmock) {
 	db, mock := newTestMockDB(t)
@@ -119,10 +131,13 @@ func TestMysqlWriter_FlushDML(t *testing.T) {
 
 	mock.ExpectExec("BEGIN;INSERT INTO `test`.`t` (`id`,`name`) VALUES (?,?),(?,?),(?,?);COMMIT;").
 		WithArgs(1, "test", 2, "test2", 3, "test3").
-		WillReturnResult(sqlmock.NewResult(1, 1))
+		WillReturnResult(newTestMysqlResult(t, 0, 3, 0))
 
+	actualRowsAffected := writer.getRowsAffectedCounter("actual", "total")
+	before := testutil.ToFloat64(actualRowsAffected)
 	err := writer.Flush([]*commonEvent.DMLEvent{dmlEvent, dmlEvent2})
 	require.NoError(t, err)
+	require.Equal(t, before+3, testutil.ToFloat64(actualRowsAffected))
 
 	err = mock.ExpectationsWereMet()
 	require.NoError(t, err)
@@ -149,7 +164,7 @@ func TestMysqlWriterWaitsForWriteGrantBeforeExecute(t *testing.T) {
 
 	mock.ExpectExec("BEGIN;INSERT INTO `test`.`t` (`id`,`name`) VALUES (?,?);COMMIT;").
 		WithArgs(1, "test").
-		WillReturnResult(sqlmock.NewResult(1, 1))
+		WillReturnResult(newTestMysqlResult(t, 0, 1, 0))
 
 	done := make(chan error, 1)
 	go func() {
@@ -259,7 +274,7 @@ func TestMysqlWriter_FlushDML_DuplicateEntryRetry(t *testing.T) {
 	// Second execution should use REPLACE (safe mode) and succeed
 	mock.ExpectExec("BEGIN;REPLACE INTO `test`.`t` (`id`,`name`) VALUES (?,?);COMMIT;").
 		WithArgs(1, "test").
-		WillReturnResult(sqlmock.NewResult(1, 1))
+		WillReturnResult(newTestMysqlResult(t, 0, 1, 0))
 
 	err := writer.Flush([]*commonEvent.DMLEvent{dmlEvent})
 	require.NoError(t, err)
@@ -269,6 +284,168 @@ func TestMysqlWriter_FlushDML_DuplicateEntryRetry(t *testing.T) {
 
 	err = mock.ExpectationsWereMet()
 	require.NoError(t, err)
+}
+
+func TestMysqlWriterFlushFilteredEvents(t *testing.T) {
+	for _, multiStmtEnable := range []bool{false, true} {
+		for _, failRetry := range []bool{false, true} {
+			t.Run(fmt.Sprintf("multiStmtEnable=%t/failRetry=%t", multiStmtEnable, failRetry), func(t *testing.T) {
+				writer, db, mock := newTestMysqlWriter(t)
+				defer db.Close()
+				writer.cfg.SafeMode = false
+				writer.cfg.deleteEventFilters = []tfilter.Filter{tfilter.All()}
+				writer.cfg.MultiStmtEnable = multiStmtEnable
+				writer.cfg.CachePrepStmts = false
+				writer.cfg.DMLMaxRetry = 0
+
+				helper := commonEvent.NewEventTestHelper(t)
+				defer helper.Close()
+				helper.Tk().MustExec("use test")
+				require.NotNil(t, helper.DDL2Job("create table t (id int primary key, name varchar(32), unique key uk_name (name));"))
+				updateEvent, _ := helper.DML2UpdateEvent("test", "t", "insert into t values (1, 'before')", "update t set name = 'updated' where id = 1")
+				// DELETE filtering leaves an update followed by a same-key insert.
+				helper.ExecuteDeleteDml("test", "t", "delete from t where id = 1")
+				insertEvent := helper.DML2Event("test", "t", "insert into t values (1, 'last')", "insert into t values (2, 'other')")
+				events := []*commonEvent.DMLEvent{updateEvent, insertEvent}
+				flushedEvents := 0
+				for i, event := range events {
+					event.CommitTs = uint64(i + 2)
+					event.ReplicatingTs = 1
+					event.AddPostFlushFunc(func() { flushedEvents++ })
+				}
+
+				const (
+					updateSQL     = "UPDATE `test`.`t` SET `id` = ?,`name` = ? WHERE `id` = ? LIMIT 1"
+					deleteSQL     = "DELETE FROM `test`.`t` WHERE `id` = ? LIMIT 1"
+					replaceRowSQL = "REPLACE INTO `test`.`t` (`id`,`name`) VALUES (?,?)"
+					insertSQL     = "INSERT INTO `test`.`t` (`id`,`name`) VALUES (?,?),(?,?)"
+					replaceSQL    = "REPLACE INTO `test`.`t` (`id`,`name`) VALUES (?,?),(?,?)"
+				)
+				duplicateErr := &mysql.MySQLError{Number: 1062, Message: "Duplicate entry '1' for key 'PRIMARY'"}
+				retryErr := &mysql.MySQLError{Number: 1213, Message: "Deadlock found when trying to get lock"}
+
+				for attempt, insert := range []string{insertSQL, replaceSQL} {
+					update := updateSQL
+					updateArgs := []driver.Value{1, "updated", 1, 1, "last", 2, "other"}
+					if attempt == 1 {
+						update = deleteSQL + ";" + replaceRowSQL
+						updateArgs = []driver.Value{1, 1, "updated", 1, "last", 2, "other"}
+					}
+					var execErr error
+					if attempt == 0 {
+						execErr = duplicateErr
+					} else if failRetry {
+						execErr = retryErr
+					}
+					if multiStmtEnable {
+						expectation := mock.ExpectExec("BEGIN;" + update + ";" + insert + ";COMMIT;").
+							WithArgs(updateArgs...)
+						if execErr != nil {
+							expectation.WillReturnError(execErr)
+							mock.ExpectExec("ROLLBACK").WillReturnResult(sqlmock.NewResult(0, 0))
+						} else {
+							expectation.WillReturnResult(newTestMysqlResult(t, 0, 1, 1, 2, 0))
+						}
+					} else {
+						mock.ExpectBegin()
+						if attempt == 0 {
+							mock.ExpectExec(updateSQL).WithArgs(1, "updated", 1).
+								WillReturnResult(sqlmock.NewResult(0, 1))
+						} else {
+							mock.ExpectExec(deleteSQL).WithArgs(1).WillReturnResult(sqlmock.NewResult(0, 1))
+							mock.ExpectExec(replaceRowSQL).WithArgs(1, "updated").WillReturnResult(sqlmock.NewResult(1, 1))
+						}
+						expectation := mock.ExpectExec(insert).WithArgs(1, "last", 2, "other")
+						if execErr != nil {
+							expectation.WillReturnError(execErr)
+							mock.ExpectRollback()
+						} else {
+							expectation.WillReturnResult(sqlmock.NewResult(1, 2))
+							mock.ExpectCommit()
+						}
+					}
+				}
+
+				var err error
+				require.NotPanics(t, func() { err = writer.Flush(events) })
+				if failRetry {
+					require.ErrorContains(t, err, retryErr.Message)
+					require.ErrorIs(t, err, retryErr)
+					require.Zero(t, flushedEvents)
+				} else {
+					require.NoError(t, err)
+					require.Equal(t, len(events), flushedEvents)
+				}
+				require.True(t, writer.isInErrorCausedSafeMode)
+				require.NoError(t, mock.ExpectationsWereMet())
+			})
+		}
+	}
+}
+
+func TestMysqlWriterFlushFilteredUpdatesInSafeMode(t *testing.T) {
+	helper := commonEvent.NewEventTestHelper(t)
+	defer helper.Close()
+	helper.Tk().MustExec("use test")
+	require.NotNil(t, helper.DDL2Job("create table t (id int primary key, name varchar(32));"))
+	first, _ := helper.DML2UpdateEvent("test", "t", "insert into t values (1, 'before')", "update t set name = 'after' where id = 1")
+	second, _ := helper.DML2UpdateEvent("test", "t", "insert into t values (2, 'before')", "update t set name = 'after' where id = 2")
+
+	for _, mode := range []string{"configured", "recovery", "duplicate key retry"} {
+		for _, batchEnabled := range []bool{false, true} {
+			for _, rowCount := range []int{1, 2} {
+				t.Run(fmt.Sprintf("%s/batch=%t/rows=%d", mode, batchEnabled, rowCount), func(t *testing.T) {
+					writer, db, mock := newTestMysqlWriter(t)
+					defer db.Close()
+					writer.cfg.SafeMode = mode == "configured"
+					writer.cfg.DMLMaxRetry = 0
+					writer.cfg.BatchDMLEnable = batchEnabled
+					writer.cfg.MultiStmtEnable = false
+					writer.cfg.CachePrepStmts = false
+					writer.cfg.deleteEventFilters = []tfilter.Filter{tfilter.All()}
+					writer.isInErrorCausedSafeMode = mode == "duplicate key retry"
+					writer.lastErrorCausedSafeModeTime = time.Now()
+
+					event := commonEvent.NewDMLEvent(first.DispatcherID, first.PhysicalTableID, 1, 2, first.TableInfo)
+					event.Rows = first.Rows.CopyConstruct()
+					event.RowTypes = append(event.RowTypes, first.RowTypes...)
+					event.Length = 1
+					if rowCount == 2 {
+						for i := range second.Rows.NumRows() {
+							event.Rows.AppendRow(second.Rows.GetRow(i))
+						}
+						event.RowTypes = append(event.RowTypes, second.RowTypes...)
+						event.Length++
+					}
+					event.ReplicatingTs = 1
+					if mode == "recovery" {
+						event.ReplicatingTs = 3
+					}
+					flushed := false
+					event.AddPostFlushFunc(func() { flushed = true })
+
+					mock.ExpectBegin()
+					if batchEnabled && rowCount == 2 {
+						mock.ExpectExec("DELETE FROM `test`.`t` WHERE (`id`) IN ((?),(?))").WithArgs(1, 2).
+							WillReturnResult(sqlmock.NewResult(0, 0))
+						mock.ExpectExec("REPLACE INTO `test`.`t` (`id`,`name`) VALUES (?,?),(?,?)").WithArgs(1, "after", 2, "after").
+							WillReturnResult(sqlmock.NewResult(1, 2))
+					} else {
+						for id := 1; id <= rowCount; id++ {
+							mock.ExpectExec("DELETE FROM `test`.`t` WHERE `id` = ? LIMIT 1").WithArgs(id).
+								WillReturnResult(sqlmock.NewResult(0, 0))
+							mock.ExpectExec("REPLACE INTO `test`.`t` (`id`,`name`) VALUES (?,?)").WithArgs(id, "after").
+								WillReturnResult(sqlmock.NewResult(1, 1))
+						}
+					}
+					mock.ExpectCommit()
+					require.NoError(t, writer.Flush([]*commonEvent.DMLEvent{event}))
+					require.True(t, flushed)
+					require.NoError(t, mock.ExpectationsWereMet())
+				})
+			}
+		}
+	}
 }
 
 func TestMysqlWriter_FlushMultiDML(t *testing.T) {
@@ -293,7 +470,7 @@ func TestMysqlWriter_FlushMultiDML(t *testing.T) {
 
 	mock.ExpectExec("BEGIN;INSERT INTO `test`.`t` (`id`,`name`) VALUES (?,?),(?,?);COMMIT;").
 		WithArgs(1, "test", 2, "test2").
-		WillReturnResult(sqlmock.NewResult(1, 1))
+		WillReturnResult(newTestMysqlResult(t, 0, 2, 0))
 
 	err := writer.Flush([]*commonEvent.DMLEvent{dmlEvent, dmlEvent2})
 	require.NoError(t, err)
@@ -620,29 +797,62 @@ func TestMysqlWriter_RemoveDDLTsTable(t *testing.T) {
 	require.NoError(t, err)
 }
 
-func TestWaitAsyncDDLDone_CreateTableLikeShouldQueryDownstreamAddIndexJob(t *testing.T) {
-	writer, db, mock := newTestMysqlWriterForTiDB(t)
-	defer db.Close()
-
-	event := &commonEvent.DDLEvent{
-		Type: byte(timodel.ActionCreateTable),
-		BlockedTables: &commonEvent.InfluencedTables{
-			InfluenceType: commonEvent.InfluenceTypeNormal,
-			TableIDs:      []int64{0},
-		},
-		BlockedTableNames: []commonEvent.SchemaTableName{
-			{
-				SchemaName: "test",
-				TableName:  "a",
-			},
-		},
+func TestWaitAsyncDDLDoneUsesParameters(t *testing.T) {
+	schemaName := `test"; DROP DATABASE protected; -- `
+	tableName := `a"; CREATE TABLE protected.pwn(i INT); -- `
+	tests := []struct {
+		name          string
+		serverVersion string
+		query         string
+	}{
+		{name: "new DDL jobs table", serverVersion: defaultRunningAddIndexNewSQLVersion, query: checkRunningAddIndexSQL},
+		{name: "legacy admin statement", serverVersion: "8.4.0", query: checkRunningAddIndexSQLForOldVersion},
 	}
 
-	expected := fmt.Sprintf(checkRunningAddIndexSQL, "test", "a")
-	mock.ExpectQuery(expected).
-		WillReturnRows(sqlmock.NewRows([]string{"JOB_ID", "JOB_TYPE", "SCHEMA_STATE", "STATE", "QUERY"}))
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			writer, db, mock := newTestMysqlWriterForTiDB(t)
+			defer db.Close()
+			writer.cfg.ServerInfo = version.ParseServerInfo(tc.serverVersion)
 
-	writer.waitAsyncDDLDone(event)
+			event := &commonEvent.DDLEvent{
+				Type: byte(timodel.ActionCreateTable),
+				BlockedTables: &commonEvent.InfluencedTables{
+					InfluenceType: commonEvent.InfluenceTypeNormal,
+					TableIDs:      []int64{0},
+				},
+				BlockedTableNames: []commonEvent.SchemaTableName{
+					{
+						SchemaName: schemaName,
+						TableName:  tableName,
+					},
+				},
+			}
+
+			mock.ExpectQuery(tc.query).
+				WithArgs(schemaName, tableName).
+				WillReturnRows(sqlmock.NewRows([]string{"JOB_ID", "JOB_TYPE", "SCHEMA_STATE", "STATE", "QUERY"}))
+
+			writer.waitAsyncDDLDone(event)
+			require.NoError(t, mock.ExpectationsWereMet())
+		})
+	}
+}
+
+func TestGetDDLStateFromTiDBUsesParameters(t *testing.T) {
+	db, mock := newTestMockDB(t)
+	defer db.Close()
+
+	createTime := "2021-05-26 11:33:37.776000"
+	ddl := `ALTER TABLE t COMMENT = '"; CREATE TABLE protected.pwn(i INT); -- '`
+	mock.ExpectQuery(checkRunningSQL).
+		WithArgs(createTime, ddl).
+		WillReturnRows(sqlmock.NewRows([]string{"QUERY", "STATE", "JOB_ID", "JOB_TYPE", "SCHEMA_STATE"}).
+			AddRow(ddl, "done", "1", "alter table", "public"))
+
+	state, err := getDDLStateFromTiDB(context.Background(), db, ddl, createTime)
+	require.NoError(t, err)
+	require.Equal(t, timodel.JobStateDone, state)
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
@@ -785,7 +995,7 @@ func TestWriterAsyncDDL(t *testing.T) {
 	err = mock.ExpectationsWereMet()
 	require.NoError(t, err)
 
-	mock.ExpectQuery(fmt.Sprintf(checkRunningAddIndexSQL, "test", "t")).WillReturnError(sqlmock.ErrCancelled)
+	mock.ExpectQuery(checkRunningAddIndexSQL).WithArgs("test", "t").WillReturnError(sqlmock.ErrCancelled)
 	mock.ExpectBegin()
 	mock.ExpectExec("INSERT INTO tidb_cdc.ddl_ts_v1 (ticdc_cluster_id, changefeed, ddl_ts, table_id, finished, is_syncpoint) VALUES ('default', 'test/test', '1', 1, 0, 0) ON DUPLICATE KEY UPDATE finished=VALUES(finished), ddl_ts=VALUES(ddl_ts), is_syncpoint=VALUES(is_syncpoint);").WillReturnResult(sqlmock.NewResult(1, 1))
 	mock.ExpectCommit()
@@ -796,7 +1006,8 @@ func TestWriterAsyncDDL(t *testing.T) {
 	mock.ExpectExec("SET TIMESTAMP = DEFAULT").WillReturnResult(sqlmock.NewResult(1, 1))
 	mock.ExpectExec("alter table t add index nameIndex(name);").WillDelayFor(200 * time.Millisecond).WillReturnError(mysql.ErrInvalidConn)
 	log.Info("after add index")
-	mock.ExpectQuery(fmt.Sprintf(checkRunningSQL, "2021-05-26 11:33:37.776000", "alter table t add index nameIndex(name);")).
+	mock.ExpectQuery(checkRunningSQL).
+		WithArgs("2021-05-26 11:33:37.776000", "alter table t add index nameIndex(name);").
 		WillReturnRows(sqlmock.NewRows([]string{"JOB_ID", "JOB_TYPE", "SCHEMA_STATE", "SCHEMA_ID", "TABLE_ID", "STATE", "QUERY"}).
 			AddRow("", "", "", "", "", "running", "alter table t add index nameIndex(name);"))
 	mock.ExpectBegin()
@@ -806,7 +1017,7 @@ func TestWriterAsyncDDL(t *testing.T) {
 	// for dml event, it is a replace since we set it's commitTs less than replicatingTs
 	mock.ExpectExec("BEGIN;REPLACE INTO `test`.`t` (`id`,`name`) VALUES (?,?);COMMIT;").
 		WithArgs(3, "test3").
-		WillReturnResult(sqlmock.NewResult(1, 1))
+		WillReturnResult(newTestMysqlResult(t, 0, 1, 0))
 
 	// for ddl job for table t1
 	mock.ExpectBegin()
@@ -823,7 +1034,7 @@ func TestWriterAsyncDDL(t *testing.T) {
 	mock.ExpectCommit()
 
 	// for add column ddl for table t
-	mock.ExpectQuery(fmt.Sprintf(checkRunningAddIndexSQL, "test", "t")).WillReturnError(sqlmock.ErrCancelled)
+	mock.ExpectQuery(checkRunningAddIndexSQL).WithArgs("test", "t").WillReturnError(sqlmock.ErrCancelled)
 	mock.ExpectBegin()
 	mock.ExpectExec("INSERT INTO tidb_cdc.ddl_ts_v1 (ticdc_cluster_id, changefeed, ddl_ts, table_id, finished, is_syncpoint) VALUES ('default', 'test/test', '3', 1, 0, 0) ON DUPLICATE KEY UPDATE finished=VALUES(finished), ddl_ts=VALUES(ddl_ts), is_syncpoint=VALUES(is_syncpoint);").WillReturnResult(sqlmock.NewResult(1, 1))
 	mock.ExpectCommit()

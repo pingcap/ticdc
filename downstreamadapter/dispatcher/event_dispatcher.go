@@ -14,6 +14,7 @@
 package dispatcher
 
 import (
+	"context"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -111,7 +112,7 @@ func (d *EventDispatcher) cache(dispatcherEvents []DispatcherEvent, wakeCallback
 	d.cacheEvents.Lock()
 	defer d.cacheEvents.Unlock()
 	if d.GetRemovingStatus() {
-		log.Warn("dispatcher has removed", zap.Any("id", d.id))
+		log.Warn("dispatcher has removed", zap.Stringer("dispatcherID", d.id))
 		return
 	}
 	// Here we have to create a new event slice, because dispatcherEvents will be cleaned up in dynamic stream
@@ -122,7 +123,7 @@ func (d *EventDispatcher) cache(dispatcherEvents []DispatcherEvent, wakeCallback
 	select {
 	case d.cacheEvents.events <- cacheEvents:
 		log.Debug("cache events",
-			zap.Stringer("dispatcher", d.id),
+			zap.Stringer("dispatcherID", d.id),
 			zap.Uint64("dispatcherResolvedTs", d.GetResolvedTs()),
 			zap.Int("length", len(dispatcherEvents)),
 			zap.Int("eventType", dispatcherEvents[len(dispatcherEvents)-1].GetType()),
@@ -130,7 +131,7 @@ func (d *EventDispatcher) cache(dispatcherEvents []DispatcherEvent, wakeCallback
 			zap.Uint64("redoGlobalTs", d.redoGlobalTs.Load()),
 		)
 	default:
-		log.Panic("dispatcher cache events is full", zap.Stringer("dispatcher", d.id), zap.Int("len", len(d.cacheEvents.events)))
+		log.Panic("dispatcher cache events is full", zap.Stringer("dispatcherID", d.id), zap.Int("len", len(d.cacheEvents.events)))
 	}
 }
 
@@ -157,7 +158,7 @@ func (d *EventDispatcher) Remove() {
 // EmitBootstrap emits the table bootstrap event in a blocking way after changefeed started.
 // It will return after the bootstrap event is sent, or when shouldStop asks it
 // to stop because the local write path has been fenced.
-func (d *EventDispatcher) EmitBootstrap(shouldStop func() bool) bool {
+func (d *EventDispatcher) EmitBootstrap(ctx context.Context, shouldStop func() bool) bool {
 	bootstrap := loadBootstrapState(&d.BootstrapState)
 	switch bootstrap {
 	case BootstrapFinished:
@@ -181,7 +182,7 @@ func (d *EventDispatcher) EmitBootstrap(shouldStop func() bool) bool {
 		Name: d.sharedInfo.changefeedID.Keyspace(),
 	}
 	for _, table := range tables {
-		err := schemaStore.RegisterTable(meta, table, ts)
+		err := schemaStore.RegisterTable(ctx, meta, table, ts)
 		if err != nil {
 			log.Warn("register table to schemaStore failed",
 				zap.Int64("tableID", table),
@@ -190,7 +191,7 @@ func (d *EventDispatcher) EmitBootstrap(shouldStop func() bool) bool {
 			)
 			continue
 		}
-		tableInfo, err := schemaStore.GetTableInfo(meta, table, ts)
+		tableInfo, err := schemaStore.GetTableInfo(ctx, meta, table, ts)
 		if err != nil {
 			log.Warn("get table info failed, just ignore",
 				zap.Stringer("changefeed", d.sharedInfo.changefeedID),

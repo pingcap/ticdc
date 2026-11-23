@@ -112,9 +112,6 @@ if [ "$SINK_TYPE" == "mysql" ]; then
 	echo "[$(date)] Workload completed, verifying split path and data consistency..."
 
 	check_sync_diff $WORK_DIR "$diff_config" 200 3
-	$CUR/../_utils/check_logs_contains $WORK_DIR "scan interrupted inside a large txn"
-	$CUR/../_utils/check_logs_contains $WORK_DIR "split update event"
-	$CUR/../_utils/check_logs_contains $WORK_DIR "inject dispatcher reset after batch data events"
 
 	cleanup_process $CDC_BINARY
 	echo "[$(date)] <<<<<< run test case $TEST_NAME success! >>>>>>"

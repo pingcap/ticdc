@@ -14,6 +14,7 @@
 package event
 
 import (
+	"sort"
 	"time"
 
 	"github.com/pingcap/errors"
@@ -47,8 +48,8 @@ func (m *mounter) verifyChecksum(
 		expected, matched, err := verifyRawBytesChecksum(columnInfos, row, decoder, key, handle, m.tz)
 		if err != nil {
 			log.Error("calculate raw checksum failed",
-				zap.Int("version", version), zap.Any("tz", m.tz), zap.Any("handle", handle.String()),
-				zap.Any("key", key), zap.Any("columns", columnInfos), zap.Error(err))
+				zap.Int("version", version), zap.Any("tz", m.tz),
+				zap.Any("columns", columnInfos), zap.Error(err))
 			return 0, false, errors.Trace(err)
 		}
 		if !matched {
@@ -124,6 +125,10 @@ func calculateColumnChecksum(
 		}
 		columns = append(columns, column)
 	}
+	// Column offsets can differ from IDs after a column is moved or rebuilt by DDL.
+	sort.Slice(columns, func(i, j int) bool {
+		return columns[i].ID < columns[j].ID
+	})
 
 	calculator := rowcodec.RowData{
 		Cols: columns,

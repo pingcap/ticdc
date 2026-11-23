@@ -1200,7 +1200,8 @@ func appendOrMergeDMLEvent(events []*commonEvent.DMLEvent, row *commonEvent.DMLE
 	last.Rows.Append(row.Rows, 0, row.Rows.NumRows())
 	last.RowTypes = append(last.RowTypes, row.RowTypes...)
 	last.RowKeys = appendOptionalDMLValues(last.RowKeys, row.RowKeys, lastRowTypeCount, rowRowTypeCount)
-	last.Checksum = appendOptionalDMLValues(last.Checksum, row.Checksum, lastRowTypeCount, rowRowTypeCount)
+	// Checksums follow logical DML rows; an update occupies two physical row slots.
+	last.Checksum = appendOptionalDMLValues(last.Checksum, row.Checksum, int(last.Length), int(row.Length))
 	last.Length += row.Length
 	last.ApproximateSize += row.ApproximateSize
 	last.PostTxnEnqueued = append(last.PostTxnEnqueued, row.PostTxnEnqueued...)

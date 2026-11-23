@@ -160,7 +160,7 @@ def create_changefeed(sink_uri):
     resp = rq.post(url, data=data, headers=headers)
     assert "ErrDispatcherFailed" in resp.text, f"{resp.text}"
 
-    # create changefeed fail because glue schema config is invalid
+    # create changefeed fails when Kafka is unavailable with Glue configured
     url = BASE_URL1_V2+"/changefeeds?keyspace=keyspace1"
     data = json.dumps({
         "changefeed_id": "changefeed-test-v2",
@@ -178,9 +178,14 @@ def create_changefeed(sink_uri):
     })
     headers = {"Content-Type": "application/json"}
     resp = rq.post(url, data=data, headers=headers)
-    expected_error = "CDC:ErrKafkaNewProducer" if os.getenv(
-        "TICDC_NEWARCH") == "false" else "CDC:ErrNewKafkaSink"
-    assert expected_error in resp.text, f"{resp.text}"
+    if os.getenv("TICDC_NEWARCH") == "false":
+        expected_status = rq.codes.internal_server_error
+        expected_error = "CDC:ErrKafkaNewProducer"
+    else:
+        expected_status = rq.codes.bad_request
+        expected_error = "CDC:ErrSinkURIInvalid"
+    assert_status_code(resp, expected_status, url)
+    assert resp.json()["error_code"] == expected_error, f"{resp.text}"
     assert "not found, ResolveEndpointV2" not in resp.text, f"{resp.text}"
 
     print("pass test: create changefeed")
@@ -542,7 +547,11 @@ def move_table(cfID="changefeed-test1"):
 
 
 def resign_owner():
-    url = BASE_URL1_V2 + "/owner/resign"
+    # keyspace1 has already been removed from PD by
+    # manage_changefeed_after_keyspace_deleted, and resigning only stops the
+    # local coordinator, so use the built-in SYSTEM keyspace. Classic mode
+    # ignores the keyspace parameter.
+    url = BASE_URL1_V2 + "/owner/resign?keyspace=SYSTEM"
     resp = rq.post(url)
     assert_status_code(resp, rq.codes.ok, url)
 

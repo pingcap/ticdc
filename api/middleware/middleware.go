@@ -17,6 +17,7 @@ import (
 	"bufio"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -49,6 +50,15 @@ const ClientVersionHeader = "X-client-version"
 
 const ctxKeyspaceKey = "ctx-keyspace"
 
+// errorResponseStatus returns the status code ErrorHandleMiddleware writes for
+// an error collected from a handler.
+func errorResponseStatus(err error) int {
+	if api.IsHTTPBadRequestError(err) {
+		return http.StatusBadRequest
+	}
+	return http.StatusInternalServerError
+}
+
 // ErrorHandleMiddleware puts the error into response
 func ErrorHandleMiddleware() gin.HandlerFunc {
 	return func(c *gin.Context) {
@@ -57,13 +67,7 @@ func ErrorHandleMiddleware() gin.HandlerFunc {
 		// there will be only one error in c.Errors
 		lastError := c.Errors.Last()
 		if lastError != nil {
-			err := lastError.Err
-			// put the error into response
-			if api.IsHTTPBadRequestError(err) {
-				c.IndentedJSON(http.StatusBadRequest, api.NewHTTPError(err))
-			} else {
-				c.IndentedJSON(http.StatusInternalServerError, api.NewHTTPError(err))
-			}
+			c.IndentedJSON(errorResponseStatus(lastError.Err), api.NewHTTPError(lastError.Err))
 			c.Abort()
 			return
 		}
@@ -75,7 +79,7 @@ func LogMiddleware() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		start := time.Now()
 		path := c.Request.URL.Path
-		query := c.Request.URL.RawQuery
+		query := strings.TrimPrefix(util.MaskSensitiveDataInURIForError("?"+c.Request.URL.RawQuery), "?")
 		user, _, _ := c.Request.BasicAuth()
 		c.Next()
 
@@ -183,7 +187,7 @@ func ForwardToServer(c *gin.Context, fromID node.ID, toAddr string) {
 		}
 	}
 	log.Info("forwarding request to another server",
-		zap.String("url", c.Request.RequestURI),
+		zap.String("url", util.MaskSensitiveDataInURIForError(c.Request.RequestURI)),
 		zap.String("method", c.Request.Method),
 		zap.Any("fromID", fromID),
 		zap.String("toAddr", toAddr),
@@ -251,43 +255,52 @@ func KeyspaceNameCheckerMiddleware() gin.HandlerFunc {
 // KeyspaceCheckerMiddleware checks if the request keyspace exists.
 func KeyspaceCheckerMiddleware() gin.HandlerFunc {
 	return func(c *gin.Context) {
-		// we not need to check keyspace for classic mode
-		// if the classic mode supports multiple keyspaces in future
-		// we need to remove this if block
-		if kerneltype.IsClassic() {
-			c.Next()
+		if !loadKeyspaceFromQuery(c) {
 			return
 		}
-
-		ks := c.Query(api.APIOpVarKeyspace)
-		if ks == "" {
-			err := errors.ErrAPIInvalidParam.GenWithStack(
-				"missing required query parameter keyspace, please specify --keyspace or -k",
-			)
-			c.IndentedJSON(http.StatusBadRequest, api.NewHTTPError(err))
-			c.Abort()
-			return
-		}
-
-		keyspaceManager := appcontext.GetService[keyspace.Manager](appcontext.KeyspaceManager)
-		meta, err := keyspaceManager.LoadKeyspace(c.Request.Context(), ks)
-		if errors.IsKeyspaceNotExistError(err) {
-			err = errors.ErrAPIInvalidParam.GenWithStack(
-				"keyspace %q does not exist, please check --keyspace or -k", ks,
-			)
-			c.IndentedJSON(http.StatusBadRequest, api.NewHTTPError(err))
-			c.Abort()
-			return
-		} else if err != nil {
-			c.IndentedJSON(http.StatusInternalServerError, api.NewHTTPError(err))
-			c.Abort()
-			return
-		}
-
-		c.Set(ctxKeyspaceKey, meta)
-
 		c.Next()
 	}
+}
+
+func loadKeyspaceFromQuery(c *gin.Context) bool {
+	// we not need to check keyspace for classic mode
+	// if the classic mode supports multiple keyspaces in future
+	// we need to remove this if block
+	if kerneltype.IsClassic() {
+		return true
+	}
+	// The node authentication middleware may have resolved the keyspace already.
+	if _, ok := c.Get(ctxKeyspaceKey); ok {
+		return true
+	}
+
+	ks := c.Query(api.APIOpVarKeyspace)
+	if ks == "" {
+		err := errors.ErrAPIInvalidParam.GenWithStack(
+			"missing required query parameter keyspace, please specify --keyspace or -k",
+		)
+		c.IndentedJSON(http.StatusBadRequest, api.NewHTTPError(err))
+		c.Abort()
+		return false
+	}
+
+	keyspaceManager := appcontext.GetService[keyspace.Manager](appcontext.KeyspaceManager)
+	meta, err := keyspaceManager.LoadKeyspace(c.Request.Context(), ks)
+	if errors.IsKeyspaceNotExistError(err) {
+		err = errors.ErrAPIInvalidParam.GenWithStack(
+			"keyspace %q does not exist, please check --keyspace or -k", ks,
+		)
+		c.IndentedJSON(http.StatusBadRequest, api.NewHTTPError(err))
+		c.Abort()
+		return false
+	} else if err != nil {
+		c.IndentedJSON(http.StatusInternalServerError, api.NewHTTPError(err))
+		c.Abort()
+		return false
+	}
+
+	c.Set(ctxKeyspaceKey, meta)
+	return true
 }
 
 func GetKeyspaceFromContext(c *gin.Context) *keyspacepb.KeyspaceMeta {
