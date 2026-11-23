@@ -264,6 +264,146 @@ func TestChangeFeedInfoStringMasksSensitiveData(t *testing.T) {
 	require.Equal(t, original, after)
 }
 
+func TestChangefeedConfigStringMasksSensitiveData(t *testing.T) {
+	cfg := GetDefaultReplicaConfig()
+	cfg.Sink.KafkaConfig = &KafkaConfig{
+		SASLPassword: new("plain-password-sentinel"),
+	}
+	changefeedConfig := &ChangefeedConfig{
+		SinkURI:    "mysql://user:sink-password-sentinel@127.0.0.1:3306/?secret=uri-secret-sentinel",
+		SinkConfig: cfg.Sink,
+		Consistent: &ConsistentConfig{Storage: new("s3://bucket/prefix?secret-access-key=redo-secret-sentinel")},
+	}
+	original, err := json.Marshal(changefeedConfig)
+	require.NoError(t, err)
+
+	output := changefeedConfig.String()
+	for _, secret := range []string{
+		"sink-password-sentinel",
+		"uri-secret-sentinel",
+		"plain-password-sentinel",
+		"redo-secret-sentinel",
+	} {
+		require.NotContains(t, output, secret)
+	}
+	require.Contains(t, output, "mysql://user:xxxxx@127.0.0.1:3306/?secret=xxxxx")
+	require.Contains(t, output, "secret-access-key=xxxxx")
+	after, err := json.Marshal(changefeedConfig)
+	require.NoError(t, err)
+	require.Equal(t, original, after)
+}
+
+func TestChangefeedConfigStringMasksNestedRedoStorageCredential(t *testing.T) {
+	tests := []struct {
+		name        string
+		storage     string
+		secret      string
+		wantOuter   string
+		wantDisplay string
+	}{
+		{
+			name: "Azure SAS endpoint",
+			storage: "azblob://container/prefix?account-name=account&endpoint=" +
+				"https%3A%2F%2Faccount.blob.core.windows.net%2F%3Fsv%3D2020%26sig%3Dnested-sas-secret-sentinel",
+			secret:      "nested-sas-secret-sentinel",
+			wantOuter:   "account-name=account",
+			wantDisplay: "endpoint=xxxxxx",
+		},
+		{
+			name:        "Azure plain endpoint with account key",
+			storage:     "azblob://container/prefix?account-name=account&account-key=azure-key-secret-sentinel&endpoint=https%3A%2F%2Faccount.blob.core.windows.net",
+			secret:      "azure-key-secret-sentinel",
+			wantOuter:   "account-name=account",
+			wantDisplay: "endpoint=https%3A%2F%2Faccount.blob.core.windows.net",
+		},
+		{
+			name:        "Azure endpoint userinfo",
+			storage:     "azblob://container/prefix?endpoint=https%3A%2F%2Fuser%3Aazure-endpoint-secret-sentinel%40account.blob.core.windows.net",
+			secret:      "azure-endpoint-secret-sentinel",
+			wantOuter:   "azblob://container/prefix",
+			wantDisplay: "endpoint=xxxxxx",
+		},
+		{
+			name:        "Azure endpoint fragment",
+			storage:     "azblob://container/prefix?endpoint=https%3A%2F%2Faccount.blob.core.windows.net%23sig%3Dazure-fragment-secret-sentinel",
+			secret:      "azure-fragment-secret-sentinel",
+			wantOuter:   "azblob://container/prefix",
+			wantDisplay: "endpoint=xxxxxx",
+		},
+		{
+			name:        "S3 endpoint userinfo",
+			storage:     "s3://bucket/prefix?region=us-east-1&endpoint=https%3A%2F%2Fuser%3Aendpoint-secret-sentinel%40storage.example",
+			secret:      "endpoint-secret-sentinel",
+			wantOuter:   "region=us-east-1",
+			wantDisplay: "endpoint=xxxxxx",
+		},
+		{
+			name:        "S3 uppercase endpoint userinfo",
+			storage:     "s3://bucket/prefix?region=us-east-1&ENDPOINT=https%3A%2F%2Fuser%3Auppercase-endpoint-secret-sentinel%40storage.example",
+			secret:      "uppercase-endpoint-secret-sentinel",
+			wantOuter:   "region=us-east-1",
+			wantDisplay: "ENDPOINT=xxxxxx",
+		},
+		{
+			name:        "S3 plain endpoint",
+			storage:     "s3://bucket/prefix?region=us-east-1&endpoint=https%3A%2F%2Fstorage.example",
+			wantOuter:   "region=us-east-1",
+			wantDisplay: "endpoint=https%3A%2F%2Fstorage.example",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := &ChangefeedConfig{Consistent: &ConsistentConfig{Storage: &tt.storage}}
+			original, err := json.Marshal(cfg)
+			require.NoError(t, err)
+
+			output := cfg.String()
+			if tt.secret != "" {
+				require.NotContains(t, output, tt.secret)
+			}
+			require.Contains(t, output, tt.wantDisplay)
+			require.Contains(t, output, tt.wantOuter)
+			after, err := json.Marshal(cfg)
+			require.NoError(t, err)
+			require.Equal(t, original, after)
+		})
+	}
+}
+
+// TestChangeFeedInfoRmUnusedFieldsEncoderConcurrency sets a custom concurrency
+// and removes unused fields, retaining it only for MQ sinks or blackhole.
+func TestChangeFeedInfoRmUnusedFieldsEncoderConcurrency(t *testing.T) {
+	tests := []struct {
+		sinkURI string
+		keep    bool
+	}{
+		{sinkURI: "kafka://127.0.0.1:9092/topic", keep: true},
+		{sinkURI: "pulsar://127.0.0.1:6650/topic", keep: true},
+		{sinkURI: "file:///tmp/cdc"},
+		{sinkURI: "s3://bucket/cdc"},
+		{sinkURI: "gcs://bucket/cdc"},
+		{sinkURI: "azblob://bucket/cdc"},
+		{sinkURI: "mysql://127.0.0.1:3306"},
+		{sinkURI: "tidb://127.0.0.1:4000"},
+		{sinkURI: "blackhole://", keep: true},
+	}
+	for _, tt := range tests {
+		// Cleanup must preserve the configured value for MQ sinks and blackhole.
+		t.Run(tt.sinkURI, func(t *testing.T) {
+			cfg := GetDefaultReplicaConfig()
+			cfg.Sink.EncoderConcurrency = new(16)
+			info := &ChangeFeedInfo{SinkURI: tt.sinkURI, Config: cfg}
+			info.RmUnusedFields()
+			if tt.keep {
+				require.NotNil(t, cfg.Sink.EncoderConcurrency)
+				require.Equal(t, 16, *cfg.Sink.EncoderConcurrency)
+			} else {
+				require.Nil(t, cfg.Sink.EncoderConcurrency)
+			}
+		})
+	}
+}
+
 func TestChangeFeedInfoRmUnusedFieldsKeepsTableRouting(t *testing.T) {
 	for _, sinkURI := range []string{"mysql://127.0.0.1:3306", "file:///tmp/cdc"} {
 		t.Run(sinkURI, func(t *testing.T) {
