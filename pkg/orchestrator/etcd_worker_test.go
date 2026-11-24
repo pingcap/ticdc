@@ -26,7 +26,6 @@ import (
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/etcd"
-	"github.com/pingcap/ticdc/pkg/migrate"
 	"github.com/pingcap/ticdc/pkg/orchestrator/util"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/stretchr/testify/require"
@@ -266,8 +265,7 @@ func TestEtcdSum(t *testing.T) {
 				_ = cli.Unwrap().Close()
 			}()
 
-			etcdWorker, err := NewEtcdWorker(cdcCli, testEtcdKeyPrefix, reactor, initState,
-				&migrate.NoOpMigrator{})
+			etcdWorker, err := NewEtcdWorker(cdcCli, testEtcdKeyPrefix, reactor, initState)
 			if err != nil {
 				return errors.Trace(err)
 			}
@@ -361,7 +359,7 @@ func TestLinearizability(t *testing.T) {
 	}, &intReactorState{
 		val:       0,
 		isUpdated: false,
-	}, &migrate.NoOpMigrator{})
+	})
 	require.Nil(t, err)
 	errg := &errgroup.Group{}
 	errg.Go(func() error {
@@ -454,7 +452,7 @@ func TestFinished(t *testing.T) {
 		prefix: prefix,
 	}, &commonReactorState{
 		state: make(map[string]string),
-	}, &migrate.NoOpMigrator{})
+	})
 	require.Nil(t, err)
 	err = reactor.Run(ctx, nil, 10*time.Millisecond)
 	require.Nil(t, err)
@@ -526,7 +524,7 @@ func TestCover(t *testing.T) {
 		prefix: prefix,
 	}, &commonReactorState{
 		state: make(map[string]string),
-	}, &migrate.NoOpMigrator{})
+	})
 	require.Nil(t, err)
 	err = reactor.Run(ctx, nil, 10*time.Millisecond)
 	require.Nil(t, err)
@@ -608,7 +606,7 @@ func TestEmptyTxn(t *testing.T) {
 		cli:    cli,
 	}, &commonReactorState{
 		state: make(map[string]string),
-	}, &migrate.NoOpMigrator{})
+	})
 	require.Nil(t, err)
 	err = reactor.Run(ctx, nil, 10*time.Millisecond)
 	require.Nil(t, err)
@@ -678,7 +676,7 @@ func TestEmptyOrNil(t *testing.T) {
 		prefix: prefix,
 	}, &commonReactorState{
 		state: make(map[string]string),
-	}, &migrate.NoOpMigrator{})
+	})
 	require.Nil(t, err)
 	err = reactor.Run(ctx, nil, 10*time.Millisecond)
 	require.Nil(t, err)
@@ -759,7 +757,7 @@ func TestModifyAfterDelete(t *testing.T) {
 	}
 	worker1, err := NewEtcdWorker(cdcCli1, "/test", modifyReactor, &commonReactorState{
 		state: make(map[string]string),
-	}, &migrate.NoOpMigrator{})
+	})
 	require.Nil(t, err)
 
 	var wg sync.WaitGroup
@@ -778,7 +776,7 @@ func TestModifyAfterDelete(t *testing.T) {
 	}
 	worker2, err := NewEtcdWorker(cdcCli2, "/test", deleteReactor, &commonReactorState{
 		state: make(map[string]string),
-	}, &migrate.NoOpMigrator{})
+	})
 	require.Nil(t, err)
 
 	err = worker2.Run(ctx, nil, time.Millisecond*100)

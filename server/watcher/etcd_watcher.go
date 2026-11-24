@@ -21,7 +21,6 @@ import (
 	"github.com/pingcap/log"
 	cerror "github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/etcd"
-	"github.com/pingcap/ticdc/pkg/migrate"
 	"github.com/pingcap/ticdc/pkg/orchestrator"
 	"go.etcd.io/etcd/client/v3/concurrency"
 	"go.uber.org/zap"
@@ -50,7 +49,7 @@ func (w *EtcdWatcher) RunEtcdWorker(
 	timerInterval time.Duration,
 ) error {
 	etcdWorker, err := orchestrator.NewEtcdWorker(w.etcdClient,
-		w.baseKey, reactor, reactorState, &migrate.NoOpMigrator{})
+		w.baseKey, reactor, reactorState)
 	if err != nil {
 		return errors.Trace(err)
 	}

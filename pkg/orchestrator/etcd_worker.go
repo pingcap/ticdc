@@ -22,7 +22,6 @@ import (
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/etcd"
-	"github.com/pingcap/ticdc/pkg/migrate"
 	"github.com/pingcap/ticdc/pkg/orchestrator/util"
 	"go.etcd.io/etcd/api/v3/etcdserverpb"
 	"go.etcd.io/etcd/api/v3/mvccpb"
@@ -66,8 +65,6 @@ type EtcdWorker struct {
 	// a `compare-and-swap` semantics, which is essential for implementing
 	// snapshot isolation for Reactor ticks.
 	deleteCounter int64
-
-	migrator migrate.Migrator
 }
 
 type etcdUpdate struct {
@@ -89,7 +86,6 @@ func NewEtcdWorker(
 	prefix string,
 	reactor Reactor,
 	initState ReactorState,
-	migrator migrate.Migrator,
 ) (*EtcdWorker, error) {
 	return &EtcdWorker{
 		client:     client.GetEtcdClient(),
@@ -98,7 +94,6 @@ func NewEtcdWorker(
 		rawState:   make(map[util.EtcdKey]rawStateEntry),
 		prefix:     util.NormalizePrefix(prefix),
 		barrierRev: -1, // -1 indicates no barrier
-		migrator:   migrator,
 	}, nil
 }
 
@@ -108,15 +103,8 @@ func NewEtcdWorker(
 // And the specified etcd session is nil-safety.
 func (worker *EtcdWorker) Run(ctx context.Context, session *concurrency.Session, timerInterval time.Duration) error {
 	defer worker.cleanUp()
-	// migrate data here
-	err := worker.checkAndMigrateMetaData(ctx)
-	if err != nil {
-		return errors.Trace(err)
-	}
-	// migration is done, cdc server can serve http now
-	worker.migrator.MarkMigrateDone()
 
-	err = worker.syncRawState(ctx)
+	err := worker.syncRawState(ctx)
 	if err != nil {
 		return errors.Trace(err)
 	}
@@ -525,18 +513,4 @@ func (worker *EtcdWorker) handleDeleteCounter(value []byte) {
 	if worker.deleteCounter <= 0 {
 		log.Panic("unexpected delete counter", zap.Int64("value", worker.deleteCounter))
 	}
-}
-
-// checkAndMigrateMetaData check if we should migrate meta, if true, it will block
-// until migrate done
-func (worker *EtcdWorker) checkAndMigrateMetaData(ctx context.Context) error {
-	shouldMigrate, err := worker.migrator.ShouldMigrate(ctx)
-	if err != nil {
-		return errors.Trace(err)
-	}
-	if !shouldMigrate {
-		return nil
-	}
-
-	return errors.Trace(worker.migrator.WaitMetaVersionMatched(ctx))
 }
