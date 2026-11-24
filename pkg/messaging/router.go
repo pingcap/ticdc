@@ -67,7 +67,6 @@ func (r *router) runDispatch(ctx context.Context, out <-chan *TargetMessage) {
 			handler, ok := r.handlers[msg.Topic]
 			r.mu.RUnlock()
 			if !ok {
-				log.Debug("no handler for message, drop it", zap.Any("msg", msg))
 				continue
 			}
 			start := time.Now()

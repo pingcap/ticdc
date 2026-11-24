@@ -175,8 +175,7 @@ func (m *DispatcherOrchestrator) processMessage(msg *messaging.TargetMessage) {
 		}
 	default:
 		log.Warn("unknown message type, ignore it",
-			zap.String("type", msg.Type.String()),
-			zap.Any("message", msg.Message))
+			zap.String("type", msg.Type.String()))
 	}
 }
 

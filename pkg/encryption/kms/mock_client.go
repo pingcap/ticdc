@@ -19,9 +19,7 @@ import (
 	"crypto/cipher"
 	"crypto/rand"
 
-	"github.com/pingcap/log"
 	cerrors "github.com/pingcap/ticdc/pkg/errors"
-	"go.uber.org/zap"
 )
 
 // KMSClient is the interface for Key Management Service operations
@@ -50,38 +48,6 @@ func NewMockKMSClient() *MockKMSClient {
 	return &MockKMSClient{
 		mockKey: mockKey,
 	}
-}
-
-// DecryptMasterKey decrypts the master key using mock KMS
-// In a real implementation, this would call the actual KMS service
-func (c *MockKMSClient) DecryptMasterKey(ctx context.Context, ciphertext []byte, keyID string, vendor string, region string, endpoint string) ([]byte, error) {
-	if len(ciphertext) < aes.BlockSize {
-		return nil, cerrors.ErrDecodeFailed.GenWithStackByArgs("ciphertext too short")
-	}
-
-	log.Debug("mock KMS client: decrypting master key",
-		zap.String("keyID", keyID),
-		zap.String("vendor", vendor),
-		zap.String("region", region),
-		zap.Int("ciphertextLen", len(ciphertext)))
-
-	// In mock implementation, we use AES-256-CTR to decrypt
-	// The ciphertext is encrypted with the mock key
-	block, err := aes.NewCipher(c.mockKey)
-	if err != nil {
-		return nil, cerrors.ErrDecodeFailed.Wrap(err)
-	}
-
-	// Extract IV from the beginning of ciphertext
-	iv := ciphertext[:aes.BlockSize]
-	encryptedData := ciphertext[aes.BlockSize:]
-
-	// Decrypt using CTR mode
-	stream := cipher.NewCTR(block, iv)
-	plaintext := make([]byte, len(encryptedData))
-	stream.XORKeyStream(plaintext, encryptedData)
-
-	return plaintext, nil
 }
 
 // EncryptMasterKey encrypts a master key using mock KMS (for testing)

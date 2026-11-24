@@ -66,15 +66,6 @@ func WithLogFileName(f func() string) Option {
 	}
 }
 
-// WithUUIDGenerator provides the Option for uuid generator
-func WithUUIDGenerator(f func() uuid.Generator) Option {
-	return func(o *LogWriterOptions) {
-		if f != nil {
-			o.GetUUIDGenerator = f
-		}
-	}
-}
-
 // EncodeFrameSize encodes the frame size for etcd wal which uses code
 // from etcd wal/encoder.go. Ref: https://github.com/etcd-io/etcd/pull/5250
 func EncodeFrameSize(dataBytes int) (lenField uint64, padBytes int) {

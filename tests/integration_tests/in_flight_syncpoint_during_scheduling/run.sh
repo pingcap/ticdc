@@ -90,10 +90,6 @@ EOF
 	cdc_cli_changefeed update --config="$CUR/conf/changefeed.toml" --changefeed-id="$CHANGEFEED_ID" --no-confirm
 	cdc_cli_changefeed resume --changefeed-id="$CHANGEFEED_ID"
 
-	# Start node2 for moving the table.
-	export GO_FAILPOINTS='github.com/pingcap/ticdc/maintainer/scheduler/StopBalanceScheduler=return(true)'
-	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix "1" --addr "127.0.0.1:8301"
-
 	# Keep generating DML until a syncpoint is triggered.
 	i=10
 	while true; do
@@ -114,6 +110,10 @@ EOF
 
 	# Ensure the table-trigger dispatcher has received the maintainer action to start writing this syncpoint.
 	ensure 60 "grep \"pending event get the action\" $WORK_DIR/cdc0-1.log | grep -Eq \"(pendingEventCommitTs[^0-9]*${syncpoint_ts}.*innerAction=0|innerAction=0.*pendingEventCommitTs[^0-9]*${syncpoint_ts})\""
+
+	# Start node2 after node1 receives the Write action so node1's failpoint holds the syncpoint open.
+	export GO_FAILPOINTS='github.com/pingcap/ticdc/maintainer/scheduler/StopBalanceScheduler=return(true)'
+	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix "1" --addr "127.0.0.1:8301"
 
 	# Merge the split table while the syncpoint is pending.
 	merge_table_with_retry $merge_table_id "$CHANGEFEED_ID" 10

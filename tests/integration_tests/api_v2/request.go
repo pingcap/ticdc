@@ -23,7 +23,6 @@ import (
 	"net/http"
 	"net/url"
 	"path"
-	"strings"
 	"time"
 
 	"github.com/pingcap/log"
@@ -79,21 +78,6 @@ type CDCRESTClient struct {
 
 	// Client is a wrapped http client.
 	Client *httputil.Client
-}
-
-// NewCDCRESTClient creates a new CDCRESTClient.
-func NewCDCRESTClient(baseURL *url.URL, versionedAPIPath string, client *httputil.Client) (*CDCRESTClient, error) {
-	if !strings.HasSuffix(baseURL.Path, "/") {
-		baseURL.Path += "/"
-	}
-	baseURL.RawQuery = ""
-	baseURL.Fragment = ""
-
-	return &CDCRESTClient{
-		base:             baseURL,
-		versionedAPIPath: versionedAPIPath,
-		Client:           client,
-	}, nil
 }
 
 // Method begins a request with a http method (GET, POST, PUT, DELETE).
@@ -169,25 +153,6 @@ func NewRequest(c *CDCRESTClient) *Request {
 	return r
 }
 
-// NewRequestWithClient creates a Request with an embedded CDCRESTClient for test.
-func NewRequestWithClient(base *url.URL, versionedAPIPath string, client *httputil.Client) *Request {
-	return NewRequest(&CDCRESTClient{
-		base:             base,
-		versionedAPIPath: versionedAPIPath,
-		Client:           client,
-	})
-}
-
-// WithPrefix adds segments to the beginning of request url.
-func (r *Request) WithPrefix(segments ...string) *Request {
-	if r.err != nil {
-		return r
-	}
-
-	r.pathPrefix = path.Join(r.pathPrefix, path.Join(segments...))
-	return r
-}
-
 // WithURI sets the server relative URI.
 func (r *Request) WithURI(uri string) *Request {
 	if r.err != nil {
@@ -211,18 +176,6 @@ func (r *Request) WithURI(uri string) *Request {
 	return r
 }
 
-// WithParam sets the http request query params.
-func (r *Request) WithParam(name, value string) *Request {
-	if r.err != nil {
-		return r
-	}
-	if r.params == nil {
-		r.params = make(url.Values)
-	}
-	r.params[name] = append(r.params[name], value)
-	return r
-}
-
 // WithMethod sets the method this request will use.
 func (r *Request) WithMethod(method HTTPMethod) *Request {
 	r.method = method
@@ -237,46 +190,6 @@ func (r *Request) WithHeader(key string, values ...string) *Request {
 	r.headers.Del(key)
 	for _, value := range values {
 		r.headers.Add(key, value)
-	}
-	return r
-}
-
-// WithTimeout specifies overall timeout of a request.
-func (r *Request) WithTimeout(d time.Duration) *Request {
-	if r.err != nil {
-		return r
-	}
-	r.timeout = d
-	return r
-}
-
-// WithBackoffBaseDelay specifies the base backoff sleep duration.
-func (r *Request) WithBackoffBaseDelay(delay time.Duration) *Request {
-	if r.err != nil {
-		return r
-	}
-	r.backoffBaseDelay = delay
-	return r
-}
-
-// WithBackoffMaxDelay specifies the maximum backoff sleep duration.
-func (r *Request) WithBackoffMaxDelay(delay time.Duration) *Request {
-	if r.err != nil {
-		return r
-	}
-	r.backoffMaxDelay = delay
-	return r
-}
-
-// WithMaxRetries specifies the maximum times a request will retry.
-func (r *Request) WithMaxRetries(maxRetries uint64) *Request {
-	if r.err != nil {
-		return r
-	}
-	if maxRetries > 0 {
-		r.maxRetries = maxRetries
-	} else {
-		r.maxRetries = defaultMaxRetries
 	}
 	return r
 }

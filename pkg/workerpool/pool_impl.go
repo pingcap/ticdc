@@ -42,11 +42,6 @@ type defaultPoolImpl struct {
 	nextHandlerID int64
 }
 
-// NewDefaultWorkerPool creates a new WorkerPool that uses the default implementation
-func NewDefaultWorkerPool(numWorkers int) WorkerPool {
-	return newDefaultPoolImpl(&defaultHasher{}, numWorkers)
-}
-
 func newDefaultPoolImpl(hasher Hasher, numWorkers int) *defaultPoolImpl {
 	workers := make([]*worker, numWorkers)
 	for i := 0; i < numWorkers; i++ {

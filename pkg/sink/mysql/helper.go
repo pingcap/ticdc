@@ -529,7 +529,6 @@ func getDDLStateFromTiDB(ctx context.Context, db *sql.DB, ddl string, createTime
 		//nolint:rowserrcheck
 		jobsRows, err := db.QueryContext(ctx, checkRunningSQL, createTime, ddl)
 		if err != nil {
-			log.Warn("failed to query from downstream to get ddl state", zap.Error(err))
 			return err
 		}
 		jobsResults, err = export.GetSpecifiedColumnValuesAndClose(jobsRows, "QUERY", "STATE", "JOB_ID", "JOB_TYPE", "SCHEMA_STATE")
