@@ -122,7 +122,8 @@ func TestLatestTiDBTableInfoSharedSchemaGuard(t *testing.T) {
 			modulePath:      "github.com/pingcap/tidb/pkg/parser",
 			pkgRelativePath: "types",
 			typeName:        "FieldType",
-			expectedFields:  []string{"tp", "flag", "flen", "decimal", "charset", "collate", "elems", "elemsIsBinaryLit", "array"},
+			// subtype is the geometry subtype and is persisted in the field type JSON.
+			expectedFields: []string{"tp", "flag", "flen", "decimal", "charset", "collate", "elems", "elemsIsBinaryLit", "array", "subtype"},
 		},
 	}
 
