@@ -189,8 +189,12 @@ func TestPreSQLsAreInitializedLazily(t *testing.T) {
 func TestColumnSchemaRebuildsPreSQLsAfterUnmarshal(t *testing.T) {
 	t.Parallel()
 
-	source := WrapTableInfo("test", newPreSQLTestModelTableInfo("trusted_table"))
-	data, err := source.columnSchema.Marshal()
+	// Build the serialized schema without registering it in the shared storage.
+	// Otherwise, unmarshalling can return the already-safe cached schema without
+	// exercising the PreSQL regeneration below.
+	testDigest := Digest{A: 0x746573742d707265, B: 0x73716c2d72656275, C: 0x696c642d74657374, D: 1}
+	sourceSchema := newColumnSchema(newPreSQLTestModelTableInfo("trusted_table"), testDigest)
+	data, err := sourceSchema.Marshal()
 	require.NoError(t, err)
 	require.Contains(t, string(data), "pre_sqls")
 
@@ -206,6 +210,10 @@ func TestColumnSchemaRebuildsPreSQLsAfterUnmarshal(t *testing.T) {
 
 	decoded, err := unmarshalJsonToColumnSchema(tampered)
 	require.NoError(t, err)
+	t.Cleanup(func() {
+		GetSharedColumnSchemaStorage().tryReleaseColumnSchema(decoded)
+	})
+	require.NotSame(t, sourceSchema, decoded)
 	require.Equal(t, decoded.genPreSQLInsert(false), decoded.PreSQLs[preSQLInsert])
 	require.Equal(t, decoded.genPreSQLInsert(true), decoded.PreSQLs[preSQLReplace])
 	require.Equal(t, decoded.genPreSQLUpdate(), decoded.PreSQLs[preSQLUpdate])
