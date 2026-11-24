@@ -52,18 +52,6 @@ func TableIDToComparableSpan(keyspaceID uint32, tableID int64) heartbeatpb.Table
 	}
 }
 
-// TableIDToComparableRange returns a range of a table,
-// start and end are encoded in Comparable format.
-func TableIDToComparableRange(tableID int64) (start, end heartbeatpb.TableSpan) {
-	tableSpan := TableIDToComparableSpan(DefaultKeyspaceID, tableID)
-	start = tableSpan
-	start.EndKey = nil
-	end = tableSpan
-	end.StartKey = tableSpan.EndKey
-	end.EndKey = nil
-	return start, end
-}
-
 func IsCompleteSpan(tableSpan *heartbeatpb.TableSpan) bool {
 	startKey, endKey, err := GetKeyspaceTableRange(tableSpan.KeyspaceID, tableSpan.TableID)
 	if err != nil {
@@ -221,15 +209,6 @@ func IsSubSpan(sub heartbeatpb.TableSpan, parents ...heartbeatpb.TableSpan) bool
 // TODO: check whether need span.StartKey >= span.EndKey
 func IsEmptySpan(span heartbeatpb.TableSpan) bool {
 	return len(span.StartKey) == 0 && len(span.EndKey) == 0
-}
-
-// ToSpan returns a span, keys are encoded in memcomparable format.
-// See: https://github.com/facebook/mysql-5.6/wiki/MyRocks-record-format
-func ToSpan(startKey, endKey []byte) heartbeatpb.TableSpan {
-	return heartbeatpb.TableSpan{
-		StartKey: ToComparableKey(startKey),
-		EndKey:   ToComparableKey(endKey),
-	}
 }
 
 // ToComparableKey returns a memcomparable key.

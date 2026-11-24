@@ -581,10 +581,10 @@ func (c *EventCollector) MessageCenterHandler(ctx context.Context, targetMessage
 		return nil
 	}
 
-	for _, msg := range targetMessage.Message {
+	if len(targetMessage.Message) > 0 {
 		log.Warn("unknown message type, ignore it",
 			zap.String("type", targetMessage.Type.String()),
-			zap.Any("msg", msg))
+			zap.Int("payloadCount", len(targetMessage.Message)))
 	}
 	return nil
 }
@@ -602,8 +602,7 @@ func (c *EventCollector) RedoMessageCenterHandler(ctx context.Context, targetMes
 		return nil
 	}
 	log.Warn("unknown message type, ignore it",
-		zap.String("type", targetMessage.Type.String()),
-		zap.Any("msg", targetMessage))
+		zap.String("type", targetMessage.Type.String()))
 	return nil
 }
 
@@ -639,8 +638,7 @@ func (c *EventCollector) runDispatchMessage(ctx context.Context, inCh <-chan *me
 					}
 				default:
 					log.Warn("unknown message type, ignore it",
-						zap.String("type", targetMessage.Type.String()),
-						zap.Any("msg", msg))
+						zap.String("type", targetMessage.Type.String()))
 				}
 			}
 		}

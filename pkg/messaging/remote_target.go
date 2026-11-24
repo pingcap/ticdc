@@ -479,13 +479,6 @@ func (s *remoteMessageTarget) runSendMessages(ctx context.Context, streamType st
 		if err != nil {
 			s.collectErr(err)
 		}
-		log.Info("exit runSendMessages",
-			zap.Stringer("localID", s.messageCenterID),
-			zap.String("localAddr", s.localAddr),
-			zap.Stringer("remoteID", s.targetId),
-			zap.String("remoteAddr", s.targetAddr),
-			zap.String("streamType", streamType),
-			zap.Error(err))
 	}()
 
 	// wait stream ready
@@ -552,13 +545,6 @@ func (s *remoteMessageTarget) runReceiveMessages(ctx context.Context, streamType
 		if err != nil {
 			s.collectErr(err)
 		}
-		log.Info("exit runReceiveMessages",
-			zap.Stringer("localID", s.messageCenterID),
-			zap.String("localAddr", s.localAddr),
-			zap.Stringer("remoteID", s.targetId),
-			zap.String("remoteAddr", s.targetAddr),
-			zap.String("streamType", streamType),
-			zap.Error(err))
 	}()
 
 	// wait stream ready

@@ -141,24 +141,3 @@ func (c *MockTiKVClient) GetKeyspaceEncryptionMeta(ctx context.Context, keyspace
 	// This simulates classic architecture or unconfigured encryption
 	return nil, cerrors.ErrEncryptionMetaNotFound
 }
-
-// SetKeyspaceMeta sets mock encryption metadata for a keyspace (for testing)
-func (c *MockTiKVClient) SetKeyspaceMeta(keyspaceID uint32, meta *EncryptionMeta) {
-	c.metaMap[keyspaceID] = meta
-}
-
-// SetKeyspaceNotFound sets a keyspace to return cerrors.ErrEncryptionMetaNotFound (for testing)
-func (c *MockTiKVClient) SetKeyspaceNotFound(keyspaceID uint32) {
-	c.notFoundKeyspaces[keyspaceID] = true
-}
-
-// ClearKeyspaceNotFound clears the not found flag for a keyspace (for testing)
-func (c *MockTiKVClient) ClearKeyspaceNotFound(keyspaceID uint32) {
-	delete(c.notFoundKeyspaces, keyspaceID)
-}
-
-// GetKeyspaceMeta gets the stored mock metadata (for testing)
-func (c *MockTiKVClient) GetKeyspaceMeta(keyspaceID uint32) (*EncryptionMeta, bool) {
-	meta, ok := c.metaMap[keyspaceID]
-	return meta, ok
-}

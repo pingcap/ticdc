@@ -146,7 +146,7 @@ func (h *regionEventHandler) Handle(span *subscribedSpan, events ...regionEvent)
 				}
 			}
 		} else {
-			log.Panic("should not reach", zap.Any("event", event), zap.Any("events", events))
+			log.Panic("should not reach")
 		}
 	}
 	tryAdvanceResolvedTs := func() {

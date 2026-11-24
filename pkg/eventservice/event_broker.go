@@ -914,7 +914,7 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask) {
 			}
 			c.sendResolvedTs(task, re.ResolvedTs)
 		default:
-			log.Panic("unknown event type", zap.Any("event", e))
+			log.Panic("unknown event type")
 		}
 	}
 	if progress.valid {

@@ -50,31 +50,6 @@ type RowChangedEvent struct {
 	Checksum *integrity.Checksum
 }
 
-// GetTableID returns the physical table ID of the event.
-func (r *RowChangedEvent) GetTableID() int64 {
-	return r.PhysicalTableID
-}
-
-// GetColumns returns the columns of the event
-func (r *RowChangedEvent) GetColumns() []*common.Column {
-	return r.Columns
-}
-
-// IsDelete returns true if the row is a delete event
-func (r *RowChangedEvent) IsDelete() bool {
-	return len(r.PreColumns) != 0 && len(r.Columns) == 0
-}
-
-// IsInsert returns true if the row is an insert event
-func (r *RowChangedEvent) IsInsert() bool {
-	return len(r.PreColumns) == 0 && len(r.Columns) != 0
-}
-
-// IsUpdate returns true if the row is an update event
-func (r *RowChangedEvent) IsUpdate() bool {
-	return len(r.PreColumns) != 0 && len(r.Columns) != 0
-}
-
 type MQRowEvent struct {
 	Key      TopicPartitionKey
 	RowEvent RowEvent

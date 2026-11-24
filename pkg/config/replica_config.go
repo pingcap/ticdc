@@ -140,13 +140,6 @@ type Duration struct {
 	time.Duration
 }
 
-// UnmarshalText unmarshal byte to duration
-func (d *Duration) UnmarshalText(text []byte) error {
-	var err error
-	d.Duration, err = time.ParseDuration(string(text))
-	return err
-}
-
 // ReplicaConfig represents some addition replication config for a changefeed
 type ReplicaConfig replicaConfig
 

@@ -428,9 +428,6 @@ func (e *eventStore) Name() string {
 
 func (e *eventStore) Run(ctx context.Context) error {
 	log.Info("event store start to run")
-	defer func() {
-		log.Info("event store exited")
-	}()
 
 	eg, ctx := errgroup.WithContext(ctx)
 	for _, p := range e.writeTaskPools {
@@ -1717,8 +1714,7 @@ func (e *eventStore) handleMessage(_ context.Context, targetMessage *messaging.T
 			e.setCoordinatorInfo(targetMessage.From)
 		default:
 			log.Warn("unknown message type, ignore it",
-				zap.String("type", targetMessage.Type.String()),
-				zap.Any("msg", msg))
+				zap.String("type", targetMessage.Type.String()))
 		}
 	}
 	return nil
