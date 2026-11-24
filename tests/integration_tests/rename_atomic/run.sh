@@ -11,9 +11,9 @@ set -euo pipefail
 #    renames are replayed as one atomic statement: s*_routed = 20 and
 #    t*_routed = 0.
 # 4. Restart CDC and verify replication resumes.
-# 5. RENAME s* TO r* upstream, poll that the downstream never exposes a
-#    partial state, then kill and restart downstream. The retried rename
-#    must still complete atomically.
+# 5. RENAME s* TO r* upstream, wait until the downstream DDL job is running,
+#    then kill and restart downstream. The retried rename must still complete
+#    atomically.
 
 CUR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 source "$CUR/../_utils/test_prepare"
@@ -24,7 +24,6 @@ TABLE_COUNT=20
 DB_NAME=rename_atomic
 REDO_DIR="/tmp/tidb_cdc_test/$TEST_NAME/redo"
 CHANGEFEED_ID=rename-atomic
-REPLICATE_SECONDS=1
 
 function cleanup_redo_dir() {
 	rm -rf "$REDO_DIR"
@@ -117,6 +116,38 @@ function kill_downstream_tidb() {
 	while lsof -ti tcp:"$DOWN_TIDB_PORT" -sTCP:LISTEN >/dev/null 2>&1; do
 		sleep 0.1
 	done
+}
+
+function observe_running_rename_and_kill_downstream() {
+	local poll_sql
+	local state
+	local i
+
+	# Poll for ddl job running state.
+	poll_sql="SELECT IF(job_state.state = 'running', job_state.state, SLEEP(0.01))
+		 FROM (SELECT COALESCE((SELECT STATE FROM information_schema.ddl_jobs
+		       WHERE JOB_TYPE = 'rename tables'
+		         AND QUERY LIKE '%s1_routed%r1_routed%'
+		       ORDER BY JOB_ID DESC LIMIT 1), '') AS state) AS job_state;"
+	while IFS= read -r state; do
+		case "$state" in
+		running)
+			echo "[$(date)] Observed running downstream rename job"
+			kill_downstream_tidb
+			return 0
+			;;
+		synced | done)
+			echo "[$(date)] Failed, the downstream rename completed before it could be interrupted: state=$state" >&2
+			exit 1
+			;;
+		esac
+	done < <(for i in $(seq 1 10000); do
+		printf '%s\n' "$poll_sql"
+	done | mysql -uroot \
+		-h "$DOWN_TIDB_HOST" -P "$DOWN_TIDB_PORT" \
+		--default-character-set utf8mb4 -nNB 2>/dev/null)
+	echo "[$(date)] Failed, timed out waiting for the downstream rename job to run" >&2
+	exit 1
 }
 
 function start_downstream_tidb() {
@@ -242,15 +273,18 @@ function run() {
 		${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT} && check_contains 'row_count: 1'"
 
 	echo "[$(date)] Renaming upstream tables again"
-	run_sql_file "$CUR/data/rename_tables_2nd.sql" "$UP_TIDB_HOST" "$UP_TIDB_PORT"
-	for _ in $(seq 1 $((REPLICATE_SECONDS * 5))); do
-		# The downstream must only expose fully renamed tables
-		assert_rename_is_atomic '^s[0-9]+_routed$' '^r[0-9]+_routed$'
-		sleep 0.2
-	done
+	observe_running_rename_and_kill_downstream &
+	local observer_pid=$!
+	run_sql_file "$CUR/data/rename_tables_2nd.sql" "$UP_TIDB_HOST" "$UP_TIDB_PORT" \
+		>"$WORK_DIR/rename_tables_2nd.log" 2>&1 &
+	local rename_pid=$!
+	wait "$observer_pid"
+	if ! wait "$rename_pid"; then
+		echo "[$(date)] Upstream rename failed" >&2
+		cat "$WORK_DIR/rename_tables_2nd.log" >&2
+		exit 1
+	fi
 
-	echo "[$(date)] Killing and restarting downstream"
-	kill_downstream_tidb
 	start_downstream_tidb
 
 	wait_for_complete_rename '^s[0-9]+_routed$' '^r[0-9]+_routed$'

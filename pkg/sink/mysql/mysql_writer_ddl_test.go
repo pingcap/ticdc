@@ -15,6 +15,7 @@
 package mysql
 
 import (
+	"context"
 	"fmt"
 	"strings"
 	"testing"
@@ -239,5 +240,25 @@ func TestFlushDDLEventSkipsBlankRenameTablesQuery(t *testing.T) {
 	// The event is skipped before opening a transaction, so no downstream SQL
 	// or transaction lifecycle is expected.
 	require.NoError(t, writer.FlushDDLEvent(event))
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestWaitDDLDoneUsesExecutedRenameTablesQuery(t *testing.T) {
+	writer, db, mock := newTestMysqlWriterForTiDB(t)
+	defer db.Close()
+	writer.ddlPollInterval = time.Millisecond
+
+	event := &commonEvent.DDLEvent{
+		Type:  byte(model.ActionRenameTables),
+		Query: "RENAME TABLE `test`.`t1` TO `test`.`t2`;RENAME TABLE `test`.`t3` TO `test`.`t4`;",
+	}
+	executedQuery := "RENAME TABLE `test`.`t1` TO `test`.`t2`, `test`.`t3` TO `test`.`t4`"
+	createTime := "2026-11-24 12:00:00.000000"
+	mock.ExpectQuery(checkRunningSQL).
+		WithArgs(createTime, executedQuery).
+		WillReturnRows(sqlmock.NewRows([]string{"QUERY", "STATE", "JOB_ID", "JOB_TYPE", "SCHEMA_STATE"}).
+			AddRow(executedQuery, "synced", "1", "rename tables", "public"))
+
+	require.NoError(t, writer.waitDDLDone(context.Background(), event, createTime))
 	require.NoError(t, mock.ExpectationsWereMet())
 }

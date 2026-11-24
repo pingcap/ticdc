@@ -300,6 +300,18 @@ func (w *Writer) useAsyncDB(event *commonEvent.DDLEvent) bool {
 
 // waitDDLDone wait current ddl
 func (w *Writer) waitDDLDone(ctx context.Context, ddl *commonEvent.DDLEvent, ddlCreateTime string) error {
+	query := ddl.GetDDLQuery()
+	if timodel.ActionType(ddl.Type) == timodel.ActionRenameTables {
+		executedQuery, skip, err := commonEvent.FixRenameTablesQuery(ddl)
+		if err != nil {
+			return errors.Trace(err)
+		}
+		if skip {
+			return nil
+		}
+		query = executedQuery
+	}
+
 	ticker := time.NewTicker(w.ddlPollInterval)
 	ticker1 := time.NewTicker(10 * time.Minute)
 	defer ticker.Stop()
@@ -310,28 +322,28 @@ func (w *Writer) waitDDLDone(ctx context.Context, ddl *commonEvent.DDLEvent, ddl
 			return ctx.Err()
 		case <-ticker.C:
 		case <-ticker1.C:
-			log.Info("DDL is still running downstream, it blocks other DDL or DML events", zap.String("ddl", ddl.Query), zap.String("ddlCreateTime", ddlCreateTime))
+			log.Info("DDL is still running downstream, it blocks other DDL or DML events", zap.String("ddl", query), zap.String("ddlCreateTime", ddlCreateTime))
 		}
 
-		state, err := getDDLStateFromTiDB(ctx, w.db, ddl.Query, ddlCreateTime)
+		state, err := getDDLStateFromTiDB(ctx, w.db, query, ddlCreateTime)
 		if err != nil {
 			log.Error("Error when getting DDL state from TiDB", zap.Error(err))
 		}
 		switch state {
 		case timodel.JobStateDone, timodel.JobStateSynced:
-			log.Info("DDL replicate success", zap.String("ddl", ddl.Query), zap.String("ddlCreateTime", ddlCreateTime))
+			log.Info("DDL replicate success", zap.String("ddl", query), zap.String("ddlCreateTime", ddlCreateTime))
 			return nil
 		case timodel.JobStateCancelled, timodel.JobStateRollingback, timodel.JobStateRollbackDone, timodel.JobStateCancelling:
-			return errors.ErrExecDDLFailed.GenWithStackByArgs(ddl.Query)
+			return errors.ErrExecDDLFailed.GenWithStackByArgs(query)
 		case timodel.JobStateRunning, timodel.JobStateQueueing:
 			switch ddl.GetDDLType() {
 			// returned immediately if not block dml
 			case timodel.ActionAddIndex:
-				log.Info("DDL is running downstream", zap.String("ddl", ddl.Query), zap.String("ddlCreateTime", ddlCreateTime), zap.Any("ddlState", state))
+				log.Info("DDL is running downstream", zap.String("ddl", query), zap.String("ddlCreateTime", ddlCreateTime), zap.Any("ddlState", state))
 				return nil
 			}
 		default:
-			log.Warn("Unexpected DDL state, may not be found downstream, retry later", zap.String("ddl", ddl.Query), zap.String("ddlCreateTime", ddlCreateTime), zap.Any("ddlState", state))
+			log.Warn("Unexpected DDL state, may not be found downstream, retry later", zap.String("ddl", query), zap.String("ddlCreateTime", ddlCreateTime), zap.Any("ddlState", state))
 			return errors.ErrDDLStateNotFound.GenWithStackByArgs(state)
 		}
 	}
