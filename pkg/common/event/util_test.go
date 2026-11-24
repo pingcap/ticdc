@@ -19,18 +19,40 @@ import (
 	"github.com/pingcap/ticdc/pkg/common"
 	timodel "github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/tidb/pkg/parser"
+	"github.com/pingcap/tidb/pkg/parser/ast"
 	"github.com/stretchr/testify/require"
 )
 
-func TestRestoreEscapesBackslashesInStringLiterals(t *testing.T) {
+func TestRestorePreservesBackslashesInStringLiterals(t *testing.T) {
 	t.Parallel()
+
+	commentValue := func(stmt ast.StmtNode) string {
+		create, ok := stmt.(*ast.CreateTableStmt)
+		require.True(t, ok)
+		require.Len(t, create.Cols, 1)
+		for _, option := range create.Cols[0].Options {
+			if option.Tp == ast.ColumnOptionComment {
+				value, ok := option.Expr.(ast.ValueExpr)
+				require.True(t, ok)
+				return value.GetString()
+			}
+		}
+		require.FailNow(t, "column comment not found")
+		return ""
+	}
 
 	stmt, err := parser.New().ParseOneStmt(
 		`CREATE TABLE t (a VARCHAR(20) COMMENT 'trailing\\')`, "", "")
 	require.NoError(t, err)
+	expected := commentValue(stmt)
+
 	restored, err := Restore(stmt)
 	require.NoError(t, err)
-	require.Contains(t, restored, `COMMENT 'trailing\\\\'`)
+	require.Contains(t, restored, `COMMENT 'trailing\\'`)
+
+	reparsed, err := parser.New().ParseOneStmt(restored, "", "")
+	require.NoError(t, err)
+	require.Equal(t, expected, commentValue(reparsed))
 }
 
 func TestIsSplitable(t *testing.T) {
