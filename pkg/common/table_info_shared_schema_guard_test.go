@@ -125,7 +125,12 @@ func TestLatestTiDBTableInfoSharedSchemaGuard(t *testing.T) {
 			modulePath:      "github.com/pingcap/tidb/pkg/parser",
 			pkgRelativePath: "types",
 			typeName:        "FieldType",
-			expectedFields:  []string{"tp", "flag", "flen", "decimal", "charset", "collate", "elems", "elemsIsBinaryLit", "array"},
+			expectedFields: []string{
+				"tp", "flag", "flen", "decimal", "charset", "collate", "elems", "elemsIsBinaryLit", "array",
+				// Geometry subtype is preserved by FieldType JSON and compared by Equal,
+				// so shared-schema equality separates it even when schema hashes collide.
+				"subtype",
+			},
 		},
 	}
 
