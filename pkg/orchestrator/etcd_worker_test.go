@@ -272,7 +272,7 @@ func TestEtcdSum(t *testing.T) {
 				return errors.Trace(err)
 			}
 
-			return errors.Trace(etcdWorker.Run(ctx, nil, 10*time.Millisecond, "owner"))
+			return errors.Trace(etcdWorker.Run(ctx, nil, 10*time.Millisecond))
 		})
 	}
 
@@ -365,7 +365,7 @@ func TestLinearizability(t *testing.T) {
 	require.Nil(t, err)
 	errg := &errgroup.Group{}
 	errg.Go(func() error {
-		return reactor.Run(ctx, nil, 10*time.Millisecond, "owner")
+		return reactor.Run(ctx, nil, 10*time.Millisecond)
 	})
 
 	time.Sleep(500 * time.Millisecond)
@@ -456,7 +456,7 @@ func TestFinished(t *testing.T) {
 		state: make(map[string]string),
 	}, &migrate.NoOpMigrator{})
 	require.Nil(t, err)
-	err = reactor.Run(ctx, nil, 10*time.Millisecond, "owner")
+	err = reactor.Run(ctx, nil, 10*time.Millisecond)
 	require.Nil(t, err)
 	resp, err := cli.Get(ctx, prefix+"/key1")
 	require.Nil(t, err)
@@ -528,7 +528,7 @@ func TestCover(t *testing.T) {
 		state: make(map[string]string),
 	}, &migrate.NoOpMigrator{})
 	require.Nil(t, err)
-	err = reactor.Run(ctx, nil, 10*time.Millisecond, "owner")
+	err = reactor.Run(ctx, nil, 10*time.Millisecond)
 	require.Nil(t, err)
 	resp, err := cli.Get(ctx, prefix+"/key1")
 	require.Nil(t, err)
@@ -610,7 +610,7 @@ func TestEmptyTxn(t *testing.T) {
 		state: make(map[string]string),
 	}, &migrate.NoOpMigrator{})
 	require.Nil(t, err)
-	err = reactor.Run(ctx, nil, 10*time.Millisecond, "owner")
+	err = reactor.Run(ctx, nil, 10*time.Millisecond)
 	require.Nil(t, err)
 	resp, err := cli.Get(ctx, prefix+"/key1")
 	require.Nil(t, err)
@@ -680,7 +680,7 @@ func TestEmptyOrNil(t *testing.T) {
 		state: make(map[string]string),
 	}, &migrate.NoOpMigrator{})
 	require.Nil(t, err)
-	err = reactor.Run(ctx, nil, 10*time.Millisecond, "owner")
+	err = reactor.Run(ctx, nil, 10*time.Millisecond)
 	require.Nil(t, err)
 	resp, err := cli.Get(ctx, prefix+"/key1")
 	require.Nil(t, err)
@@ -766,7 +766,7 @@ func TestModifyAfterDelete(t *testing.T) {
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		err := worker1.Run(ctx, nil, time.Millisecond*100, "owner")
+		err := worker1.Run(ctx, nil, time.Millisecond*100)
 		require.Nil(t, err)
 	}()
 
@@ -781,7 +781,7 @@ func TestModifyAfterDelete(t *testing.T) {
 	}, &migrate.NoOpMigrator{})
 	require.Nil(t, err)
 
-	err = worker2.Run(ctx, nil, time.Millisecond*100, "owner")
+	err = worker2.Run(ctx, nil, time.Millisecond*100)
 	require.Nil(t, err)
 
 	modifyReactor.waitOnCh <- struct{}{}

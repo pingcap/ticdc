@@ -30,17 +30,15 @@ import (
 type EtcdWatcher struct {
 	etcdClient etcd.CDCEtcdClient
 	baseKey    string
-	role       string
 	session    *concurrency.Session
 }
 
 func NewEtcdWatcher(etcdClient etcd.CDCEtcdClient, session *concurrency.Session,
-	baseKey string, role string,
+	baseKey string,
 ) *EtcdWatcher {
 	return &EtcdWatcher{
 		etcdClient: etcdClient,
 		baseKey:    baseKey,
-		role:       role,
 		session:    session,
 	}
 }
@@ -51,14 +49,12 @@ func (w *EtcdWatcher) RunEtcdWorker(
 	reactorState *orchestrator.GlobalReactorState,
 	timerInterval time.Duration,
 ) error {
-	log.Info("start to run etcd worker", zap.String("role", w.role))
-	reactorState.Role = w.role
 	etcdWorker, err := orchestrator.NewEtcdWorker(w.etcdClient,
 		w.baseKey, reactor, reactorState, &migrate.NoOpMigrator{})
 	if err != nil {
 		return errors.Trace(err)
 	}
-	if err := etcdWorker.Run(ctx, w.session, timerInterval, w.role); err != nil {
+	if err := etcdWorker.Run(ctx, w.session, timerInterval); err != nil {
 		// We check ttl of lease instead of check `session.Done`, because
 		// `session.Done` is only notified when etcd client establish a
 		// new keepalive request, there could be a time window as long as

@@ -38,7 +38,6 @@ const (
 // GlobalReactorState represents a global state which stores all key-value pairs in ETCD
 type GlobalReactorState struct {
 	ClusterID      string
-	Role           string
 	Owner          map[string]struct{}
 	Captures       map[config.CaptureID]*config.CaptureInfo
 	Upstreams      map[config.UpstreamID]*config.UpstreamInfo
@@ -99,7 +98,6 @@ func (s *GlobalReactorState) UpdatePendingChange() {
 func (s *GlobalReactorState) removeCapture(captureID config.CaptureID, reason string) {
 	log.Info("remote capture offline",
 		zap.Any("info", s.Captures[captureID]),
-		zap.String("role", s.Role),
 		zap.String("reason", reason))
 	delete(s.Captures, captureID)
 	if s.onCaptureRemoved != nil {
@@ -128,7 +126,7 @@ func (s *GlobalReactorState) Update(key util.EtcdKey, value []byte, _ bool) erro
 	case etcd.CDCKeyTypeCapture:
 		if value == nil {
 			captureInfo := s.Captures[k.CaptureID]
-			log.Info("remote capture offline detected", zap.Any("info", captureInfo), zap.String("role", s.Role))
+			log.Info("remote capture offline detected", zap.Any("info", captureInfo))
 			if captureInfo != nil && captureInfo.ID == k.CaptureID && captureInfo.WriteStopped {
 				s.removeCapture(k.CaptureID, "capture reported writes stopped")
 				return nil
@@ -146,7 +144,7 @@ func (s *GlobalReactorState) Update(key util.EtcdKey, value []byte, _ bool) erro
 			return cerrors.ErrUnmarshalFailed.Wrap(err).GenWithStackByArgs()
 		}
 
-		log.Info("remote capture online", zap.Any("info", newCaptureInfo), zap.String("role", s.Role))
+		log.Info("remote capture online", zap.Any("info", newCaptureInfo))
 		// A fresh online event supersedes any pending delayed removal for the same capture.
 		delete(s.toRemoveCaptures, k.CaptureID)
 		delete(s.writeFencedReplacements, k.CaptureID)
@@ -177,8 +175,7 @@ func (s *GlobalReactorState) Update(key util.EtcdKey, value []byte, _ bool) erro
 		if value == nil {
 			log.Info("upstream is removed",
 				zap.Uint64("upstreamID", k.UpstreamID),
-				zap.Any("info", s.Upstreams[k.UpstreamID]),
-				zap.String("role", s.Role))
+				zap.Any("info", s.Upstreams[k.UpstreamID]))
 			delete(s.Upstreams, k.UpstreamID)
 			return nil
 		}
@@ -188,12 +185,11 @@ func (s *GlobalReactorState) Update(key util.EtcdKey, value []byte, _ bool) erro
 			return cerrors.ErrUnmarshalFailed.Wrap(err).GenWithStackByArgs()
 		}
 		log.Info("new upstream is add", zap.Uint64("upstream", k.UpstreamID),
-			zap.Any("info", newUpstreamInfo), zap.String("role", s.Role))
+			zap.Any("info", newUpstreamInfo))
 		s.Upstreams[k.UpstreamID] = &newUpstreamInfo
 	case etcd.CDCKeyTypeMetaVersion:
 	default:
-		log.Warn("receive an unexpected etcd event", zap.String("key", key.String()),
-			zap.String("role", s.Role))
+		log.Warn("receive an unexpected etcd event", zap.String("key", key.String()))
 	}
 	return nil
 }

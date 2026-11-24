@@ -170,8 +170,7 @@ func (c *NodeManager) Run(ctx context.Context) error {
 	watcher := NewEtcdWatcher(c.etcdClient,
 		c.session,
 		// captures info key prefix
-		etcd.BaseKey(c.etcdClient.GetClusterID())+"/__cdc_meta__/capture",
-		"capture-manager")
+		etcd.BaseKey(c.etcdClient.GetClusterID())+"/__cdc_meta__/capture")
 
 	state := orchestrator.NewGlobalState(c.etcdClient.GetClusterID(), cfg.CaptureSessionTTL)
 	captureSafeToRescheduleDelaySeconds.Set(float64(state.CaptureRemoveTTLSeconds()))

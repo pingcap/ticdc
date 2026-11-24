@@ -83,7 +83,7 @@ type Client interface {
 	Get(ctx context.Context, key string, opts ...clientV3.OpOption) (resp *clientV3.GetResponse, err error)
 	Delete(ctx context.Context, key string, opts ...clientV3.OpOption) (resp *clientV3.DeleteResponse, err error)
 	Txn(ctx context.Context, cmps []clientV3.Cmp, opsThen, opsElse []clientV3.Op) (resp *clientV3.TxnResponse, err error)
-	Watch(ctx context.Context, key string, role string, opts ...clientV3.OpOption) clientV3.WatchChan
+	Watch(ctx context.Context, key string, opts ...clientV3.OpOption) clientV3.WatchChan
 	Revoke(ctx context.Context, id clientV3.LeaseID) (resp *clientV3.LeaseRevokeResponse, err error)
 	Grant(ctx context.Context, ttl int64) (resp *clientV3.LeaseGrantResponse, err error)
 	TimeToLive(ctx context.Context, lease clientV3.LeaseID, opts ...clientV3.LeaseOption) (resp *clientV3.LeaseTimeToLiveResponse, err error)
@@ -256,17 +256,17 @@ func (c *ClientImpl) TimeToLive(
 
 // Watch delegates request to clientV3.Watcher.Watch
 func (c *ClientImpl) Watch(
-	ctx context.Context, key string, role string, opts ...clientV3.OpOption,
+	ctx context.Context, key string, opts ...clientV3.OpOption,
 ) clientV3.WatchChan {
 	watchCh := make(chan clientV3.WatchResponse, etcdWatchChBufferSize)
-	go c.WatchWithChan(ctx, watchCh, key, role, opts...)
+	go c.WatchWithChan(ctx, watchCh, key, opts...)
 	return watchCh
 }
 
 // WatchWithChan maintains a watchCh and sends all msg from the watchCh to outCh
 func (c *ClientImpl) WatchWithChan(
 	ctx context.Context, outCh chan<- clientV3.WatchResponse,
-	key string, role string, opts ...clientV3.OpOption,
+	key string, opts ...clientV3.OpOption,
 ) {
 	// get initial revision from opts to avoid revision fall back
 	lastRevision := getRevisionFromWatchOpts(opts...)
@@ -282,7 +282,7 @@ func (c *ClientImpl) WatchWithChan(
 		cancel()
 		close(outCh)
 
-		log.Info("WatchWithChan exited", zap.String("role", role))
+		log.Info("WatchWithChan exited")
 	}()
 
 	for {
@@ -307,8 +307,7 @@ func (c *ClientImpl) WatchWithChan(
 				case <-ticker.C:
 					if c.clock.Since(lastReceivedResponseTime) >= etcdWatchChTimeoutDuration {
 						log.Warn("etcd client outCh blocking too long, the etcdWorker may be stuck",
-							zap.Duration("duration", c.clock.Since(lastReceivedResponseTime)),
-							zap.String("role", role))
+							zap.Duration("duration", c.clock.Since(lastReceivedResponseTime)))
 					}
 				}
 			}
@@ -322,8 +321,7 @@ func (c *ClientImpl) WatchWithChan(
 				// cancel the last cancel func to reset it
 				log.Warn("etcd client watchCh blocking too long, reset the watchCh",
 					zap.Duration("duration", c.clock.Since(lastReceivedResponseTime)),
-					zap.Stack("stack"),
-					zap.String("role", role))
+					zap.Stack("stack"))
 				cancel()
 				watchCtx, cancel = context.WithCancel(ctx)
 				// to avoid possible context leak warning from govet
