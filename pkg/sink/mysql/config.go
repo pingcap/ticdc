@@ -579,7 +579,12 @@ func getTimezone(serverTimezone string, values url.Values, timezone *string) err
 		"sink-uri and the downstream database are consistent. " +
 		"If the downstream database does not load the timezone information, " +
 		"you can refer to https://dev.mysql.com/doc/refman/8.0/en/mysql-tzinfo-to-sql.html."
-	s := values.Get("time-zone")
+	// URI values override the merged TOML configuration, including an explicitly
+	// empty value. A missing URI key must not clear the TOML value.
+	s := *timezone
+	if values.Has("time-zone") {
+		s = values.Get("time-zone")
+	}
 	if len(s) == 0 {
 		*timezone = ""
 		log.Warn("Because time-zone is empty, " +
@@ -588,14 +593,22 @@ func getTimezone(serverTimezone string, values url.Values, timezone *string) err
 		return nil
 	}
 
-	changefeedTimezone, err := util.GetTimezone(s)
+	changefeedTimezone, err := parseMySQLTimezone(s)
 	if err != nil {
 		return cerror.WrapError(cerror.ErrMySQLInvalidConfig, err)
 	}
-	*timezone = fmt.Sprintf(`"%s"`, changefeedTimezone.String())
 	// We need to check whether the timezone of the TiCDC server and the sink-uri are consistent.
 	// If they are inconsistent, it may cause the data to be inconsistent.
-	if changefeedTimezone.String() != serverTimezone {
+	consistent := changefeedTimezone.String() == serverTimezone
+	if s[0] == '+' || s[0] == '-' {
+		serverLocation, err := util.GetTimezone(serverTimezone)
+		if err != nil {
+			return cerror.WrapError(cerror.ErrMySQLInvalidConfig, err)
+		}
+		_, offset := time.Unix(0, 0).In(changefeedTimezone).Zone()
+		consistent = hasConstantTimezoneOffset(serverLocation, offset)
+	}
+	if !consistent {
 		return cerror.WrapError(cerror.ErrMySQLInvalidConfig, errors.Errorf(
 			"the timezone of the TiCDC server and the sink-uri are inconsistent. "+
 				"TiCDC server timezone: %s, sink-uri timezone: %s. "+
@@ -604,6 +617,7 @@ func getTimezone(serverTimezone string, values url.Values, timezone *string) err
 			serverTimezone, changefeedTimezone.String()))
 	}
 
+	*timezone = fmt.Sprintf(`"%s"`, changefeedTimezone.String())
 	return nil
 }
 
@@ -676,4 +690,54 @@ func (c *Config) setWorkerCountByDownstream() {
 	} else {
 		c.WorkerCount = DefaultMySQLWorkerCount
 	}
+}
+
+// parseMySQLTimezone preserves named timezone handling and additionally accepts
+// MySQL 8.0.19+ numeric offsets. The canonical name must remain numeric so that
+// downstream connections do not require populated MySQL timezone tables.
+func parseMySQLTimezone(name string) (*time.Location, error) {
+	if len(name) == 0 || (name[0] != '+' && name[0] != '-') {
+		return util.GetTimezone(name)
+	}
+	// The standard layout requires two hour digits; MySQL also accepts +8:00.
+	canonical := name
+	if len(canonical) == 5 && canonical[2] == ':' {
+		canonical = canonical[:1] + "0" + canonical[1:]
+	}
+	parsed, err := time.Parse("-07:00", canonical)
+	if err != nil {
+		return nil, errors.Wrapf(err, "invalid MySQL time zone offset %q", name)
+	}
+	_, offset := parsed.Zone()
+	// time.Parse permits minute 60 and offsets outside MySQL's supported range.
+	if canonical[4:] == "60" || offset < -(13*60+59)*60 || offset > 14*60*60 {
+		return nil, errors.Errorf("invalid MySQL time zone offset %q: must be between -13:59 and +14:00", name)
+	}
+	// Do not reuse parsed.Location(): Parse may select the local timezone, and
+	// the downstream session needs a numeric name, including +00:00 for zero.
+	return time.FixedZone(parsed.Format("-07:00"), offset), nil
+}
+
+// hasConstantTimezoneOffset checks every timezone interval, not just today's
+// offset: historical TIMESTAMP values and future DST transitions must be safe
+// as well. Cover all calendar years representable by MySQL date/time values.
+func hasConstantTimezoneOffset(loc *time.Location, offset int) bool {
+	end := time.Date(10000, time.January, 1, 0, 0, 0, 0, time.UTC)
+	for instant := time.Date(0, time.January, 1, 0, 0, 0, 0, time.UTC); instant.Before(end); {
+		local := instant.In(loc)
+		_, actual := local.Zone()
+		if actual != offset {
+			return false
+		}
+		_, next := local.ZoneBounds()
+		if next.IsZero() || !next.Before(end) {
+			return true
+		}
+		if !next.After(instant) {
+			// Reject rather than loop if a timezone rule cannot be advanced.
+			return false
+		}
+		instant = next
+	}
+	return true
 }

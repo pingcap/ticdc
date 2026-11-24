@@ -15,11 +15,13 @@ package mysql
 
 import (
 	"database/sql"
+	"fmt"
 	"net/url"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/BurntSushi/toml"
 	"github.com/DATA-DOG/go-sqlmock"
 	dmysql "github.com/go-sql-driver/mysql"
 	"github.com/pingcap/ticdc/pkg/common"
@@ -498,17 +500,17 @@ func TestApplyTimezone(t *testing.T) {
 			name:                 "sink-uri timezone different from server timezone",
 			noChangefeedTimezone: false,
 			changefeedTimezone:   "UTC",
-			serverTimezone:       localTimezone,
+			serverTimezone:       time.FixedZone("Asia/Shanghai", 8*60*60),
 			expectedHasErr:       true,
 			expectedErr:          "Please make sure that the timezone of the TiCDC server",
 		},
 		{
-			name:                 "unsupported timezone format",
+			name:                 "offset different from server timezone",
 			noChangefeedTimezone: false,
 			changefeedTimezone:   "%2B08%3A00", // +08:00
 			serverTimezone:       time.UTC,
 			expectedHasErr:       true,
-			expectedErr:          "unknown time zone +08:00",
+			expectedErr:          "Please make sure that the timezone of the TiCDC server",
 		},
 	} {
 		tc := test
@@ -535,6 +537,272 @@ func TestApplyTimezone(t *testing.T) {
 			} else {
 				require.Nil(t, err)
 				require.Equal(t, tc.expected, cfg.Timezone)
+			}
+		})
+	}
+}
+
+func TestParseMySQLTimezone(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		input    string
+		expected string
+		offset   int
+	}{
+		{input: "UTC", expected: "UTC"},
+		{input: "Etc/UTC", expected: "Etc/UTC"},
+		{input: "+0:00", expected: "+00:00"},
+		{input: "-00:00", expected: "+00:00"},
+		{input: "-0:00", expected: "+00:00"},
+		{input: "+8:00", expected: "+08:00", offset: 8 * 3600},
+		{input: "-6:00", expected: "-06:00", offset: -6 * 3600},
+		{input: "+05:30", expected: "+05:30", offset: 5*3600 + 30*60},
+		{input: "-03:30", expected: "-03:30", offset: -(3*3600 + 30*60)},
+		{input: "+00:01", expected: "+00:01", offset: 60},
+		{input: "-00:01", expected: "-00:01", offset: -60},
+		{input: "-13:59", expected: "-13:59", offset: -(13*3600 + 59*60)},
+		{input: "+14:00", expected: "+14:00", offset: 14 * 3600},
+	} {
+		t.Run(tc.input, func(t *testing.T) {
+			t.Parallel()
+			loc, err := parseMySQLTimezone(tc.input)
+			require.NoError(t, err)
+			require.Equal(t, tc.expected, loc.String())
+			_, offset := time.Unix(0, 0).In(loc).Zone()
+			require.Equal(t, tc.offset, offset)
+		})
+	}
+	for _, input := range []string{
+		"+14:01", "-14:00", "+24:00", "+08:60", "+08:99", "-13:60",
+		"+00:60", "-00:60", "+13:60", "-12:60", "+8:60",
+		"+8:0", "+008:00", "+0800", "+08:00:00", "+08", "+", "--08:00",
+		"UTC+8", "08:00", " +00:00", "+00:00 ", "+０８:00", "invalid",
+		"-", "+0", "+0:", "+:00", "+0:0", "++08:00", "+-08:00",
+		"+08:0a", "+08:00Z", "+08:00\n", "+08:00\x00", "\"+08:00\"",
+	} {
+		t.Run(input, func(t *testing.T) {
+			t.Parallel()
+			_, err := parseMySQLTimezone(input)
+			require.Error(t, err)
+		})
+	}
+}
+
+func TestParseMySQLTimezoneOffsetRange(t *testing.T) {
+	t.Parallel()
+	// Cover every valid minute plus the values accepted by time.Parse but not
+	// MySQL (minute 60 and hours up to 24), with both hour-width spellings.
+	for _, sign := range []string{"+", "-"} {
+		for hour := 0; hour <= 24; hour++ {
+			for minute := 0; minute <= 60; minute++ {
+				offset := (hour*60 + minute) * 60
+				if sign == "-" {
+					offset = -offset
+				}
+				canonical := fmt.Sprintf("%s%02d:%02d", sign, hour, minute)
+				if offset == 0 {
+					canonical = "+00:00"
+				}
+				for _, name := range []string{
+					fmt.Sprintf("%s%02d:%02d", sign, hour, minute),
+					fmt.Sprintf("%s%d:%02d", sign, hour, minute),
+				} {
+					loc, err := parseMySQLTimezone(name)
+					if minute == 60 || offset < -(13*60+59)*60 || offset > 14*60*60 {
+						require.Error(t, err, name)
+						require.Nil(t, loc, name)
+						continue
+					}
+					require.NoError(t, err, name)
+					require.Equal(t, canonical, loc.String(), name)
+					_, actual := time.Unix(0, 0).In(loc).Zone()
+					require.Equal(t, offset, actual, name)
+					// A numeric offset must remain fixed, even if time.Parse can
+					// reuse the host's Local location with the same offset.
+					start, end := time.Unix(0, 0).In(loc).ZoneBounds()
+					require.True(t, start.IsZero() && end.IsZero(), name)
+				}
+			}
+		}
+	}
+}
+
+func TestConstantTimezoneOffset(t *testing.T) {
+	t.Parallel()
+	for _, offset := range []int{0, 60, -60, 5*3600 + 30*60, -(13*3600 + 59*60), 14 * 3600} {
+		require.True(t, hasConstantTimezoneOffset(time.FixedZone("fixed", offset), offset))
+		require.False(t, hasConstantTimezoneOffset(time.FixedZone("fixed", offset), offset+60))
+	}
+	for _, name := range []string{"UTC", "Etc/UTC", "Etc/GMT-8", "Asia/Shanghai", "America/New_York"} {
+		loc, err := time.LoadLocation(name)
+		require.NoError(t, err)
+		_, offset := time.Date(2026, 1, 1, 0, 0, 0, 0, loc).Zone()
+		require.Equal(t, name != "Asia/Shanghai" && name != "America/New_York", hasConstantTimezoneOffset(loc, offset))
+	}
+	// A future-only rule must not be accepted just because it matches today.
+	// Use a small TZif fixture to avoid relying on the host tzdata version.
+	data := []byte("TZif\x00" + string(make([]byte, 15)))
+	// One 32-bit transition at 2037-01-01, two local time types, four name bytes.
+	data = append(data, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+		0, 0, 0, 1, 0, 0, 0, 2, 0, 0, 0, 4)
+	transition := uint32(time.Date(2037, 1, 1, 0, 0, 0, 0, time.UTC).Unix())
+	data = append(data, byte(transition>>24), byte(transition>>16), byte(transition>>8), byte(transition), 1)
+	data = append(data, 0, 0, 0, 0, 0, 0, 0, 0, 0x0e, 0x10, 0, 2, 'A', 0, 'B', 0)
+	loc, err := time.LoadLocationFromTZData("future", data)
+	require.NoError(t, err)
+	require.False(t, hasConstantTimezoneOffset(loc, 0))
+}
+
+func TestTimezoneConfigPrecedence(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name     string
+		toml     string
+		query    string
+		server   string
+		expected string
+		wantErr  bool
+	}{
+		{name: "default"},
+		{name: "TOML named zone", toml: `time-zone = "UTC"`, expected: `"UTC"`},
+		{name: "TOML offset", toml: `time-zone = "+00:00"`, expected: `"+00:00"`},
+		{name: "TOML empty", toml: `time-zone = ""`},
+		{name: "unrelated URI preserves TOML", toml: `time-zone = "+00:00"`, query: "?worker-count=1", expected: `"+00:00"`},
+		{name: "TOML positive offset", toml: `time-zone = "+8:00"`, server: "Etc/GMT-8", expected: `"+08:00"`},
+		{name: "URI negative offset", query: "?time-zone=-6:00", server: "Etc/GMT+6", expected: `"-06:00"`},
+		{name: "TOML negative zero", toml: `time-zone = "-0:00"`, expected: `"+00:00"`},
+		{name: "URI offset", query: "?time-zone=%2B00:00", expected: `"+00:00"`},
+		{name: "URI overrides TOML", toml: `time-zone = "Asia/Shanghai"`, query: "?time-zone=%2B0%3A00", expected: `"+00:00"`},
+		{name: "URI named overrides TOML", toml: `time-zone = "+08:00"`, query: "?time-zone=UTC", expected: `"UTC"`},
+		{name: "URI empty overrides TOML", toml: `time-zone = "UTC"`, query: "?time-zone="},
+		{name: "URI bare key overrides TOML", toml: `time-zone = "UTC"`, query: "?time-zone"},
+		{name: "valid URI overrides invalid TOML", toml: `time-zone = "invalid"`, query: "?time-zone=%2B00%3A00", expected: `"+00:00"`},
+		{name: "empty URI overrides invalid TOML", toml: `time-zone = "invalid"`, query: "?time-zone="},
+		{name: "invalid TOML", toml: `time-zone = "invalid"`, wantErr: true},
+		{name: "inconsistent TOML", toml: `time-zone = "+08:00"`, wantErr: true},
+		{name: "invalid URI overrides TOML", toml: `time-zone = "UTC"`, query: "?time-zone=invalid", wantErr: true},
+		{name: "unescaped URI plus", query: "?time-zone=+00:00", wantErr: true},
+		{name: "quoted URI offset", query: "?time-zone=%22%2B00:00%22", wantErr: true},
+		{name: "double encoded URI offset", query: "?time-zone=%252B00%253A00", wantErr: true},
+		{name: "TOML minute overflow", toml: `time-zone = "+00:60"`, wantErr: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			replica := config.GetDefaultReplicaConfig()
+			_, err := toml.Decode("[sink.mysql-config]\n"+tc.toml, replica)
+			require.NoError(t, err)
+			cfg := &config.ChangefeedConfig{TimeZone: "UTC", SinkConfig: replica.Sink}
+			if tc.server != "" {
+				cfg.TimeZone = tc.server
+			}
+			uri, err := url.Parse("mysql://root@127.0.0.1:3306/" + tc.query)
+			require.NoError(t, err)
+			sinkConfig := New()
+			err = sinkConfig.Apply(uri, common.NewChangefeedID4Test("default", "timezone"), cfg)
+			if tc.wantErr {
+				require.Error(t, err)
+				return
+			}
+			require.NoError(t, err)
+			require.Equal(t, tc.expected, sinkConfig.Timezone)
+			// Verify the value actually reaching the driver's DSN, not just Apply.
+			dsn, err := GenBasicDSN(sinkConfig)
+			require.NoError(t, err)
+			parsed, err := dmysql.ParseDSN(dsn.FormatDSN())
+			require.NoError(t, err)
+			if tc.expected == "" {
+				require.NotContains(t, parsed.Params, "time_zone")
+			} else {
+				require.Equal(t, tc.expected, parsed.Params["time_zone"])
+			}
+		})
+	}
+}
+
+func TestTimezoneOffsetConsistency(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		server   string
+		sink     string
+		expected string
+		wantErr  bool
+	}{
+		{server: "UTC", sink: "+00:00", expected: `"+00:00"`},
+		{server: "Etc/UTC", sink: "-0:00", expected: `"+00:00"`},
+		{server: "Etc/GMT-8", sink: "+8:00", expected: `"+08:00"`},
+		{server: "Etc/GMT+6", sink: "-6:00", expected: `"-06:00"`},
+		{server: "UTC", sink: "+08:00", wantErr: true},
+		{server: "Asia/Shanghai", sink: "+08:00", wantErr: true},
+		{server: "America/New_York", sink: "-05:00", wantErr: true},
+		{server: "invalid", sink: "+00:00", wantErr: true},
+		{server: "Asia/Shanghai", sink: "Asia/Shanghai", expected: `"Asia/Shanghai"`},
+		{server: "America/New_York", sink: "America/New_York", expected: `"America/New_York"`},
+		{server: "America/New_York", sink: "-04:00", wantErr: true},
+		{server: "Etc/GMT-14", sink: "+14:00", expected: `"+14:00"`},
+	} {
+		t.Run(tc.server+"/"+tc.sink, func(t *testing.T) {
+			t.Parallel()
+			var timezone string
+			err := getTimezone(tc.server, url.Values{"time-zone": {tc.sink}}, &timezone)
+			if tc.wantErr {
+				require.Error(t, err)
+				return
+			}
+			require.NoError(t, err)
+			require.Equal(t, tc.expected, timezone)
+		})
+	}
+}
+
+func TestTimezoneOffsetDSN(t *testing.T) {
+	t.Parallel()
+	for _, timezone := range []string{`"+00:00"`, `"+08:00"`, `"-06:00"`, `"+05:45"`, `"-03:30"`, `"-13:59"`, `"+14:00"`} {
+		t.Run(timezone, func(t *testing.T) {
+			t.Parallel()
+			uri, err := url.Parse("mysql://root@127.0.0.1:3306/")
+			require.NoError(t, err)
+			cfg := New()
+			cfg.sinkURI = uri
+			cfg.Timezone = timezone
+			dsn, err := GenBasicDSN(cfg)
+			require.NoError(t, err)
+			require.Equal(t, timezone, dsn.Params["time_zone"])
+			parsed, err := dmysql.ParseDSN(dsn.FormatDSN())
+			require.NoError(t, err)
+			require.Equal(t, timezone, parsed.Params["time_zone"])
+
+			db, err := MockTestDB(false)
+			require.NoError(t, err)
+			defer db.Close()
+			fullDSN, err := generateDSNByConfig(dsn, cfg, db)
+			require.NoError(t, err)
+			parsed, err = dmysql.ParseDSN(fullDSN)
+			require.NoError(t, err)
+			require.Equal(t, timezone, parsed.Params["time_zone"])
+		})
+	}
+}
+
+func TestParseMySQLTimezoneNamedZones(t *testing.T) {
+	t.Parallel()
+	for _, name := range []string{"UTC", "Etc/UTC", "Asia/Shanghai", "America/New_York"} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			loc, err := parseMySQLTimezone(name)
+			require.NoError(t, err)
+			expected, err := time.LoadLocation(name)
+			require.NoError(t, err)
+			require.Equal(t, expected.String(), loc.String())
+			// Named zones must retain historical and DST rules, not become a
+			// fixed offset based on the current date.
+			for _, year := range []int{1900, 1991, 2026, 2040} {
+				for _, month := range []time.Month{time.January, time.July} {
+					instant := time.Date(year, month, 1, 0, 0, 0, 0, time.UTC)
+					wantName, wantOffset := instant.In(expected).Zone()
+					gotName, gotOffset := instant.In(loc).Zone()
+					require.Equal(t, wantName, gotName)
+					require.Equal(t, wantOffset, gotOffset)
+				}
 			}
 		})
 	}
