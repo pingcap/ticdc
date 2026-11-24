@@ -20,12 +20,14 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/agiledragon/gomonkey/v2"
 	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/filter"
 	"github.com/pingcap/tidb/pkg/meta/model"
+	"github.com/pingcap/tidb/pkg/parser/ast"
 	"github.com/pingcap/tidb/pkg/parser/mysql"
 	"github.com/stretchr/testify/require"
 	"github.com/tinylib/msgp/msgp"
@@ -310,18 +312,76 @@ func TestDDLIgnoreSQLForCreateTables(t *testing.T) {
 	}
 }
 
-// TestCreateTablesInvalidQueries verifies parse errors and mismatched statement counts are rejected.
-func TestCreateTablesInvalidQueries(t *testing.T) {
+func TestCreateTablesQueryFallback(t *testing.T) {
 	for _, query := range []string{
 		"CREATE TABLE t(a INT PRIMARY KEY); CREATE TABLE t2(a INT PRIMARY KEY;",
-		"CREATE TABLE t(a INT PRIMARY KEY);",
-		"CREATE TABLE t(a INT PRIMARY KEY); CREATE TABLE t2(a INT PRIMARY KEY); CREATE TABLE t3(a INT PRIMARY KEY);",
 		"CREATE TABLE t(a INT PRIMARY KEY); SELECT 1;",
 		"CREATE TABLE t(a INT PRIMARY KEY); CREATE TABLE t2(a INT PRIMARY KEY, s VARCHAR(8) DEFAULT '\\n');",
 	} {
+		t.Run(query, func(t *testing.T) {
+			job := buildCreateTablesJobForTest(1, []int64{100, 101}, []string{"t", "t2"}, 20)
+			job.Query = query
+			_, err := parseCreateTableQueries(job)
+			require.Error(t, err)
+			raw, err := buildPersistedDDLEventForCreateTables(buildPersistedDDLEventFuncArgs{
+				job:         job,
+				databaseMap: map[int64]*BasicDatabaseInfo{1: {Name: "test"}},
+			})
+			require.NoError(t, err)
+			require.Equal(t, job.Query, raw.Query)
+			require.Equal(t, job.Query, raw.OriginalQuery)
+			require.Empty(t, raw.OriginalQueries)
+			require.Equal(t, "test", raw.SchemaName)
+			require.Equal(t, job.BinlogInfo.MultipleTableInfos, raw.MultipleTableInfos)
+
+			storage := newPersistentStorageForTest(t.TempDir(), nil)
+			t.Cleanup(func() { require.NoError(t, storage.close()) })
+			require.NoError(t, writePersistedDDLEvent(storage.db, &raw))
+			snap := storage.db.NewSnapshot()
+			defer snap.Close()
+			replayed := readPersistedDDLEvent(snap, raw.FinishedTs)
+			require.Equal(t, job.Query, replayed.Query)
+			require.Equal(t, job.Query, replayed.OriginalQuery)
+			require.Empty(t, replayed.OriginalQueries)
+		})
+	}
+}
+
+func TestCreateTablesRestoreFallback(t *testing.T) {
+	job := buildCreateTablesJobForTest(1, []int64{100, 101}, []string{"t", "t2"}, 20)
+	stmts, err := parseCreateTableQueries(job)
+	require.NoError(t, err)
+	// Let the first statement restore successfully, then fail on the second.
+	second := stmts[1].(*ast.CreateTableStmt)
+	second.Cols[0].Options = append(second.Cols[0].Options, &ast.ColumnOption{Tp: ast.ColumnOptionFulltext})
+	_, err = commonEvent.Restore(second)
+	require.Error(t, err)
+	patches := gomonkey.ApplyFuncReturn(parseCreateTableQueries, stmts, nil)
+	defer patches.Reset()
+
+	raw, err := buildPersistedDDLEventForCreateTables(buildPersistedDDLEventFuncArgs{
+		job:         job,
+		databaseMap: map[int64]*BasicDatabaseInfo{1: {Name: "test"}},
+	})
+	require.NoError(t, err)
+	require.Equal(t, job.Query, raw.Query)
+	require.Equal(t, job.Query, raw.OriginalQuery)
+	require.Nil(t, raw.OriginalQueries)
+	require.Equal(t, "test", raw.SchemaName)
+	require.Equal(t, job.BinlogInfo.MultipleTableInfos, raw.MultipleTableInfos)
+}
+
+// TestCreateTablesInvalidQueries verifies mismatched statement counts are rejected after successful parsing.
+func TestCreateTablesInvalidQueries(t *testing.T) {
+	for _, query := range []string{
+		"CREATE TABLE t(a INT PRIMARY KEY);",
+		"CREATE TABLE t(a INT PRIMARY KEY); CREATE TABLE t2(a INT PRIMARY KEY); CREATE TABLE t3(a INT PRIMARY KEY);",
+	} {
 		job := buildCreateTablesJobForTest(1, []int64{100, 101}, []string{"t", "t2"}, 20)
 		job.Query = query
-		_, err := buildPersistedDDLEventForCreateTables(buildPersistedDDLEventFuncArgs{
+		_, err := parseCreateTableQueries(job)
+		require.NoError(t, err)
+		_, err = buildPersistedDDLEventForCreateTables(buildPersistedDDLEventFuncArgs{
 			job:         job,
 			databaseMap: map[int64]*BasicDatabaseInfo{1: {Name: "test"}},
 		})

@@ -1290,24 +1290,31 @@ func buildPersistedDDLEventForCreateTables(args buildPersistedDDLEventFuncArgs) 
 	if args.job.Query != "" {
 		stmts, err := parseCreateTableQueries(args.job)
 		if err != nil {
-			return PersistedDDLEvent{}, err
+			log.Warn("cannot parse batch CREATE, preserve original query",
+				zap.Int64("jobID", args.job.ID),
+				zap.Error(err))
+			return event, nil
 		}
 		if len(stmts) != len(event.MultipleTableInfos) {
 			return PersistedDDLEvent{}, cerror.ErrTiDBUnexpectedJobMeta.GenWithStack(
 				"batch CREATE query count %d does not match table count %d", len(stmts), len(event.MultipleTableInfos))
 		}
-		event.OriginalQueries = make([]string, 0, len(stmts))
+		originalQueries := make([]string, 0, len(stmts))
 		queries := make([]string, 0, len(stmts))
 		for _, stmt := range stmts {
 			// TiDB adds separators when it batches independent CREATE jobs.
 			query := strings.TrimSpace(stmt.OriginalText())
-			event.OriginalQueries = append(event.OriginalQueries, strings.TrimSpace(strings.TrimSuffix(query, ";")))
+			originalQueries = append(originalQueries, strings.TrimSpace(strings.TrimSuffix(query, ";")))
 			query, err = commonEvent.Restore(stmt)
 			if err != nil {
-				return PersistedDDLEvent{}, cerror.WrapError(cerror.ErrTiDBUnexpectedJobMeta, err)
+				log.Warn("cannot restore batch CREATE, preserve original query",
+					zap.Int64("jobID", args.job.ID),
+					zap.Error(err))
+				return event, nil
 			}
 			queries = append(queries, query)
 		}
+		event.OriginalQueries = originalQueries
 		event.Query = strings.Join(queries, ";")
 	}
 	return event, nil
