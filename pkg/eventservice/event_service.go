@@ -401,6 +401,14 @@ func msgToDispatcherInfo(msg *messaging.TargetMessage) []DispatcherInfo {
 				zap.String("action", info.GetActionType().String()))
 			continue
 		}
+		if info.GetServerID() == "" || node.ID(info.GetServerID()) != msg.From {
+			log.Warn("dispatcher info sender does not match message peer, ignore it",
+				zap.Stringer("dispatcherID", info.GetID()),
+				zap.String("serverID", info.GetServerID()),
+				zap.Stringer("peerID", msg.From),
+				zap.String("action", info.GetActionType().String()))
+			continue
+		}
 		if info.GetActionType() == eventpb.ActionType_ACTION_TYPE_REGISTER ||
 			info.GetActionType() == eventpb.ActionType_ACTION_TYPE_RESET {
 			filterConfig := info.GetFilterConfig()

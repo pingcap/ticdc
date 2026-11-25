@@ -75,6 +75,13 @@ func AuthenticateRequest(ctx *gin.Context, server server.Server) bool {
 	}
 	security := config.GetGlobalServerConfig().Security
 	if security == nil || !security.ClientUserRequired {
+		if !config.IsLoopbackAddress(config.GetGlobalServerConfig().Addr) {
+			err := errors.ErrUnauthorized.GenWithStackByArgs(
+				"", "client authentication is required on a non-loopback listener")
+			ctx.IndentedJSON(http.StatusUnauthorized, api.NewHTTPError(err))
+			ctx.Abort()
+			return false
+		}
 		ctx.Set(ctxAuthenticatedKey, true)
 		return true
 	}

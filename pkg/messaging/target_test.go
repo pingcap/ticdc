@@ -112,3 +112,40 @@ func TestHandleIncomingMessageDropsEmptyPayload(t *testing.T) {
 	require.Error(t, err)
 	require.Empty(t, received)
 }
+
+func TestHandleIncomingMessageRejectsSpoofedIdentity(t *testing.T) {
+	tests := []struct {
+		name string
+		from node.ID
+		to   node.ID
+	}{
+		{name: "spoofed sender", from: node.ID("spoofed")},
+		{name: "wrong receiver", to: node.ID("wrong")},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			rt := newRemoteMessageTargetForTest()
+			defer rt.close()
+
+			from := test.from
+			if from == "" {
+				from = rt.targetId
+			}
+			to := test.to
+			if to == "" {
+				to = rt.messageCenterID
+			}
+			received := make(chan *TargetMessage, 1)
+			err := rt.handleIncomingMessage(context.Background(), &testGrpcStream{
+				messages: []*proto.Message{{
+					From: from.String(),
+					To:   to.String(),
+					Type: int32(TypeDispatcherRequest),
+				}},
+			}, received)
+			require.Error(t, err)
+			require.Empty(t, received)
+		})
+	}
+}

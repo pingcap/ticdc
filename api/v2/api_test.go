@@ -104,16 +104,21 @@ func TestTableInspectionRoutesRequireAuthentication(t *testing.T) {
 	cfg.Security.ClientAllowedUser = []string{"alice"}
 	config.StoreGlobalServerConfig(cfg)
 
-	paths := []string{
-		"/api/v2/verify_table?keyspace=" + common.DefaultKeyspaceName,
-		"/api/v2/get_all_tables?keyspace=" + common.DefaultKeyspaceName,
+	requests := []struct {
+		method string
+		path   string
+	}{
+		{http.MethodPost, "/api/v2/verify_table?keyspace=" + common.DefaultKeyspaceName},
+		{http.MethodPost, "/api/v2/get_all_tables?keyspace=" + common.DefaultKeyspaceName},
+		{http.MethodGet, "/api/v2/changefeeds/test/get_dispatcher_count?keyspace=" + common.DefaultKeyspaceName},
+		{http.MethodGet, "/api/v2/changefeeds/test/tables?keyspace=" + common.DefaultKeyspaceName},
 	}
 
 	ctrl := gomock.NewController(t)
 	apiServer := mock.NewMockServer(ctrl)
 	etcdClient := etcd.NewMockCDCEtcdClient(ctrl)
-	apiServer.EXPECT().GetEtcdClient().Return(etcdClient).Times(len(paths))
-	etcdClient.EXPECT().GetEtcdClient().Return(nil).Times(len(paths))
+	apiServer.EXPECT().GetEtcdClient().Return(etcdClient).Times(len(requests))
+	etcdClient.EXPECT().GetEtcdClient().Return(nil).Times(len(requests))
 
 	if kerneltype.IsNextGen() {
 		previous, _ := appcontext.TryGetService[keyspace.Manager](appcontext.KeyspaceManager)
@@ -124,16 +129,16 @@ func TestTableInspectionRoutesRequireAuthentication(t *testing.T) {
 				Keyspace: &keyspacepb.KeyspaceMeta_Id{Id: common.DefaultKeyspaceID},
 				Name:     common.DefaultKeyspaceName,
 			}, nil,
-		).Times(len(paths))
+		).Times(len(requests))
 		appcontext.SetService[keyspace.Manager](appcontext.KeyspaceManager, keyspaceManager)
 	}
 
 	router := gin.New()
 	RegisterOpenAPIV2Routes(router, NewOpenAPIV2(apiServer))
 
-	for _, path := range paths {
-		t.Run(path, func(t *testing.T) {
-			request := httptest.NewRequest(http.MethodPost, path, strings.NewReader(`{}`))
+	for _, request := range requests {
+		t.Run(request.path, func(t *testing.T) {
+			request := httptest.NewRequest(request.method, request.path, strings.NewReader(`{}`))
 			request.Header.Set("Content-Type", "application/json")
 			response := httptest.NewRecorder()
 
@@ -193,6 +198,10 @@ func TestManagementRoutesRequireAuthentication(t *testing.T) {
 		{http.MethodGet, "/api/v2/unsafe/metadata?keyspace=" + common.DefaultKeyspaceName},
 		{http.MethodPost, "/api/v2/unsafe/resolve_lock?keyspace=" + common.DefaultKeyspaceName},
 		{http.MethodDelete, "/api/v2/unsafe/service_gc_safepoint?keyspace=" + common.DefaultKeyspaceName},
+		{http.MethodGet, "/api/v2/captures?keyspace=" + common.DefaultKeyspaceName},
+		{http.MethodGet, "/api/v2/processors?keyspace=" + common.DefaultKeyspaceName},
+		{http.MethodGet, "/api/v2/processors/test/node?keyspace=" + common.DefaultKeyspaceName},
+		{http.MethodPost, "/api/v2/tso?keyspace=" + common.DefaultKeyspaceName},
 	}
 
 	ctrl := gomock.NewController(t)

@@ -83,3 +83,30 @@ func TestRegisterRoutesConfig(t *testing.T) {
 	require.Equal(t, "aws-private-secret", testConfig.Encryption.KMS.AWS.SecretAccessKey)
 	require.Equal(t, `{"private_key":"gcp-private-secret"}`, testConfig.Encryption.KMS.GCP.CredentialsJSON)
 }
+
+func TestSensitiveRootRoutesRejectUnauthenticatedExternalAccess(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	originalConfig := config.GetGlobalServerConfig()
+	t.Cleanup(func() { config.StoreGlobalServerConfig(originalConfig) })
+	cfg := originalConfig.Clone()
+	cfg.Addr = "0.0.0.0:8300"
+	cfg.Security.ClientUserRequired = false
+	config.StoreGlobalServerConfig(cfg)
+
+	originalGatherer := prometheus.DefaultGatherer
+	t.Cleanup(func() { prometheus.DefaultGatherer = originalGatherer })
+
+	router := gin.New()
+	RegisterRoutes(router, nil, prometheus.NewRegistry())
+
+	for _, path := range []string{"/config", "/debug/pprof/", "/metrics"} {
+		t.Run(path, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodGet, path, nil)
+			resp := httptest.NewRecorder()
+			router.ServeHTTP(resp, req)
+
+			require.Equal(t, http.StatusUnauthorized, resp.Code, resp.Body.String())
+		})
+	}
+}

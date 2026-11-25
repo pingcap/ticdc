@@ -360,6 +360,20 @@ func StoreGlobalServerConfig(config *ServerConfig) {
 	globalServerConfig.Store(config)
 }
 
+// IsLoopbackAddress reports whether addr is a TCP address bound to the local
+// host only. An invalid or wildcard address is not considered loopback.
+func IsLoopbackAddress(addr string) bool {
+	host, _, err := net.SplitHostPort(addr)
+	if err != nil {
+		return false
+	}
+	if strings.EqualFold(host, "localhost") {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
+}
+
 // TomlDuration is a duration with a custom json decoder and toml decoder
 type TomlDuration time.Duration
 

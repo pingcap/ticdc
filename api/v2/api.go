@@ -89,12 +89,12 @@ func RegisterOpenAPIV2Routes(router *gin.Engine, api OpenAPIV2) {
 	changefeedGroup.POST("/:changefeed_id/move_split_table", keyspaceCheckerMiddleware, authenticateMiddleware, api.MoveSplitTable)
 	changefeedGroup.POST("/:changefeed_id/split_table_by_region_count", keyspaceCheckerMiddleware, authenticateMiddleware, api.SplitTableByRegionCount)
 	changefeedGroup.POST("/:changefeed_id/merge_table", keyspaceCheckerMiddleware, authenticateMiddleware, api.MergeTable)
-	changefeedGroup.GET("/:changefeed_id/get_dispatcher_count", keyspaceCheckerMiddleware, api.getDispatcherCount)
-	changefeedGroup.GET("/:changefeed_id/tables", keyspaceCheckerMiddleware, api.ListTables)
+	changefeedGroup.GET("/:changefeed_id/get_dispatcher_count", keyspaceCheckerMiddleware, authenticateMiddleware, api.getDispatcherCount)
+	changefeedGroup.GET("/:changefeed_id/tables", keyspaceCheckerMiddleware, authenticateMiddleware, api.ListTables)
 
 	// capture apis
 	captureGroup := v2.Group("/captures")
-	captureGroup.Use(coordinatorMiddleware)
+	captureGroup.Use(nodeAuthenticateMiddleware, coordinatorMiddleware)
 	captureGroup.GET("", api.ListCaptures)
 
 	verifyTableGroup := v2.Group("/verify_table")
@@ -106,6 +106,7 @@ func RegisterOpenAPIV2Routes(router *gin.Engine, api OpenAPIV2) {
 	// Note: They are not useful in new arch cdc,
 	// we implement them for compatibility with old arch cdc only.
 	processorGroup := v2.Group("/processors")
+	processorGroup.Use(nodeAuthenticateMiddleware)
 	processorGroup.GET("", api.ListProcessor)
 	processorGroup.GET("/:changefeed_id/:capture_id", api.GetProcessor)
 
@@ -116,7 +117,7 @@ func RegisterOpenAPIV2Routes(router *gin.Engine, api OpenAPIV2) {
 	ownerGroup.POST("/resign", api.ResignOwner)
 
 	// common APIs
-	v2.POST("/tso", api.QueryTso)
+	v2.POST("/tso", nodeAuthenticateMiddleware, api.QueryTso)
 
 	// unsafe apis
 	unsafeGroup := v2.Group("/unsafe")

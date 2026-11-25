@@ -28,7 +28,9 @@ import (
 	"github.com/pingcap/ticdc/pkg/messaging/proto"
 	"go.uber.org/zap"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/keepalive"
+	"google.golang.org/grpc/status"
 )
 
 type GrpcModule struct {
@@ -39,6 +41,7 @@ type GrpcModule struct {
 func NewGrpcServer(lis net.Listener) common.SubModule {
 	option := []grpc.ServerOption{
 		grpc.MaxRecvMsgSize(256 * 1024 * 1024), // 256MB
+		grpc.StreamInterceptor(authenticateGRPCStream),
 	}
 
 	kaep := keepalive.EnforcementPolicy{
@@ -55,12 +58,30 @@ func NewGrpcServer(lis net.Listener) common.SubModule {
 
 	grpcServer := grpc.NewServer(option...)
 	proto.RegisterMessageServiceServer(grpcServer, messaging.NewMessageCenterServer(appcontext.GetService[messaging.MessageCenter](appcontext.MessageCenter)))
-	diagSvc := sysutil.NewDiagnosticsServer(config.GetGlobalServerConfig().LogFile)
-	diagnosticspb.RegisterDiagnosticsServer(grpcServer, diagSvc)
+	security := config.GetGlobalServerConfig().Security
+	if security != nil && security.IsTLSEnabled() && security.MTLS {
+		diagSvc := sysutil.NewDiagnosticsServer(config.GetGlobalServerConfig().LogFile)
+		diagnosticspb.RegisterDiagnosticsServer(grpcServer, diagSvc)
+	}
 	return &GrpcModule{
 		grpcServer: grpcServer,
 		lis:        lis,
 	}
+}
+
+func authenticateGRPCStream(
+	srv any,
+	stream grpc.ServerStream,
+	_ *grpc.StreamServerInfo,
+	handler grpc.StreamHandler,
+) error {
+	cfg := config.GetGlobalServerConfig()
+	if config.IsLoopbackAddress(cfg.Addr) ||
+		(cfg.Security != nil && cfg.Security.IsTLSEnabled() && cfg.Security.MTLS) {
+		return handler(srv, stream)
+	}
+	return status.Error(codes.Unauthenticated,
+		"gRPC access on a non-loopback listener requires mutual TLS")
 }
 
 func (g *GrpcModule) Run(ctx context.Context) error {

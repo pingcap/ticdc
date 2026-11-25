@@ -30,7 +30,9 @@ import (
 	"github.com/pingcap/ticdc/pkg/security"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/status"
 	"google.golang.org/grpc/test/bufconn"
 )
 
@@ -45,6 +47,10 @@ func TestGrpcModule_SearchLog(t *testing.T) {
 	originalConfig := config.GetGlobalServerConfig()
 	cfg := originalConfig.Clone()
 	cfg.LogFile = logPath
+	cfg.Security.CAPath = "ca.pem"
+	cfg.Security.CertPath = "cert.pem"
+	cfg.Security.KeyPath = "key.pem"
+	cfg.Security.MTLS = true
 	config.StoreGlobalServerConfig(cfg)
 	t.Cleanup(func() {
 		config.StoreGlobalServerConfig(originalConfig)
@@ -98,4 +104,65 @@ func TestGrpcModule_SearchLog(t *testing.T) {
 		}
 	}
 	require.True(t, found, "expected log message to contain hello world")
+}
+
+func TestGrpcModule_DiagnosticsRequiresMTLS(t *testing.T) {
+	originalConfig := config.GetGlobalServerConfig()
+	t.Cleanup(func() { config.StoreGlobalServerConfig(originalConfig) })
+	cfg := originalConfig.Clone()
+	cfg.Security.CAPath = ""
+	cfg.Security.CertPath = ""
+	cfg.Security.KeyPath = ""
+	cfg.Security.MTLS = false
+	config.StoreGlobalServerConfig(cfg)
+
+	mcCfg := config.NewDefaultMessageCenterConfig("127.0.0.1:0")
+	mc := messaging.NewMessageCenter(context.Background(), node.ID("test-node"), mcCfg, &security.Credential{})
+	appcontext.SetService(appcontext.MessageCenter, mc)
+
+	m := NewGrpcServer(bufconn.Listen(1024)).(*GrpcModule)
+	_, registered := m.grpcServer.GetServiceInfo()["diagnosticspb.Diagnostics"]
+	require.False(t, registered)
+}
+
+func TestAuthenticateGRPCStream(t *testing.T) {
+	originalConfig := config.GetGlobalServerConfig()
+	t.Cleanup(func() { config.StoreGlobalServerConfig(originalConfig) })
+
+	tests := []struct {
+		name    string
+		addr    string
+		mtls    bool
+		allowed bool
+	}{
+		{name: "loopback", addr: "127.0.0.1:8300", allowed: true},
+		{name: "external without mTLS", addr: "0.0.0.0:8300"},
+		{name: "external with mTLS", addr: "0.0.0.0:8300", mtls: true, allowed: true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			cfg := originalConfig.Clone()
+			cfg.Addr = test.addr
+			if test.mtls {
+				cfg.Security.CAPath = "ca.pem"
+				cfg.Security.CertPath = "cert.pem"
+				cfg.Security.KeyPath = "key.pem"
+				cfg.Security.MTLS = true
+			}
+			config.StoreGlobalServerConfig(cfg)
+
+			called := false
+			err := authenticateGRPCStream(nil, nil, nil, func(any, grpc.ServerStream) error {
+				called = true
+				return nil
+			})
+			if test.allowed {
+				require.NoError(t, err)
+				require.True(t, called)
+			} else {
+				require.Equal(t, codes.Unauthenticated, status.Code(err))
+				require.False(t, called)
+			}
+		})
+	}
 }

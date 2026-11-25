@@ -229,8 +229,12 @@ func (m *DispatcherOrchestrator) handleBootstrapRequest(
 		}
 		cfConfig := &config.ChangefeedConfig{}
 		if err := json.Unmarshal(req.Config, cfConfig); err != nil {
-			log.Panic("failed to unmarshal changefeed config",
-				zap.String("changefeedID", cfId.Name()), zap.Error(err))
+			return errors.WrapError(errors.ErrDecodeFailed, err,
+				"invalid bootstrap changefeed config")
+		}
+		if cfConfig.ChangefeedID != cfId {
+			return errors.ErrDecodeFailed.FastGenByArgs(
+				"bootstrap config changefeed ID does not match request")
 		}
 		start := time.Now()
 		var initializingManager *dispatchermanager.DispatcherManager

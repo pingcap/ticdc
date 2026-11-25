@@ -57,6 +57,25 @@ func newMockDispatcherInfoForTest(t *testing.T) *mockDispatcherInfo {
 	return newMockDispatcherInfo(t, 300, did, 100, eventpb.ActionType_ACTION_TYPE_REGISTER)
 }
 
+func TestDispatcherOperationsRejectDifferentOwner(t *testing.T) {
+	broker, _, _, _ := newEventBrokerForTest()
+	defer broker.close()
+
+	owner := newMockDispatcherInfoForTest(t)
+	require.NoError(t, broker.addDispatcher(owner))
+	ownerStat := broker.getDispatcher(owner.id).Load()
+
+	forged := *owner
+	forged.serverID = "other-server"
+	forged.epoch = owner.epoch + 1
+	require.Error(t, broker.addDispatcher(&forged))
+	broker.removeDispatcher(&forged)
+	require.Error(t, broker.resetDispatcher(&forged))
+
+	require.Same(t, ownerStat, broker.getDispatcher(owner.id).Load())
+	require.False(t, ownerStat.isRemoved.Load())
+}
+
 func TestChangefeedStatusUsesOwnMounter(t *testing.T) {
 	broker, _, _, _ := newEventBrokerForTest()
 	broker.close()

@@ -178,6 +178,9 @@ func (e HandshakeEvent) encodeV1() ([]byte, error) {
 
 func (e *HandshakeEvent) decodeV1(data []byte) error {
 	// Note: header (magic + event type + version + length) has already been read and removed from data
+	if err := validatePayloadMinimumSize(data, 24+e.DispatcherID.GetSize(), "handshake event"); err != nil {
+		return err
+	}
 	offset := 0
 
 	// ResolvedTs

@@ -89,6 +89,33 @@ func TestDrainCaptureRouteRequiresAuthentication(t *testing.T) {
 	require.False(t, coordinator.drainCalled)
 }
 
+func TestOwnerResignRouteRequiresAuthentication(t *testing.T) {
+	configureDrainCaptureAuth(t, true)
+
+	ctrl := gomock.NewController(t)
+	mockEtcdClient := etcd.NewMockCDCEtcdClient(ctrl)
+	mockEtcdClient.EXPECT().GetEtcdClient().Return(nil)
+	coordinator := &mockCoordinator{}
+	apiServer := &mockAPIServer{
+		isCoordinator: true,
+		coordinator:   coordinator,
+		etcdClient:    mockEtcdClient,
+	}
+
+	router := gin.New()
+	RegisterOpenAPIV1Routes(router, NewOpenAPIV1(apiServer))
+	path := "/api/v1/owner/resign"
+	if kerneltype.IsNextGen() {
+		path += "?keyspace=auth-keyspace"
+	}
+	req := httptest.NewRequest(http.MethodPost, path, nil)
+	resp := httptest.NewRecorder()
+	router.ServeHTTP(resp, req)
+
+	require.Equal(t, http.StatusUnauthorized, resp.Code, resp.Body.String())
+	require.False(t, coordinator.stopCalled)
+}
+
 func TestDrainCaptureRouteReachesHandlerWhenAuthenticationDisabled(t *testing.T) {
 	configureDrainCaptureAuth(t, false)
 
@@ -180,7 +207,12 @@ type mockCoordinator struct {
 
 	remaining   int
 	drainCalled bool
+	stopCalled  bool
 	target      node.ID
+}
+
+func (m *mockCoordinator) Stop() {
+	m.stopCalled = true
 }
 
 func (m *mockCoordinator) DrainNode(_ context.Context, target node.ID) (int, error) {

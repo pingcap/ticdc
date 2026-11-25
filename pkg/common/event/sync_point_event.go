@@ -186,6 +186,9 @@ func (e SyncPointEvent) encodeV1() ([]byte, error) {
 
 func (e *SyncPointEvent) decodeV1(data []byte) error {
 	// Note: header (magic + event type + version + length) has already been read and removed from data
+	if err := validatePayloadMinimumSize(data, 24+e.DispatcherID.GetSize(), "sync point event"); err != nil {
+		return err
+	}
 	offset := 0
 
 	// Seq
