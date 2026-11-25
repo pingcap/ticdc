@@ -26,6 +26,7 @@ import (
 	"github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/tidb/pkg/parser"
 	"github.com/pingcap/tidb/pkg/parser/ast"
+	"github.com/pingcap/tidb/pkg/parser/charset"
 	"github.com/pingcap/tidb/pkg/parser/format"
 	parser_model "github.com/pingcap/tidb/pkg/parser/model"
 	"github.com/pingcap/tidb/pkg/parser/mysql"
@@ -2713,9 +2714,14 @@ func buildCreateTableQueryForMaterializedView(rawEvent *PersistedDDLEvent) strin
 			continue
 		}
 		typeDesc := col.GetTypeDesc()
-		if types.HasCharset(&col.FieldType) {
-			if charset := col.GetCharset(); charset != "" {
-				typeDesc += " CHARACTER SET " + charset
+		hasCharset := types.HasCharset(&col.FieldType)
+		if !hasCharset && col.GetCharset() != charset.CharsetBin {
+			tp := col.GetType()
+			hasCharset = types.IsTypeChar(tp) || types.IsTypeBlob(tp) || tp == mysql.TypeVarString
+		}
+		if hasCharset {
+			if charsetName := col.GetCharset(); charsetName != "" {
+				typeDesc += " CHARACTER SET " + charsetName
 			}
 			if collation := col.GetCollate(); collation != "" {
 				typeDesc += " COLLATE " + collation

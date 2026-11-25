@@ -2874,6 +2874,7 @@ func TestBuildCreateTableQueryForMaterializedViewColumnTypes(t *testing.T) {
 				fieldType.SetFlen(20)
 				fieldType.SetCharset(charset.CharsetUTF8MB4)
 				fieldType.SetCollate(charset.CollationUTF8MB4)
+				fieldType.AddFlag(mysql.BinaryFlag)
 			}),
 			newColumn("kind", mysql.TypeEnum, func(fieldType *types.FieldType) {
 				fieldType.SetElems([]string{"a", "b"})
