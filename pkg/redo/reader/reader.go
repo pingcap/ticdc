@@ -275,7 +275,16 @@ func (l *LogReader) initMeta(ctx context.Context) error {
 		if !strings.HasSuffix(path, redo.MetaEXT) {
 			return nil
 		}
-		l.changefeedID = getChangefeedFromMetaPath(path)
+		changefeedID, err := getChangefeedFromMetaPath(path)
+		if err != nil {
+			return err
+		}
+		if l.changefeedID.Name() != "" &&
+			(l.changefeedID.Name() != changefeedID.Name() || l.changefeedID.Keyspace() != changefeedID.Keyspace()) {
+			return errors.ErrRedoMetaInitialize.
+				GenWithStack("redo meta files contain multiple changefeeds")
+		}
+		l.changefeedID = changefeedID
 
 		data, err := extStorage.ReadFile(ctx, path)
 		if err != nil && !util.IsNotExistInExtStorage(err) {
@@ -411,11 +420,26 @@ func (h *logHeap) Pop() interface{} {
 	return x
 }
 
-func getChangefeedFromMetaPath(path string) commonType.ChangeFeedID {
-	parts := strings.Split(filepath.Base(path), "_")
+func getChangefeedFromMetaPath(path string) (commonType.ChangeFeedID, error) {
+	base := filepath.Base(path)
+	if filepath.Ext(base) != redo.MetaEXT {
+		return commonType.ChangeFeedID{}, errors.ErrRedoMetaInitialize.
+			GenWithStack("invalid redo meta file extension: %s", base)
+	}
+	parts := strings.Split(strings.TrimSuffix(base, redo.MetaEXT), "_")
+	if len(parts) < 5 || parts[0] == "" || parts[len(parts)-2] != redo.RedoMetaFileType || parts[len(parts)-1] == "" {
+		return commonType.ChangeFeedID{}, errors.ErrRedoMetaInitialize.
+			GenWithStack("invalid redo meta file name: %s", base)
+	}
 	// Changefeed names cannot contain underscores, but keyspaces can.
 	nameIdx := len(parts) - 3
 	keyspace := strings.Join(parts[1:nameIdx], "_")
 	name := parts[nameIdx]
-	return commonType.NewChangeFeedIDWithName(name, keyspace)
+	if err := commonType.ValidateChangefeedID(name); err != nil {
+		return commonType.ChangeFeedID{}, err
+	}
+	if err := commonType.ValidateKeyspace(keyspace); err != nil {
+		return commonType.ChangeFeedID{}, err
+	}
+	return commonType.NewChangeFeedIDWithName(name, keyspace), nil
 }

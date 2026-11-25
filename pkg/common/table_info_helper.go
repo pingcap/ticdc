@@ -483,6 +483,7 @@ func unmarshalJsonToColumnSchema(data []byte) (*columnSchema, error) {
 	if err != nil {
 		return nil, err
 	}
+	colSchema.InitPreSQLs("")
 
 	sharedColumnSchema := GetSharedColumnSchemaStorage().getOrSetColumnSchemaByColumnSchema(&colSchema)
 	return sharedColumnSchema, nil

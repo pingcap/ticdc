@@ -15,6 +15,7 @@ package common
 
 import (
 	"encoding/binary"
+	"encoding/json"
 	"testing"
 
 	"github.com/pingcap/tidb/pkg/meta/model"
@@ -183,6 +184,40 @@ func TestPreSQLsAreInitializedLazily(t *testing.T) {
 
 	require.Contains(t, decoded.GetPreUpdateSQL(), QuoteSchema("source_db", "source_table"))
 	require.True(t, decoded.preSQLs.isInitialized.Load())
+}
+
+func TestColumnSchemaRebuildsPreSQLsAfterUnmarshal(t *testing.T) {
+	t.Parallel()
+
+	// Build the serialized schema without registering it in the shared storage.
+	// Otherwise, unmarshalling can return the already-safe cached schema without
+	// exercising the PreSQL regeneration below.
+	testDigest := Digest{A: 0x746573742d707265, B: 0x73716c2d72656275, C: 0x696c642d74657374, D: 1}
+	sourceSchema := newColumnSchema(newPreSQLTestModelTableInfo("trusted_table"), testDigest)
+	data, err := sourceSchema.Marshal()
+	require.NoError(t, err)
+	require.Contains(t, string(data), "pre_sqls")
+
+	var payload map[string]any
+	require.NoError(t, json.Unmarshal(data, &payload))
+	payload["pre_sqls"] = map[string]string{
+		"0": "INSERT INTO %s VALUES (?); DROP TABLE important; -- ",
+		"1": "REPLACE INTO %s VALUES (?); DROP TABLE important; -- ",
+		"2": "UPDATE %s SET id = ?; DROP TABLE important; -- ",
+	}
+	tampered, err := json.Marshal(payload)
+	require.NoError(t, err)
+
+	decoded, err := unmarshalJsonToColumnSchema(tampered)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		GetSharedColumnSchemaStorage().tryReleaseColumnSchema(decoded)
+	})
+	require.NotSame(t, sourceSchema, decoded)
+	require.Equal(t, decoded.genPreSQLInsert(false), decoded.PreSQLs[preSQLInsert])
+	require.Equal(t, decoded.genPreSQLInsert(true), decoded.PreSQLs[preSQLReplace])
+	require.Equal(t, decoded.genPreSQLUpdate(), decoded.PreSQLs[preSQLUpdate])
+	require.NotContains(t, decoded.PreSQLs[preSQLInsert], "DROP TABLE")
 }
 
 func newPreSQLTestModelTableInfo(table string) *model.TableInfo {

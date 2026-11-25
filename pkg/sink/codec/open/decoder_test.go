@@ -17,6 +17,7 @@ import (
 	"database/sql/driver"
 	"encoding/json"
 	"fmt"
+	"regexp"
 	"testing"
 
 	"github.com/DATA-DOG/go-sqlmock"
@@ -129,7 +130,9 @@ func TestHandleKeyOnlyPreservesEnumSetTypes(t *testing.T) {
 	insert := d.assembleDMLEvent(key, &messageRow{Update: cols})
 	for _, ts := range []string{"99", "100"} {
 		mock.ExpectExec("set @@tidb_snapshot=" + ts).WillReturnResult(sqlmock.NewResult(0, 0))
-		mock.ExpectQuery("select CAST\\(`e` AS UNSIGNED\\) AS `e`,`id`,CAST\\(`s` AS UNSIGNED\\) AS `s` from test.t where id = 1").WillReturnRows(sqlmock.NewRows([]string{"e", "id", "s"}).AddRow(int64(2), int64(1), []byte("9223372036854775808")))
+		mock.ExpectQuery(regexp.QuoteMeta("select CAST(`e` AS UNSIGNED) AS `e`,`id`,CAST(`s` AS UNSIGNED) AS `s` from `test`.`t` where `id` = ?")).
+			WithArgs("1").
+			WillReturnRows(sqlmock.NewRows([]string{"e", "id", "s"}).AddRow(int64(2), int64(1), []byte("9223372036854775808")))
 	}
 	update := d.assembleHandleKeyOnlyDMLEvent(t.Context(), key, &messageRow{
 		Update: map[string]column{"id": cols["id"]}, PreColumns: map[string]column{"id": cols["id"]},
@@ -160,16 +163,20 @@ func TestHandleKeyOnlyColdCache(t *testing.T) {
 			}})
 			d.cache.AddDDL("test", "t", 90)
 			mock.ExpectExec("set @@tidb_snapshot=100").WillReturnResult(sqlmock.NewResult(0, 0))
-			mock.ExpectQuery(`select \* from test.t where id = 1`).WillReturnRows(sqlmock.NewRowsWithColumnDefinition(
-				sqlmock.NewColumn("e").OfType("ENUM", "").Nullable(true),
-				sqlmock.NewColumn("id").OfType("INT", int64(0)),
-			).AddRow("second", int64(1)))
+			mock.ExpectQuery(regexp.QuoteMeta("select * from `test`.`t` where `id` = ?")).
+				WithArgs("1").
+				WillReturnRows(sqlmock.NewRowsWithColumnDefinition(
+					sqlmock.NewColumn("e").OfType("ENUM", "").Nullable(true),
+					sqlmock.NewColumn("id").OfType("INT", int64(0)),
+				).AddRow("second", int64(1)))
 			var enumValue driver.Value = int64(2)
 			if nullable {
 				enumValue = nil
 			}
 			mock.ExpectExec("set @@tidb_snapshot=100").WillReturnResult(sqlmock.NewResult(0, 0))
-			mock.ExpectQuery("select CAST\\(`e` AS UNSIGNED\\) AS `e`,`id` from test.t where id = 1").WillReturnRows(sqlmock.NewRows([]string{"e", "id"}).AddRow(enumValue, int64(1)))
+			mock.ExpectQuery(regexp.QuoteMeta("select CAST(`e` AS UNSIGNED) AS `e`,`id` from `test`.`t` where `id` = ?")).
+				WithArgs("1").
+				WillReturnRows(sqlmock.NewRows([]string{"e", "id"}).AddRow(enumValue, int64(1)))
 			event := d.assembleHandleKeyOnlyDMLEvent(t.Context(), &messageKey{Schema: "test", Table: "t", Ts: 100}, &messageRow{Update: map[string]column{
 				"id": {Type: mysql.TypeLong, Flag: primaryKeyFlag, Value: json.Number("1")},
 			}})
