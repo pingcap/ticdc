@@ -1234,8 +1234,7 @@ func TestDecoderTableInfoCacheUsesDDLCommitTsAcrossColumnChanges(t *testing.T) {
 func TestDecoderTableInfoCacheUsesDDLCommitTsBoundary(t *testing.T) {
 	tableIDAllocator.Clean()
 	dec := &decoder{
-		tableInfoCache: make(map[tableKey]*commonType.TableInfo),
-		ddlCommitTs:    make(map[tableNameKey][]uint64),
+		cache: common.NewTableInfoProvider(),
 	}
 	buildMessage := func(commitTs uint64, mysqlTypes map[string]string) *canalJSONMessageWithTiDBExtension {
 		return &canalJSONMessageWithTiDBExtension{
@@ -1275,7 +1274,6 @@ func TestDecoderTableInfoCacheUsesDDLCommitTsBoundary(t *testing.T) {
 	require.Equal(t, []string{"data", "id"}, columnNames(afterDDL))
 	require.NotSame(t, sameTsAsDDL, afterDDL)
 	require.Same(t, sameTsAsDDL, lateSameTsAsDDL)
-	require.Equal(t, []uint64{200}, dec.ddlCommitTs[tableNameKey{schema: "test", table: "table_5"}])
 }
 
 func TestCreateTableDDL(t *testing.T) {
@@ -1426,8 +1424,7 @@ func TestRowKey(t *testing.T) {
 func TestTableInfoFromMessageLocatesRowByPrimaryKey(t *testing.T) {
 	tableIDAllocator.Clean()
 	dec := &decoder{
-		tableInfoCache: make(map[tableKey]*commonType.TableInfo),
-		ddlCommitTs:    make(map[tableNameKey][]uint64),
+		cache: common.NewTableInfoProvider(),
 	}
 	tableInfo := dec.queryTableInfo(&canalJSONMessageWithTiDBExtension{
 		JSONMessage: &JSONMessage{

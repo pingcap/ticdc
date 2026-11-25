@@ -14,7 +14,6 @@
 package common
 
 import (
-	"strings"
 	"sync"
 
 	"github.com/pingcap/log"
@@ -28,14 +27,6 @@ type blockedTableProvider interface {
 type accessKey struct {
 	schema string
 	table  string
-}
-
-// newAccessKey return accessKey with lower case
-func newAccessKey(schema, table string) accessKey {
-	return accessKey{
-		strings.ToLower(schema),
-		strings.ToLower(table),
-	}
 }
 
 // tableIDAllocator is a fake table id allocator
@@ -68,7 +59,7 @@ func (a *tableIDAllocator) Allocate(schema, table string) int64 {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 
-	key := newAccessKey(schema, table)
+	key := accessKey{schema, table}
 	return a.allocateByKey(key)
 }
 
@@ -76,7 +67,7 @@ func (a *tableIDAllocator) GetBlockedTables(schema, table string) []int64 {
 	a.mu.RLock()
 	defer a.mu.RUnlock()
 
-	key := newAccessKey(schema, table)
+	key := accessKey{schema, table}
 	blocked := a.blockedTableIDs[key]
 	result := make([]int64, 0, len(blocked))
 	for item := range blocked {
@@ -89,7 +80,7 @@ func (a *tableIDAllocator) AddBlockTableID(schema string, table string, physical
 	a.mu.Lock()
 	defer a.mu.Unlock()
 
-	key := newAccessKey(schema, table)
+	key := accessKey{schema, table}
 	if _, ok := a.blockedTableIDs[key]; !ok {
 		a.blockedTableIDs[key] = make(map[int64]struct{})
 	}
@@ -121,7 +112,7 @@ func NewPartitionTableAccessor() *PartitionTableAccessor {
 }
 
 func (m *PartitionTableAccessor) Add(schema, table string) {
-	key := newAccessKey(schema, table)
+	key := accessKey{schema, table}
 	_, ok := m.memo[key]
 	if ok {
 		return
@@ -131,7 +122,7 @@ func (m *PartitionTableAccessor) Add(schema, table string) {
 }
 
 func (m *PartitionTableAccessor) IsPartitionTable(schema, table string) bool {
-	key := newAccessKey(schema, table)
+	key := accessKey{schema, table}
 	_, ok := m.memo[key]
 	return ok
 }
