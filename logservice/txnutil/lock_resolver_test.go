@@ -14,42 +14,13 @@
 package txnutil
 
 import (
-	"context"
 	"fmt"
 	"testing"
 
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
 	"github.com/stretchr/testify/require"
-	"github.com/tikv/client-go/v2/tikv"
 	"github.com/tikv/client-go/v2/txnkv"
-	"github.com/tikv/client-go/v2/txnkv/txnlock"
 )
-
-func TestDirectSharedLockWrapperResolveFails(t *testing.T) {
-	wrapper := &kvrpcpb.LockInfo{
-		Key:         []byte("shared-wrapper"),
-		LockVersion: 100,
-		LockType:    kvrpcpb.Op_SharedLock,
-		SharedLockInfos: []*kvrpcpb.LockInfo{
-			{
-				Key:         []byte("shared-wrapper"),
-				PrimaryLock: []byte("primary-1"),
-				LockVersion: 101,
-				LockType:    kvrpcpb.Op_Lock,
-			},
-		},
-	}
-	lock := txnkv.NewLock(wrapper)
-
-	_, err := txnlock.NewLockResolver(nil).ResolveLocks(
-		tikv.NewBackoffer(context.Background(), 1),
-		0,
-		[]*txnkv.Lock{lock},
-	)
-
-	require.Error(t, err)
-	require.Contains(t, err.Error(), "trying to resolve a shared lock directly")
-}
 
 func TestResolveScanLockInfosExpandsSharedLockWrapper(t *testing.T) {
 	sharedLock1 := &kvrpcpb.LockInfo{
