@@ -749,7 +749,7 @@ func resolveOriginDefaultLocation(col *timodel.ColumnInfo, timezone string) (*ti
 		return time.UTC, nil
 	}
 	tz := strings.Trim(timezone, "\"")
-	return time.LoadLocation(tz)
+	return parseMySQLTimezone(tz)
 }
 
 func parseTimestampInLocation(val string, loc *time.Location) (float64, error) {
