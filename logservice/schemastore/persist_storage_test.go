@@ -28,6 +28,7 @@ import (
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/filter"
 	"github.com/pingcap/tidb/pkg/meta/model"
+	"github.com/pingcap/tidb/pkg/parser"
 	"github.com/pingcap/tidb/pkg/parser/charset"
 	parser_model "github.com/pingcap/tidb/pkg/parser/model"
 	"github.com/pingcap/tidb/pkg/parser/mysql"
@@ -2656,7 +2657,7 @@ func TestActionCreateMaterializedViewDDL(t *testing.T) {
 		baseTableID              int64  = 150
 		mviewID                  int64  = 200
 		mviewName                string = "mv1"
-		expectedCreateTableQuery string = "CREATE TABLE `test`.`mv1` (`a` int(11) UNSIGNED NOT NULL, `b` varchar(20) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL, PRIMARY KEY (`a`), UNIQUE KEY `uk_a_b` (`a`, `b`))"
+		expectedCreateTableQuery string = "CREATE TABLE `test`.`mv1` (`a` int(11) unsigned NOT NULL, `b` varchar(20) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL, PRIMARY KEY (`a`), UNIQUE KEY `uk_a_b` (`a`, `b`))"
 		expectedDropTableQuery   string = "DROP TABLE `test`.`mv1`"
 	)
 
@@ -2846,6 +2847,57 @@ func TestActionCreateMaterializedViewDDL(t *testing.T) {
 	pStorage = loadPersistentStorageFromPathForTest(dbPath, math.MaxUint64)
 	defer pStorage.close()
 	checkDroppedState(t, pStorage)
+}
+
+func TestBuildCreateTableQueryForMaterializedViewColumnTypes(t *testing.T) {
+	newColumn := func(name string, tp byte, configure func(*types.FieldType)) *model.ColumnInfo {
+		fieldType := types.NewFieldType(tp)
+		configure(fieldType)
+		return &model.ColumnInfo{
+			Name:      parser_model.NewCIStr(name),
+			FieldType: *fieldType,
+		}
+	}
+
+	tableInfo := &model.TableInfo{
+		Columns: []*model.ColumnInfo{
+			newColumn("cnt", mysql.TypeLonglong, func(fieldType *types.FieldType) {
+				fieldType.SetFlen(21)
+				fieldType.AddFlag(mysql.BinaryFlag | mysql.NotNullFlag)
+			}),
+			newColumn("sum", mysql.TypeNewDecimal, func(fieldType *types.FieldType) {
+				fieldType.SetFlen(41)
+				fieldType.SetDecimal(0)
+				fieldType.AddFlag(mysql.BinaryFlag)
+			}),
+			newColumn("label", mysql.TypeVarchar, func(fieldType *types.FieldType) {
+				fieldType.SetFlen(20)
+				fieldType.SetCharset(charset.CharsetUTF8MB4)
+				fieldType.SetCollate(charset.CollationUTF8MB4)
+			}),
+			newColumn("kind", mysql.TypeEnum, func(fieldType *types.FieldType) {
+				fieldType.SetElems([]string{"a", "b"})
+				fieldType.SetCharset(charset.CharsetUTF8MB4)
+				fieldType.SetCollate(charset.CollationUTF8MB4)
+			}),
+			newColumn("payload", mysql.TypeVarchar, func(fieldType *types.FieldType) {
+				fieldType.SetFlen(16)
+				fieldType.SetCharset(charset.CharsetBin)
+				fieldType.SetCollate(charset.CollationBin)
+				fieldType.AddFlag(mysql.BinaryFlag)
+			}),
+		},
+	}
+
+	query := buildCreateTableQueryForMaterializedView(&PersistedDDLEvent{
+		SchemaName: "test",
+		TableName:  "mv_agg",
+		TableInfo:  tableInfo,
+	})
+	require.Equal(t, "CREATE TABLE `test`.`mv_agg` (`cnt` bigint(21) NOT NULL, `sum` decimal(41,0), `label` varchar(20) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin, `kind` enum('a','b') CHARACTER SET utf8mb4 COLLATE utf8mb4_bin, `payload` varbinary(16))", query)
+
+	_, err := parser.New().ParseOneStmt(query, "", "")
+	require.NoError(t, err)
 }
 
 func TestActionCreateMaterializedViewLogDDL(t *testing.T) {
