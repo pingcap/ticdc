@@ -204,21 +204,11 @@ func InitLogger(cfg *Config, opts ...LoggerOpt) error {
 
 // initOptionalComponent initializes some optional components
 func initOptionalComponent(op *loggerOp, cfg *Config) error {
-<<<<<<< HEAD
-	var level zapcore.Level
-	err := level.UnmarshalText([]byte(cfg.Level))
-	if err != nil {
-		return errors.Trace(err)
-	}
-
-	if op.isInitGRPCLogger {
-=======
 	if op.isInitGRPCLogger {
 		var level zapcore.Level
 		if err := level.UnmarshalText([]byte(cfg.Level)); err != nil {
 			return errors.Trace(err)
 		}
->>>>>>> d3c919af0 (log(logger): only write sarama logs at debug level (#6982))
 		if err := initGRPCLogger(level); err != nil {
 			return err
 		}
