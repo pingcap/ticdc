@@ -692,6 +692,7 @@ func TestRemoveExpiredFilesWithoutPartition(t *testing.T) {
 		"schema1/table1/5/2021-01-01/CDC000001.csv",
 		"schema1/table1/5/2021-01-01/CDC000002.csv",
 		"schema1/table1/5/2021-01-01/CDC000003.csv",
+		"schema1/table1/5/2021-01-01/1.data",
 		"schema1/table1/5/2021-01-01/" + defaultIndexFileName, // index
 		"schema1/table1/meta/schema_5_20210101.json",          // schema should never be cleaned
 		// schma1-table2

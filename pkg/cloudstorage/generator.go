@@ -564,12 +564,6 @@ func ParseFileIndexFromFileName(fileName string, extension string) (FileIndex, e
 var dateSeparatorDayRegexp = regexp.MustCompile("^" + config.DateSeparatorDay.GetPattern() + "$")
 
 func dateFromDMLPath(filePath string) string {
-	// Only data and index files participate in expiration. Schema files and
-	// other metadata must never be removed based on a date-like identifier.
-	if !strings.HasPrefix(path.Base(filePath), "CDC") {
-		return ""
-	}
-
 	parts := strings.Split(filePath, "/")
 	// The date directory is the rightmost complete date component. Searching
 	// from the end prevents dates embedded in schema or table names from being
