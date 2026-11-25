@@ -16,6 +16,7 @@ package avro
 
 import (
 	"encoding/binary"
+	"encoding/json"
 	"fmt"
 	"hash/crc32"
 	"strconv"
@@ -31,6 +32,8 @@ import (
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"github.com/pingcap/ticdc/pkg/sink/codec/schemamanager"
 	"github.com/pingcap/ticdc/pkg/util"
+	timodel "github.com/pingcap/tidb/pkg/meta/model"
+	"github.com/pingcap/tidb/pkg/parser/ast"
 	"github.com/pingcap/tidb/pkg/util/chunk"
 	"github.com/pingcap/tidb/pkg/util/rowcodec"
 	"github.com/stretchr/testify/require"
@@ -86,7 +89,7 @@ func TestDecodedTableInfoLocatesRowByPrimaryKey(t *testing.T) {
 				keyMap[key] = nil
 			}
 
-			tableInfo := newTableInfo("test", "t", columns, keyMap)
+			tableInfo := newTableInfo(common.NewTableInfoProvider(), "test", "t", columns, keyMap)
 			require.Equal(t, primaryKeys, tableInfo.GetPrimaryKeyColumnNames())
 			require.True(t, tableInfo.HasPKOrNotNullUK)
 			common.RequireRowLocatorByPrimaryKey(t, tableInfo, primaryKeys...)
@@ -349,7 +352,7 @@ func TestDecodedTableInfoWithoutKeyColumnsHasNoRowLocator(t *testing.T) {
 	columns, _, _, err := avroData2Columns(map[string]any{"a": int64(1), "b": int64(2)}, fields)
 	require.NoError(t, err)
 
-	tableInfo := newTableInfo("test", "t", columns, nil)
+	tableInfo := newTableInfo(common.NewTableInfoProvider(), "test", "t", columns, nil)
 	require.False(t, tableInfo.PKIsHandle())
 	require.Empty(t, tableInfo.GetIndices())
 	require.Empty(t, tableInfo.GetOrderedHandleKeyColumnIDs())
@@ -399,4 +402,56 @@ func TestUpdateWithoutBeforeValueRequiresKey(t *testing.T) {
 		_, err := assembleEvent(common.NewTableInfoProvider(), key, map[string]any{"id": int64(1), tidbOp: updateOperation, tidbCommitTs: int64(100)}, schema, false, true, 0)
 		require.ErrorContains(t, err, "handle")
 	}
+}
+
+func TestAvroNextDDLEventInvalidatesSharedCache(t *testing.T) {
+	provider := common.NewTableInfoProvider()
+	dec := NewDecoder(common.NewConfig(config.ProtocolAvro), nil, "topic", nil).(*decoder)
+	dec.ShareTableInfo(provider)
+
+	t1 := commonType.WrapTableInfo("test", &timodel.TableInfo{ID: 1, Name: ast.NewCIStr("t1"), UpdateTS: 100})
+	t2 := commonType.WrapTableInfo("other", &timodel.TableInfo{ID: 2, Name: ast.NewCIStr("t2"), UpdateTS: 100})
+	provider.WriteTableInfo(t1)
+	provider.WriteTableInfo(t2)
+
+	payload, err := json.Marshal(&ddlEvent{
+		Query:    "ALTER TABLE test.t1 EXCHANGE PARTITION p0 WITH TABLE test.t_normal",
+		Schema:   "test",
+		Table:    "t1",
+		CommitTs: 120,
+	})
+	require.NoError(t, err)
+	dec.AddKeyValue(nil, append([]byte{ddlByte}, payload...))
+	tp, hasNext := dec.HasNext()
+	require.True(t, hasNext)
+	require.Equal(t, common.MessageTypeDDL, tp)
+	_ = dec.NextDDLEvent()
+
+	_, before := provider.ReadAt("other", "t2", 120)
+	require.Same(t, t2, before)
+	_, afterT1 := provider.ReadAt("test", "t1", 121)
+	require.Nil(t, afterT1)
+	_, afterT2 := provider.ReadAt("other", "t2", 121)
+	require.Nil(t, afterT2)
+}
+
+func TestAvroNewDecoderDoesNotClearExistingDecoderState(t *testing.T) {
+	d1 := NewDecoder(common.NewConfig(config.ProtocolAvro), nil, "topic", nil).(*decoder)
+	event := d1.assembleDMLEventFromDecoded(
+		map[string]any{"id": int64(1)},
+		map[string]any{"id": int64(1), tidbCommitTs: int64(100), tidbOp: insertOperation},
+		map[string]any{
+			"namespace": "default.test", "name": "person",
+			"fields": []any{
+				map[string]any{"name": "id", "type": map[string]any{"connect.parameters": map[string]any{"tidb_type": "INT"}}},
+			},
+		}, false, true, 0)
+	t.Cleanup(event.PostFlush)
+
+	blockedBefore := d1.cache.GetBlockedTables("test", "person")
+	require.Equal(t, []int64{event.PhysicalTableID}, blockedBefore)
+
+	d2 := NewDecoder(common.NewConfig(config.ProtocolAvro), nil, "topic", nil).(*decoder)
+	require.Equal(t, blockedBefore, d1.cache.GetBlockedTables("test", "person"))
+	require.Empty(t, d2.cache.GetBlockedTables("test", "person"))
 }

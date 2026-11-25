@@ -19,6 +19,8 @@ import (
 	"sync"
 
 	"github.com/pingcap/ticdc/pkg/common"
+	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
+	timodel "github.com/pingcap/tidb/pkg/meta/model"
 )
 
 // TableInfoProvider keeps the TableInfo of every table version. Decoders may
@@ -30,12 +32,14 @@ type TableInfoProvider struct {
 	tables        map[accessKey]*tableVersions
 	invalidations []uint64
 	changed       chan struct{}
+	allocator     *tableIDAllocator
 }
 
 // NewTableInfoProvider creates an empty versioned provider.
 func NewTableInfoProvider() *TableInfoProvider {
 	return &TableInfoProvider{
-		tables: make(map[accessKey]*tableVersions),
+		tables:    make(map[accessKey]*tableVersions),
+		allocator: newTableIDAllocator(),
 	}
 }
 
@@ -117,6 +121,23 @@ func (c *TableInfoProvider) InvalidateAll(ts uint64) {
 	}
 }
 
+// RecordDDL updates cached table versions for a decoded DDL event.
+// DDLs that move layouts between names invalidate all cached table info;
+// other DDLs invalidate only the affected table names.
+func (c *TableInfoProvider) RecordDDL(ddl *commonEvent.DDLEvent) {
+	if c == nil || ddl == nil {
+		return
+	}
+	ts := ddl.GetCommitTs()
+	switch timodel.ActionType(ddl.Type) {
+	case timodel.ActionRenameTable, timodel.ActionRenameTables, timodel.ActionExchangeTablePartition:
+		c.InvalidateAll(ts)
+	default:
+		c.AddDDL(ddl.SchemaName, ddl.TableName, ts)
+		c.AddDDL(ddl.ExtraSchemaName, ddl.ExtraTableName, ts)
+	}
+}
+
 // ReleaseBefore drops the versions the watermark has passed. Every decoder has
 // consumed the messages carrying them; the newest dropped entry stays as the
 // floor later versions are resolved against.
@@ -165,6 +186,21 @@ func (c *TableInfoProvider) table(schema, table string) *tableVersions {
 		c.tables[key] = versions
 	}
 	return versions
+}
+
+// AllocateTableID allocates a physical table ID scoped to this provider.
+func (c *TableInfoProvider) AllocateTableID(schema, table string) int64 {
+	return c.allocator.Allocate(schema, table)
+}
+
+// AddBlockTableID registers a physical table ID as blocked by DDLs on the table.
+func (c *TableInfoProvider) AddBlockTableID(schema, table string, physicalTableID int64) {
+	c.allocator.AddBlockTableID(schema, table, physicalTableID)
+}
+
+// GetBlockedTables returns the physical table IDs blocked by DDLs on the table.
+func (c *TableInfoProvider) GetBlockedTables(schema, table string) []int64 {
+	return c.allocator.GetBlockedTables(schema, table)
 }
 
 // tableVersions keeps the versions of one table in ascending order. A table has

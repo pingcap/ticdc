@@ -1143,9 +1143,9 @@ func TestE2EPartitionTable(t *testing.T) {
 	enc, err := NewBatchEncoder(codecConfig, nil)
 	require.NoError(t, err)
 
-	allocator := tableIDAllocator
 	dec, err := NewDecoder(ctx, codecConfig, nil)
 	require.NoError(t, err)
+	allocator := dec.(*decoder).cache
 
 	m, err := enc.EncodeDDLEvent(createPartitionTableDDL)
 	require.NoError(t, err)
@@ -1181,9 +1181,9 @@ func TestE2EPartitionTable(t *testing.T) {
 
 		decodedEvent := dec.NextDMLEvent()
 		// table id should be set to the partition table id, the PhysicalTableID
-		require.Equal(t, decodedEvent.GetTableID(), allocator.Allocate(e.TableInfo.GetSchemaName(), e.TableInfo.GetTableName()))
+		require.Equal(t, decodedEvent.GetTableID(), allocator.AllocateTableID(e.TableInfo.GetSchemaName(), e.TableInfo.GetTableName()))
 
-		require.Contains(t, allocator.GetBlockedTables("test", "t"), allocator.Allocate(e.TableInfo.GetSchemaName(), e.TableInfo.GetTableName()))
+		require.Contains(t, allocator.GetBlockedTables("test", "t"), allocator.AllocateTableID(e.TableInfo.GetSchemaName(), e.TableInfo.GetTableName()))
 	}
 
 	createTable2DDL := helper.DDL2Event(`create table t2 (a int primary key, b int)`)
@@ -1664,9 +1664,11 @@ func TestRenameTable(t *testing.T) {
 	encoder, err := NewBatchEncoder(codecConfig, nil)
 	require.NoError(t, err)
 
-	allocator := tableIDAllocator
+	shared := common.NewTableInfoProvider()
 	dec, err := NewDecoder(ctx, codecConfig, nil)
 	require.NoError(t, err)
+	dec.(*decoder).ShareTableInfo(shared)
+	allocator := shared
 
 	m, err := encoder.EncodeDDLEvent(createTableDDL)
 	require.NoError(t, err)
@@ -1683,6 +1685,7 @@ func TestRenameTable(t *testing.T) {
 
 	decoder1, err := NewDecoder(ctx, codecConfig, nil)
 	require.NoError(t, err)
+	decoder1.(*decoder).ShareTableInfo(shared)
 
 	err = encoder.AppendRowChangedEvent(ctx, "", insertRowEvent)
 	require.NoError(t, err)
@@ -1723,9 +1726,12 @@ func TestDDLSequence(t *testing.T) {
 	encoder, err := NewBatchEncoder(codecConfig, nil)
 	require.NoError(t, err)
 
-	allocator := tableIDAllocator
 	decoder, err := NewDecoder(ctx, codecConfig, nil)
 	require.NoError(t, err)
+	allocator := common.NewTableInfoProvider()
+	decoder.(interface {
+		ShareTableInfo(*common.TableInfoProvider)
+	}).ShareTableInfo(allocator)
 
 	createDB := helper.DDL2Event(`create database abc`)
 

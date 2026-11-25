@@ -40,8 +40,6 @@ import (
 	"go.uber.org/zap"
 )
 
-var tableIDAllocator = common.NewTableIDAllocator()
-
 // Decoder implement the Decoder interface
 type Decoder struct {
 	config *common.Config
@@ -83,7 +81,6 @@ func NewDecoder(
 	}
 
 	m, err := newMarshaller(config)
-	tableIDAllocator.Clean()
 	return &Decoder{
 		config:     config,
 		marshaller: m,
@@ -172,7 +169,7 @@ func (d *Decoder) NextDMLEvent() *commonEvent.DMLEvent {
 		return nil
 	}
 
-	tableIDAllocator.AddBlockTableID(msg.Schema, msg.Table, msg.TableID)
+	d.memo.AddBlockTableID(msg.Schema, msg.Table, msg.TableID)
 	return d.assembleDMLEvent(msg, tableInfo)
 }
 
@@ -294,7 +291,7 @@ func (d *Decoder) NextDDLEvent() *commonEvent.DDLEvent {
 		next := ele.Next()
 		tableInfo := d.memo.Read(msg.Schema, msg.Table, msg.SchemaVersion)
 		if tableInfo != nil {
-			tableIDAllocator.AddBlockTableID(msg.Schema, msg.Table, msg.TableID)
+			d.memo.AddBlockTableID(msg.Schema, msg.Table, msg.TableID)
 			d.CachedRowChangedEvents = append(d.CachedRowChangedEvents, d.assembleDMLEvent(msg, tableInfo))
 			d.cachedMessages.Remove(ele)
 		}
@@ -312,7 +309,7 @@ func (d *Decoder) GetCachedEvents() []*commonEvent.DMLEvent {
 
 // GetTableIDs identifies every table and partition whose events belong to the logical table.
 func (d *Decoder) GetTableIDs(schema, table string) []int64 {
-	return tableIDAllocator.GetBlockedTables(schema, table)
+	return d.memo.GetBlockedTables(schema, table)
 }
 
 // newTiColumnInfo uses columnSchema and IndexSchema to construct a tidb column info.
@@ -454,7 +451,7 @@ func (d *Decoder) buildDDLEvent(msg *message) *commonEvent.DDLEvent {
 	result.FinishedTs = msg.CommitTs
 	result.SchemaName = tableInfo.TableName.Schema
 	result.TableName = tableInfo.TableName.Table
-	tableIDAllocator.AddBlockTableID(result.SchemaName, result.TableName, tableInfo.TableName.TableID)
+	d.memo.AddBlockTableID(result.SchemaName, result.TableName, tableInfo.TableName.TableID)
 
 	if preTableInfo != nil {
 		result.ExtraSchemaName = preTableInfo.GetSchemaName()
@@ -468,7 +465,7 @@ func (d *Decoder) buildDDLEvent(msg *message) *commonEvent.DDLEvent {
 
 	actionType := common.GetDDLActionType(result.Query)
 	result.Type = byte(actionType)
-	result.BlockedTables = common.GetBlockedTables(tableIDAllocator, result)
+	result.BlockedTables = common.GetBlockedTables(d.memo, result)
 	return result
 }
 

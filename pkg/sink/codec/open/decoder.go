@@ -41,8 +41,6 @@ import (
 	"go.uber.org/zap"
 )
 
-var tableIDAllocator = common.NewTableIDAllocator()
-
 type decoder struct {
 	cache *common.TableInfoProvider
 
@@ -80,7 +78,6 @@ func NewDecoder(
 		}
 	}
 
-	tableIDAllocator.Clean()
 	return &decoder{
 		config:       config,
 		storage:      externalStorage,
@@ -181,17 +178,9 @@ func (b *decoder) NextDDLEvent() *commonEvent.DDLEvent {
 	result.SchemaName = b.nextKey.Schema
 	result.TableName = b.nextKey.Table
 
-	switch m.Type {
-	case timodel.ActionRenameTable, timodel.ActionRenameTables, timodel.ActionExchangeTablePartition:
-		// These DDLs move the layout between names, so the entry cached for a
-		// name may belong to another table afterwards.
-		b.cache.InvalidateAll(result.FinishedTs)
-	default:
-		b.cache.AddDDL(result.SchemaName, result.TableName, result.FinishedTs)
-	}
-
-	tableIDAllocator.AddBlockTableID(result.SchemaName, result.TableName, tableIDAllocator.Allocate(result.SchemaName, result.TableName))
-	result.BlockedTables = common.GetBlockedTables(tableIDAllocator, result)
+	b.cache.AddBlockTableID(result.SchemaName, result.TableName, b.cache.AllocateTableID(result.SchemaName, result.TableName))
+	result.BlockedTables = common.GetBlockedTables(b.cache, result)
+	b.cache.RecordDDL(result)
 
 	b.nextKey = nil
 	b.valueBytes = nil
@@ -436,8 +425,8 @@ func (b *decoder) queryTableInfo(key *messageKey, value *messageRow) *commonType
 }
 
 func (b *decoder) newTableInfo(key *messageKey, value *messageRow) *commonType.TableInfo {
-	physicalTableID := tableIDAllocator.Allocate(key.Schema, key.Table)
-	tableIDAllocator.AddBlockTableID(key.Schema, key.Table, physicalTableID)
+	physicalTableID := b.cache.AllocateTableID(key.Schema, key.Table)
+	b.cache.AddBlockTableID(key.Schema, key.Table, physicalTableID)
 	key.Partition = &physicalTableID
 	tableInfo := new(timodel.TableInfo)
 	tableInfo.ID = *key.Partition

@@ -45,8 +45,6 @@ import (
 // It keeps recently active routed-table schemas without retaining every historical version.
 const decoderCodecCacheSize = 128
 
-var tableIDAllocator = common.NewTableIDAllocator()
-
 type decoder struct {
 	config *common.Config
 	topic  string
@@ -68,7 +66,6 @@ func NewDecoder(
 	topic string,
 	db *sql.DB,
 ) common.Decoder {
-	tableIDAllocator.Clean()
 	codecs, _ := lru.New(decoderCodecCacheSize)
 	return &decoder{
 		config:       config,
@@ -494,7 +491,7 @@ func queryTableInfo(
 	if tableInfo != nil {
 		return tableInfo
 	}
-	tableInfo = newTableInfo(schemaName, tableName, columns, keyMap)
+	tableInfo = newTableInfo(cache, schemaName, tableName, columns, keyMap)
 	// A key-only delete has the handle columns alone, and a NULL time column
 	// has no decimal yet; neither may define the layout of later rows.
 	if cacheable {
@@ -503,10 +500,10 @@ func queryTableInfo(
 	return tableInfo
 }
 
-func newTableInfo(schemaName, tableName string, columns []*timodel.ColumnInfo, keyMap map[string]any) *commonType.TableInfo {
+func newTableInfo(cache *common.TableInfoProvider, schemaName, tableName string, columns []*timodel.ColumnInfo, keyMap map[string]any) *commonType.TableInfo {
 	tidbTableInfo := new(timodel.TableInfo)
-	tidbTableInfo.ID = tableIDAllocator.Allocate(schemaName, tableName)
-	tableIDAllocator.AddBlockTableID(schemaName, tableName, tidbTableInfo.ID)
+	tidbTableInfo.ID = cache.AllocateTableID(schemaName, tableName)
+	cache.AddBlockTableID(schemaName, tableName, tidbTableInfo.ID)
 	tidbTableInfo.Name = ast.NewCIStr(tableName)
 	tidbTableInfo.Columns = columns
 	indexColumns := make([]*timodel.IndexColumn, 0)
@@ -689,9 +686,9 @@ func (d *decoder) NextDDLEvent() *commonEvent.DDLEvent {
 	actionType := common.GetDDLActionType(result.Query)
 	result.Type = byte(actionType)
 
-	tableIDAllocator.AddBlockTableID(result.SchemaName, result.TableName, tableIDAllocator.Allocate(result.SchemaName, result.TableName))
-	result.BlockedTables = common.GetBlockedTables(tableIDAllocator, result)
-	d.cache.AddDDL(result.SchemaName, result.TableName, result.FinishedTs)
+	d.cache.AddBlockTableID(result.SchemaName, result.TableName, d.cache.AllocateTableID(result.SchemaName, result.TableName))
+	result.BlockedTables = common.GetBlockedTables(d.cache, result)
+	d.cache.RecordDDL(result)
 	return result
 }
 

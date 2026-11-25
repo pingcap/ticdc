@@ -41,8 +41,6 @@ import (
 	"go.uber.org/zap"
 )
 
-var tableIDAllocator = common.NewTableIDAllocator()
-
 // decoder implement the Decoder interface
 type decoder struct {
 	config *common.Config
@@ -61,7 +59,6 @@ func NewDecoder(
 	config *common.Config,
 	db *sql.DB,
 ) common.Decoder {
-	tableIDAllocator.Clean()
 	return &decoder{
 		config:       config,
 		upstreamTiDB: db,
@@ -139,14 +136,10 @@ func (d *decoder) NextDDLEvent() *commonEvent.DDLEvent {
 	event.Query = d.valuePayload["ddl"].(string)
 	actionType := common.GetDDLActionType(event.Query)
 	event.Type = byte(actionType)
-	d.cache.AddDDL(schemaName, tableName, event.FinishedTs)
 
-	tableIDAllocator.AddBlockTableID(event.SchemaName, event.TableName, tableIDAllocator.Allocate(event.SchemaName, event.TableName))
-	event.BlockedTables = common.GetBlockedTables(tableIDAllocator, event)
-	if event.Type == byte(timodel.ActionRenameTable) {
-		schemaName = event.ExtraSchemaName
-		tableName = event.ExtraTableName
-	}
+	d.cache.AddBlockTableID(event.SchemaName, event.TableName, d.cache.AllocateTableID(event.SchemaName, event.TableName))
+	event.BlockedTables = common.GetBlockedTables(d.cache, event)
+	d.cache.RecordDDL(event)
 
 	return event
 }
@@ -322,19 +315,20 @@ func (d *decoder) queryTableInfoFromPayload(
 	if tableInfo != nil {
 		return tableInfo
 	}
-	tableInfo = newTableInfoFromPayload(schemaName, tableName, keyPayload, valueSchema)
+	tableInfo = newTableInfoFromPayload(d.cache, schemaName, tableName, keyPayload, valueSchema)
 	d.cache.Write(schemaName, tableName, version, tableInfo)
 	return tableInfo
 }
 
 func newTableInfoFromPayload(
+	cache *common.TableInfoProvider,
 	schemaName, tableName string,
 	keyPayload map[string]any,
 	valueSchema map[string]any,
 ) *commonType.TableInfo {
 	tidbTableInfo := new(timodel.TableInfo)
-	tidbTableInfo.ID = tableIDAllocator.Allocate(schemaName, tableName)
-	tableIDAllocator.AddBlockTableID(schemaName, tableName, tidbTableInfo.ID)
+	tidbTableInfo.ID = cache.AllocateTableID(schemaName, tableName)
+	cache.AddBlockTableID(schemaName, tableName, tidbTableInfo.ID)
 	tidbTableInfo.Name = ast.NewCIStr(tableName)
 
 	fields := valueSchema["fields"].([]any)

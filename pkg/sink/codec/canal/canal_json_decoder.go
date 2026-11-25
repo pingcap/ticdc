@@ -89,8 +89,6 @@ type decoder struct {
 	cache        *common.TableInfoProvider
 }
 
-var tableIDAllocator = common.NewTableIDAllocator()
-
 // NewDecoder return a decoder for canal-json
 func NewDecoder(
 	ctx context.Context, codecConfig *common.Config, db *sql.DB,
@@ -113,7 +111,6 @@ func NewDecoder(
 		}
 	}
 
-	tableIDAllocator.Clean()
 	return &decoder{
 		config:       codecConfig,
 		decoder:      newBufferedJSONDecoder(),
@@ -377,13 +374,12 @@ func (d *decoder) NextDDLEvent() *commonEvent.DDLEvent {
 	result.Query = d.msg.getQuery()
 	actionType := common.GetDDLActionType(result.Query)
 	result.Type = byte(actionType)
-	tableIDAllocator.AddBlockTableID(result.SchemaName, result.TableName, tableIDAllocator.Allocate(result.SchemaName, result.TableName))
+	d.cache.AddBlockTableID(result.SchemaName, result.TableName, d.cache.AllocateTableID(result.SchemaName, result.TableName))
 
-	result.BlockedTables = common.GetBlockedTables(tableIDAllocator, result)
+	result.BlockedTables = common.GetBlockedTables(d.cache, result)
 	// Rows after this DDL carry its commit ts, so they read the new table info;
 	// rows buffered before it keep reading the cached older version.
-	d.cache.AddDDL(result.SchemaName, result.TableName, result.GetCommitTs())
-	d.cache.AddDDL(result.ExtraSchemaName, result.ExtraTableName, result.GetCommitTs())
+	d.cache.RecordDDL(result)
 	return result
 }
 
@@ -548,8 +544,8 @@ func (d *decoder) queryTableInfo(msg canalJSONMessageInterface) *commonType.Tabl
 	version, tableInfo := d.cache.ReadAt(schemaName, tableName, msg.getCommitTs())
 	if tableInfo == nil {
 		tidbTableInfo := new(timodel.TableInfo)
-		tidbTableInfo.ID = tableIDAllocator.Allocate(schemaName, tableName)
-		tableIDAllocator.AddBlockTableID(schemaName, tableName, tidbTableInfo.ID)
+		tidbTableInfo.ID = d.cache.AllocateTableID(schemaName, tableName)
+		d.cache.AddBlockTableID(schemaName, tableName, tidbTableInfo.ID)
 		tidbTableInfo.Name = ast.NewCIStr(tableName)
 
 		columns := newTiColumns(msg)

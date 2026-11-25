@@ -32,8 +32,9 @@ import (
 type txnDecoder struct {
 	data []byte
 
-	config *common.Config
-	msg    canalJSONMessageInterface
+	config    *common.Config
+	msg       canalJSONMessageInterface
+	tableInfo *commonType.TableInfo
 }
 
 // NewTxnDecoder return a new CanalJSONTxnEventDecoder.
@@ -55,6 +56,7 @@ func (d *txnDecoder) AddKeyValue(_, value []byte) {
 			zap.Error(err))
 	}
 	d.data = value
+	d.tableInfo = nil
 }
 
 // HasNext return true if there is any event can be returned.
@@ -109,7 +111,12 @@ func (d *txnDecoder) NextDMLEvent() *commonEvent.DMLEvent {
 func (d *txnDecoder) canalJSONMessage2RowChange() *commonEvent.DMLEvent {
 	msg := d.msg
 
-	tableInfo := newTableInfo(msg)
+	if d.tableInfo == nil ||
+		d.tableInfo.GetSchemaName() != *msg.getSchema() ||
+		d.tableInfo.GetTableName() != *msg.getTable() {
+		d.tableInfo = newTableInfo(msg)
+	}
+	tableInfo := d.tableInfo
 	result := new(commonEvent.DMLEvent)
 	result.Length++                    // todo: set this field correctly
 	result.StartTs = msg.getCommitTs() // todo: how to set this correctly?

@@ -37,8 +37,8 @@ type tableIDAllocator struct {
 	blockedTableIDs map[accessKey]map[int64]struct{}
 }
 
-// NewTableIDAllocator creates a new tableIDAllocator
-func NewTableIDAllocator() *tableIDAllocator {
+// newTableIDAllocator creates a new tableIDAllocator
+func newTableIDAllocator() *tableIDAllocator {
 	return &tableIDAllocator{
 		tableIDs:        make(map[accessKey]int64),
 		blockedTableIDs: make(map[accessKey]map[int64]struct{}),
@@ -90,15 +90,6 @@ func (a *tableIDAllocator) AddBlockTableID(schema string, table string, physical
 		log.Info("add table id to blocked list",
 			zap.String("schema", schema), zap.String("table", table), zap.Int64("tableID", physicalTableID))
 	}
-}
-
-func (a *tableIDAllocator) Clean() {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-
-	a.currentTableID = 0
-	clear(a.tableIDs)
-	clear(a.blockedTableIDs)
 }
 
 type PartitionTableAccessor struct {
