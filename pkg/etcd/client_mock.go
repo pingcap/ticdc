@@ -209,9 +209,9 @@ func (mr *MockClientMockRecorder) Unwrap() *gomock.Call {
 }
 
 // Watch mocks base method.
-func (m *MockClient) Watch(ctx context.Context, key, role string, opts ...clientv3.OpOption) clientv3.WatchChan {
+func (m *MockClient) Watch(ctx context.Context, key string, opts ...clientv3.OpOption) clientv3.WatchChan {
 	m.ctrl.T.Helper()
-	varargs := []interface{}{ctx, key, role}
+	varargs := []interface{}{ctx, key}
 	for _, a := range opts {
 		varargs = append(varargs, a)
 	}
@@ -221,8 +221,8 @@ func (m *MockClient) Watch(ctx context.Context, key, role string, opts ...client
 }
 
 // Watch indicates an expected call of Watch.
-func (mr *MockClientMockRecorder) Watch(ctx, key, role interface{}, opts ...interface{}) *gomock.Call {
+func (mr *MockClientMockRecorder) Watch(ctx, key interface{}, opts ...interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	varargs := append([]interface{}{ctx, key, role}, opts...)
+	varargs := append([]interface{}{ctx, key}, opts...)
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Watch", reflect.TypeOf((*MockClient)(nil).Watch), varargs...)
 }
