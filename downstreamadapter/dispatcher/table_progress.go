@@ -45,6 +45,7 @@ type TableProgress struct {
 	// cumulate dml event size for a period of time,
 	// it will be cleared after once query
 	cumulateEventSize int64
+	sinkLoad          *resource.Recorder
 	// it used to calculate the sum-dml-event-size/s for each dispatcher
 	lastQueryTime time.Time
 }
@@ -133,7 +134,9 @@ func (p *TableProgress) remove(ts Ts, size int64) {
 		}
 	}
 	p.cumulateEventSize += size
-	resource.SinkBytes.Add(uint64(size))
+	if size > 0 {
+		p.sinkLoad.Add(uint64(size))
+	}
 }
 
 // Empty checks if the TableProgress is empty.

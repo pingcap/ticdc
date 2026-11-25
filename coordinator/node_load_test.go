@@ -14,6 +14,7 @@
 package coordinator
 
 import (
+	"math"
 	"testing"
 	"time"
 
@@ -22,6 +23,29 @@ import (
 	"github.com/pingcap/ticdc/pkg/scheduler/resource"
 	"github.com/stretchr/testify/require"
 )
+
+func TestNodeLoadReestablishesBaselineAfterStatsRollover(t *testing.T) {
+	stats := resource.NewNodeStats()
+	recorder := stats.NewCounter(resource.Sink).Recorder()
+	now := time.Now()
+	var state nodeLoadState
+	recorder.Add(math.MaxUint64 - 7)
+	state.observe(stats.Snapshot(now), now)
+	recorder.Add(3)
+	now = now.Add(resource.SampleInterval)
+	state.observe(stats.Snapshot(now), now)
+	require.True(t, state.available)
+	require.Equal(t, float64(3), state.rates[resource.Sink])
+	recorder.Add(8)
+	now = now.Add(resource.SampleInterval)
+	state.observe(stats.Snapshot(now), now)
+	require.False(t, state.available, "rollover must not look idle or produce an enormous rate")
+	recorder.Add(5)
+	now = now.Add(resource.SampleInterval)
+	state.observe(stats.Snapshot(now), now)
+	require.True(t, state.available)
+	require.Equal(t, float64(5), state.rates[resource.Sink])
+}
 
 func TestNodeLoadHeartbeatSnapshot(t *testing.T) {
 	now := time.Unix(100, 0)

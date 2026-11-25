@@ -27,6 +27,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/liveness"
 	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/node"
+	"github.com/pingcap/ticdc/pkg/scheduler/resource"
 	"github.com/pingcap/ticdc/pkg/writelease"
 	"github.com/pingcap/ticdc/server/watcher"
 	"go.uber.org/zap"
@@ -56,6 +57,7 @@ type Manager struct {
 	// node holds node-scoped liveness and drain state that applies to the whole capture.
 	node      *managerNodeState
 	nodeLoads *replica.NodeLoadTracker
+	nodeStats *resource.NodeStats
 	// maintainers holds changefeed-scoped state and lifecycle operations.
 	maintainers *managerMaintainerSet
 	writeGate   *writelease.Gate
@@ -103,6 +105,7 @@ func NewMaintainerManager(
 			return nil
 		},
 	}
+	m.nodeStats, _ = appcontext.TryGetService[*resource.NodeStats](appcontext.NodeResourceStats)
 	m.maintainers.nodeLoads = m.nodeLoads
 
 	mc.RegisterHandler(messaging.MaintainerManagerTopic, m.recvMessages)

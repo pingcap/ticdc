@@ -313,6 +313,7 @@ func TestNodeHeartbeatResponseRenewsP2PWriteLease(t *testing.T) {
 
 	var nodeLiveness liveness.Liveness
 	m := NewMaintainerManager(&node.Info{ID: node.ID("n1")}, &config.SchedulerConfig{}, &nodeLiveness)
+	m.nodeStats = resource.NewNodeStats()
 	m.coordinatorID = node.ID("coordinator")
 	m.coordinatorVersion = 10
 	gate.SetP2PRequired(true)

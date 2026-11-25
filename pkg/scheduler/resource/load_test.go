@@ -17,6 +17,7 @@ package resource
 import (
 	"math"
 	"testing"
+	"time"
 
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/stretchr/testify/require"
@@ -35,19 +36,21 @@ func TestResourceLoadProtocol(t *testing.T) {
 	require.Equal(t, expected, rates)
 	require.Equal(t, float64(100), decoded.BytesPerSecond, "legacy readers still see sink rate")
 
-	before, valid := Counters(Snapshot())
+	stats := NewNodeStats()
+	now := time.Now()
+	before, valid := Counters(stats.Snapshot(now))
 	require.True(t, valid)
-	SinkBytes.Add(10)
-	EventStoreWriteBytes.Add(20)
-	EventStoreReadBytes.Add(30)
-	snapshot := Snapshot()
+	stats.NewCounter(Sink).Recorder().Add(10)
+	stats.NewCounter(EventStoreWrite).Recorder().Add(20)
+	stats.NewCounter(EventStoreRead).Recorder().Add(30)
+	snapshot := stats.Snapshot(now.Add(SampleInterval))
 	after, valid := Counters(snapshot)
 	require.True(t, valid)
 	require.Equal(t, before[Sink]+10, after[Sink])
 	require.Equal(t, before[EventStoreWrite]+20, after[EventStoreWrite])
 	require.Equal(t, before[EventStoreRead]+30, after[EventStoreRead])
 	require.Equal(t, after[Sink], snapshot.FlushedEventBytes)
-	again, valid := Counters(Snapshot())
+	again, valid := Counters(stats.Snapshot(now.Add(2 * SampleInterval)))
 	require.True(t, valid)
 	require.Equal(t, after, again, "sampling must not reset process counters")
 

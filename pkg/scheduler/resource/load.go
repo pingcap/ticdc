@@ -18,7 +18,6 @@ package resource
 import (
 	"math"
 	"slices"
-	"sync/atomic"
 
 	"github.com/pingcap/ticdc/heartbeatpb"
 )
@@ -34,41 +33,6 @@ const (
 // Load keeps resource rates separate: byte counts from different stages are
 // not interchangeable and must never be added into one raw traffic score.
 type Load map[Type]float64
-
-var (
-	// SinkBytes counts flushed DML event sizes, matching dispatcher samples.
-	SinkBytes atomic.Uint64
-	// EventStoreWriteBytes counts successfully committed Pebble batch bytes.
-	EventStoreWriteBytes atomic.Uint64
-	// EventStoreReadBytes counts encoded keys and values visited by iterators,
-	// including rows filtered by a shared subscription's span. Cache hits count
-	// as reads; these counters do not represent physical disk IO or compaction.
-	EventStoreReadBytes atomic.Uint64
-
-	counters = []struct {
-		resource Type
-		total    *atomic.Uint64
-	}{
-		{Sink, &SinkBytes},
-		{EventStoreWrite, &EventStoreWriteBytes},
-		{EventStoreRead, &EventStoreReadBytes},
-	}
-)
-
-// Snapshot never consumes counters or per-dispatcher sampling windows. Add a
-// resource to the protocol and this list when wiring another byte counter;
-// coordinator sampling and target screening operate on the vector generically.
-func Snapshot() *heartbeatpb.NodeLoad {
-	load := &heartbeatpb.NodeLoad{Resources: make([]*heartbeatpb.ResourceUsage, 0, len(counters))}
-	for _, counter := range counters {
-		value := counter.total.Load()
-		load.Resources = append(load.Resources, &heartbeatpb.ResourceUsage{Resource: counter.resource, TotalBytes: value})
-		if counter.resource == Sink {
-			load.FlushedEventBytes = value
-		}
-	}
-	return load
-}
 
 // Counters accepts legacy sink-only reports. A missing resource is unsupported,
 // not an observed zero. Invalid vectors cannot be used for scheduling.

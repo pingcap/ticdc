@@ -24,6 +24,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/routing"
+	"github.com/pingcap/ticdc/pkg/scheduler/resource"
 	"github.com/prometheus/client_golang/prometheus"
 )
 
@@ -31,6 +32,8 @@ import (
 // that are common across all dispatchers within a DispatcherManager.
 // This eliminates the need to pass these parameters individually to each dispatcher.
 type SharedInfo struct {
+	// SinkLoad is owned by the DispatcherManager and retired after sink shutdown.
+	SinkLoad *resource.Counter
 	// Basic configuration
 	changefeedID         common.ChangeFeedID
 	lowLatencyMode       bool
