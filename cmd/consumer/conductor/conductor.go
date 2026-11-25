@@ -110,12 +110,12 @@ func (c *Conductor) acceptBatch(batch []event.Event, payload *source.Payload) er
 func (c *Conductor) accept(work event.Event, payload *source.Payload) error {
 	switch work := work.(type) {
 	case *event.DMLEvent:
-		c.marker, c.hasMarker = max(c.marker, work.CommitTs), true
+		c.marker = max(c.marker, work.CommitTs)
 		c.queueDML(&dmlTask{dml: work, partition: payload.Partition, offset: payload.Offset})
 	case *event.ResolvedEvent:
 		c.advanceWatermark(work.ResolvedTs, payload.Partition)
 	case *event.DDLEvent:
-		c.marker, c.hasMarker = max(c.marker, work.GetCommitTs()), true
+		c.marker = max(c.marker, work.GetCommitTs())
 		if err := setDDLTableNames(work); err != nil {
 			return err
 		}
@@ -128,15 +128,19 @@ func (c *Conductor) accept(work event.Event, payload *source.Payload) error {
 		}
 		c.queueDDL(work)
 	case nil:
-		// A source position becomes confirmable only after all its events
-		// have been decoded and registered.
-		if payload.Ack != nil && c.hasMarker {
+		// A source position becomes confirmable once all decoded events from
+		// this payload are registered, including idle resolved/skipped-DDL payloads.
+		if payload.Ack != nil {
 			c.positionsMu.Lock()
-			c.positions[payload.Partition] = append(c.positions[payload.Partition], sourcePosition{through: c.marker, ack: payload.Ack})
+			through := c.marker
+			if pending := c.positions[payload.Partition]; len(pending) != 0 {
+				through = max(through, pending[len(pending)-1].through)
+			}
+			c.positions[payload.Partition] = append(c.positions[payload.Partition], sourcePosition{through: through, ack: payload.Ack})
 			c.positionsMu.Unlock()
 			notifyConfirmation(c.confirmable)
 		}
-		c.marker, c.hasMarker = 0, false
+		c.marker = 0
 	}
 	return nil
 }
@@ -281,14 +285,16 @@ func (c *Conductor) flush(ctx context.Context, w *writer.Writer) error {
 			return nil
 		}
 		var (
-			rows  int
-			bytes int64
+			rows     int
+			bytes    int64
+			addedDDL bool
 		)
 		for rows < roundRows && bytes < roundBytes {
 			ddl, row := c.nextReady()
 			if ddl != nil {
 				c.popDDL()
 				w.AddDDL(ddl)
+				addedDDL = true
 				break
 			}
 			if row == nil {
@@ -302,7 +308,7 @@ func (c *Conductor) flush(ctx context.Context, w *writer.Writer) error {
 			rows += int(row.dml.Len())
 			bytes += row.dml.Rows.MemoryUsage()
 		}
-		if rows == 0 {
+		if rows == 0 && !addedDDL {
 			return nil
 		}
 	}
@@ -310,8 +316,7 @@ func (c *Conductor) flush(ctx context.Context, w *writer.Writer) error {
 
 // conductor coordinates write ordering and completion progress.
 type Conductor struct {
-	marker    uint64
-	hasMarker bool
+	marker uint64
 
 	positions   map[int32][]sourcePosition
 	positionsMu sync.Mutex
@@ -442,8 +447,25 @@ func confirmablePrefix(pending []sourcePosition, checkpoint uint64) int {
 
 func (c *Conductor) dropPositions(partition int32, count int) {
 	c.positionsMu.Lock()
-	c.positions[partition] = c.positions[partition][count:]
-	c.positionsMu.Unlock()
+	defer c.positionsMu.Unlock()
+	pending := c.positions[partition]
+	if count <= 0 || len(pending) == 0 {
+		return
+	}
+	count = min(count, len(pending))
+	remaining := len(pending) - count
+	if remaining == 0 {
+		clear(pending)
+		if cap(pending) > 1024 {
+			c.positions[partition] = nil
+			return
+		}
+		c.positions[partition] = pending[:0]
+		return
+	}
+	copy(pending, pending[count:])
+	clear(pending[remaining:])
+	c.positions[partition] = pending[:remaining]
 }
 
 func earliest(current, ts uint64) uint64 {

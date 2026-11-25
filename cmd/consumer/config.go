@@ -124,6 +124,10 @@ func newCodecConfig(upstreamURI *url.URL, replicaConfig *config.ReplicaConfig) *
 	// The upstream encoder only emits commit-ts, DDL and resolved events when
 	// these flags are enabled; the decoder cannot reconstruct them.
 	switch protocol {
+	case config.ProtocolCsv:
+		if !codecConfig.IncludeCommitTs {
+			log.Panic("consumer requires CSV commit-ts", zap.String("protocol", protocol.String()))
+		}
 	case config.ProtocolCanalJSON, config.ProtocolDebezium:
 		if !codecConfig.EnableTiDBExtension {
 			log.Panic("consumer requires TiDB protocol extensions", zap.String("protocol", protocol.String()))

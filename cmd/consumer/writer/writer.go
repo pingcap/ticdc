@@ -379,7 +379,11 @@ func (w *Writer) advanceCheckpoint() {
 	for _, block := range w.pendingDDL {
 		lower(block.GetCommitTs())
 	}
+	previous := w.checkpoint
 	w.checkpoint = max(w.checkpoint, through)
+	if w.checkpoint > previous && w.target != nil {
+		w.target.AddCheckpointTs(w.checkpoint)
+	}
 	for key := range w.mutations {
 		if key.commitTs > 0 && key.commitTs <= w.checkpoint {
 			delete(w.mutations, key)

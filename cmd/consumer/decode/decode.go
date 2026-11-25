@@ -28,6 +28,7 @@ import (
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/cmd/consumer/source"
 	"github.com/pingcap/ticdc/downstreamadapter/sink/columnselector"
+	commonType "github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
@@ -256,13 +257,6 @@ func (d *Group) addRow(f *Future, dml *event.DMLEvent) {
 	if dml == nil {
 		log.Panic("consumer DML decoding failed")
 	}
-	if payload := f.Payload; payload.File != nil {
-		dml.PhysicalTableID = payload.File.TableID
-		if dml.TableInfo.UpdateTS != payload.File.Schema.TableVersion {
-			dml.TableInfo = dml.TableInfo.CloneWithRouting(dml.TableInfo.GetTargetSchemaName(), dml.TableInfo.GetTargetTableName())
-			dml.TableInfo.UpdateTS = payload.File.Schema.TableVersion
-		}
-	}
 	f.appendEvent(dml)
 }
 
@@ -367,6 +361,7 @@ func (d *Group) decodeStorage(ctx context.Context, future *Future) error {
 	default:
 		return errors.ErrCodecDecode.GenWithStackByArgs("storage consumer protocol is unsupported")
 	}
+	var rawTableInfo, alignedTableInfo *commonType.TableInfo
 	for {
 		if err := context.Cause(ctx); err != nil {
 			return err
@@ -378,7 +373,25 @@ func (d *Group) decodeStorage(ctx context.Context, future *Future) error {
 		if kind != common.MessageTypeRow {
 			continue
 		}
-		d.addRow(future, decoder.NextDMLEvent())
+		dml := decoder.NextDMLEvent()
+		if dml == nil {
+			log.Panic("consumer DML decoding failed")
+		}
+		dml.PhysicalTableID = payload.File.TableID
+		if dml.TableInfo == rawTableInfo {
+			dml.TableInfo = alignedTableInfo
+		} else {
+			rawTableInfo = dml.TableInfo
+			if dml.TableInfo.UpdateTS != schema.TableVersion {
+				dml.TableInfo = dml.TableInfo.CloneWithRouting(
+					dml.TableInfo.GetTargetSchemaName(),
+					dml.TableInfo.GetTargetTableName(),
+				)
+				dml.TableInfo.UpdateTS = schema.TableVersion
+			}
+			alignedTableInfo = dml.TableInfo
+		}
+		d.addRow(future, dml)
 	}
 }
 
