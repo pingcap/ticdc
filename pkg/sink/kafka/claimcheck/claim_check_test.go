@@ -80,7 +80,8 @@ func TestClaimCheckCloseClosesStorage(t *testing.T) {
 
 func TestClaimCheckConcurrentWrites(t *testing.T) {
 	ctx := context.Background()
-	externalStorage := storage.NewMemStorage()
+	externalStorage, err := storage.NewLocalStorage(t.TempDir())
+	require.NoError(t, err)
 	changefeedID := common.NewChangeFeedIDWithName("test", "default")
 	claimCheck := &ClaimCheck{
 		storage:                   externalStorage,

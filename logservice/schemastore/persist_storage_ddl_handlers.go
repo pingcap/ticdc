@@ -26,9 +26,11 @@ import (
 	"github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/tidb/pkg/parser"
 	"github.com/pingcap/tidb/pkg/parser/ast"
+	"github.com/pingcap/tidb/pkg/parser/charset"
 	"github.com/pingcap/tidb/pkg/parser/format"
 	parser_model "github.com/pingcap/tidb/pkg/parser/model"
 	"github.com/pingcap/tidb/pkg/parser/mysql"
+	"github.com/pingcap/tidb/pkg/parser/types"
 	"go.uber.org/zap"
 )
 
@@ -2711,7 +2713,21 @@ func buildCreateTableQueryForMaterializedView(rawEvent *PersistedDDLEvent) strin
 		if col.Hidden {
 			continue
 		}
-		definition := fmt.Sprintf("%s %s", common.QuoteName(col.Name.O), col.FieldType.String())
+		typeDesc := col.GetTypeDesc()
+		hasCharset := types.HasCharset(&col.FieldType)
+		if !hasCharset && col.GetCharset() != charset.CharsetBin {
+			tp := col.GetType()
+			hasCharset = types.IsTypeChar(tp) || types.IsTypeBlob(tp) || tp == mysql.TypeVarString
+		}
+		if hasCharset {
+			if charsetName := col.GetCharset(); charsetName != "" {
+				typeDesc += " CHARACTER SET " + charsetName
+			}
+			if collation := col.GetCollate(); collation != "" {
+				typeDesc += " COLLATE " + collation
+			}
+		}
+		definition := fmt.Sprintf("%s %s", common.QuoteName(col.Name.O), typeDesc)
 		if mysql.HasNotNullFlag(col.GetFlag()) || mysql.HasPriKeyFlag(col.GetFlag()) {
 			definition += " NOT NULL"
 		}
