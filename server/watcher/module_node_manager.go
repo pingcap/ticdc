@@ -158,6 +158,13 @@ func (c *NodeManager) GetNodeInfo(id node.ID) *node.Info {
 	return (*c.nodes.Load())[id]
 }
 
+// GetCoordinatorRevision verifies that id currently owns the coordinator election key
+// and returns the key's revision. The revision is the coordinator version carried by
+// coordinator bootstrap messages.
+func (c *NodeManager) GetCoordinatorRevision(ctx context.Context, id node.ID) (int64, error) {
+	return c.etcdClient.GetOwnerRevision(ctx, config.CaptureID(id))
+}
+
 func (c *NodeManager) Run(ctx context.Context) error {
 	cfg := config.GetGlobalServerConfig()
 	watcher := NewEtcdWatcher(c.etcdClient,

@@ -28,7 +28,6 @@ import (
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/messaging"
-	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/ticdc/utils/chann"
 	"github.com/pingcap/ticdc/utils/dynstream"
@@ -170,10 +169,10 @@ func New(serverId node.ID) *EventCollector {
 		metricRedoDispatcherReceivedKVEventCount:         dispatcherReceivedEventCount.WithLabelValues("KVEvent", "redoDispatcher"),
 		metricRedoDispatcherReceivedResolvedTsEventCount: dispatcherReceivedEventCount.WithLabelValues("ResolvedTs", "redoDispatcher"),
 
-		metricDSEventChanSize:     metrics.DynamicStreamEventChanSize.WithLabelValues("event-collector"),
-		metricDSPendingQueue:      metrics.DynamicStreamPendingQueueLen.WithLabelValues("event-collector"),
-		metricDSEventChanSizeRedo: metrics.DynamicStreamEventChanSize.WithLabelValues("event-collector-redo"),
-		metricDSPendingQueueRedo:  metrics.DynamicStreamPendingQueueLen.WithLabelValues("event-collector-redo"),
+		metricDSEventChanSize:     dynstream.DynamicStreamEventChanSize.WithLabelValues("event-collector"),
+		metricDSPendingQueue:      dynstream.DynamicStreamPendingQueueLen.WithLabelValues("event-collector"),
+		metricDSEventChanSizeRedo: dynstream.DynamicStreamEventChanSize.WithLabelValues("event-collector-redo"),
+		metricDSPendingQueueRedo:  dynstream.DynamicStreamPendingQueueLen.WithLabelValues("event-collector-redo"),
 	}
 
 	eventCollector.logCoordinatorClient = newLogCoordinatorClient(eventCollector)
@@ -257,7 +256,7 @@ func (c *EventCollector) PrepareAddDispatcher(
 	readyCallback func(),
 ) {
 	changefeedID := target.GetChangefeedID()
-	log.Info("add dispatcher", zap.Stringer("changefeedID", changefeedID), zap.Stringer("dispatcher", target.GetId()))
+	log.Info("add dispatcher", zap.Stringer("changefeedID", changefeedID), zap.Stringer("dispatcherID", target.GetId()))
 	defer func() {
 		log.Info("add dispatcher done",
 			zap.Stringer("changefeedID", changefeedID),
@@ -447,20 +446,20 @@ func (c *EventCollector) processDSFeedback(ctx context.Context) error {
 		case <-ctx.Done():
 			return context.Cause(ctx)
 		case feedback := <-c.ds.Feedback():
-			if feedback.FeedbackType == dynstream.ReleasePath {
+			if feedback.FeedbackType == dynstream.ReleasePath && feedback.Release != nil &&
+				c.getDispatcherStatByID(feedback.Path) == feedback.Dest && feedback.Release() {
 				if v, ok := c.changefeedMap.Load(feedback.Area); ok {
 					v.(*changefeedStat).memoryReleaseCount.Add(1)
 				}
 				log.Info("release dispatcher memory in DS", zap.Any("dispatcherID", feedback.Path))
-				c.ds.Release(feedback.Path)
 			}
 		case feedback := <-c.redoDs.Feedback():
-			if feedback.FeedbackType == dynstream.ReleasePath {
+			if feedback.FeedbackType == dynstream.ReleasePath && feedback.Release != nil &&
+				c.getDispatcherStatByID(feedback.Path) == feedback.Dest && feedback.Release() {
 				if v, ok := c.changefeedMap.Load(feedback.Area); ok {
 					v.(*changefeedStat).memoryReleaseCount.Add(1)
 				}
 				log.Info("release dispatcher memory in redo DS", zap.Any("dispatcherID", feedback.Path))
-				c.redoDs.Release(feedback.Path)
 			}
 		}
 	}
@@ -521,12 +520,10 @@ func (c *EventCollector) sendDispatcherRequests(ctx context.Context) error {
 	}
 }
 
-func (c *EventCollector) handleDispatcherHeartbeatResponse(targetMessage *messaging.TargetMessage) {
-	if len(targetMessage.Message) != 1 {
-		log.Panic("invalid dispatcher heartbeat response message", zap.Any("msg", targetMessage))
-	}
-
-	response := targetMessage.Message[0].(*event.DispatcherHeartbeatResponse)
+func (c *EventCollector) handleDispatcherHeartbeatResponse(
+	from node.ID,
+	response *event.DispatcherHeartbeatResponse,
+) {
 	for _, ds := range response.DispatcherStates {
 		// This means that the dispatcher is removed in the event service we have to reset it.
 		if ds.State == event.DSStateRemoved {
@@ -535,13 +532,17 @@ func (c *EventCollector) handleDispatcherHeartbeatResponse(targetMessage *messag
 				continue
 			}
 			stat := v.(*dispatcherStat)
-			stat.session.retryCurrentRegistrationIfRemovedFrom(targetMessage.From)
+			stat.session.retryCurrentRegistrationIfRemovedFrom(from)
 		}
 	}
 }
 
 // MessageCenterHandler is the handler for the events message from EventService.
 func (c *EventCollector) MessageCenterHandler(ctx context.Context, targetMessage *messaging.TargetMessage) error {
+	if targetMessage == nil {
+		log.Warn("ignore nil event collector message")
+		return nil
+	}
 	inflightDuration := time.Since(time.UnixMilli(targetMessage.CreateAt)).Seconds()
 	c.metricReceiveEventLagDuration.Observe(inflightDuration)
 
@@ -560,16 +561,30 @@ func (c *EventCollector) MessageCenterHandler(ctx context.Context, targetMessage
 		}
 		return nil
 	}
-
-	for _, msg := range targetMessage.Message {
-		switch msg.(type) {
-		case *event.DispatcherHeartbeatResponse:
-			c.handleDispatcherHeartbeatResponse(targetMessage)
-		default:
-			log.Warn("unknown message type, ignore it",
+	if targetMessage.Type == messaging.TypeDispatcherHeartbeatResponse {
+		payloadCount := len(targetMessage.Message)
+		if payloadCount != 1 {
+			log.Warn("ignore dispatcher heartbeat response with invalid payload count",
+				zap.Stringer("from", targetMessage.From),
 				zap.String("type", targetMessage.Type.String()),
-				zap.Any("msg", msg))
+				zap.Int("payloadCount", payloadCount))
+			return nil
 		}
+		response, ok := targetMessage.Message[0].(*event.DispatcherHeartbeatResponse)
+		if !ok || response == nil {
+			log.Warn("ignore invalid dispatcher heartbeat response payload",
+				zap.Stringer("from", targetMessage.From),
+				zap.String("type", targetMessage.Type.String()))
+			return nil
+		}
+		c.handleDispatcherHeartbeatResponse(targetMessage.From, response)
+		return nil
+	}
+
+	if len(targetMessage.Message) > 0 {
+		log.Warn("unknown message type, ignore it",
+			zap.String("type", targetMessage.Type.String()),
+			zap.Int("payloadCount", len(targetMessage.Message)))
 	}
 	return nil
 }
@@ -587,8 +602,7 @@ func (c *EventCollector) RedoMessageCenterHandler(ctx context.Context, targetMes
 		return nil
 	}
 	log.Warn("unknown message type, ignore it",
-		zap.String("type", targetMessage.Type.String()),
-		zap.Any("msg", targetMessage))
+		zap.String("type", targetMessage.Type.String()))
 	return nil
 }
 
@@ -603,28 +617,28 @@ func (c *EventCollector) runDispatchMessage(ctx context.Context, inCh <-chan *me
 		case <-ctx.Done():
 			return context.Cause(ctx)
 		case targetMessage := <-inCh:
+			// Queued events must not keep the message and its payload alive via From.
+			from := targetMessage.From
 			for _, msg := range targetMessage.Message {
 				switch e := msg.(type) {
 				case event.Event:
 					switch e.GetType() {
 					case event.TypeBatchResolvedEvent:
 						events := e.(*event.BatchResolvedEvent).Events
-						from := &targetMessage.From
 						resolvedTsCount := int32(0)
 						for _, resolvedEvent := range events {
-							ds.Push(resolvedEvent.DispatcherID, dispatcher.NewDispatcherEvent(from, resolvedEvent))
+							ds.Push(resolvedEvent.DispatcherID, dispatcher.NewDispatcherEvent(&from, resolvedEvent))
 							resolvedTsCount += resolvedEvent.Len()
 						}
 						metricDispatcherReceivedResolvedTsEventCount.Add(float64(resolvedTsCount))
 					default:
 						metricDispatcherReceivedKVEventCount.Add(float64(e.Len()))
-						dispatcherEvent := dispatcher.NewDispatcherEvent(&targetMessage.From, e)
+						dispatcherEvent := dispatcher.NewDispatcherEvent(&from, e)
 						ds.Push(e.GetDispatcherID(), dispatcherEvent)
 					}
 				default:
 					log.Warn("unknown message type, ignore it",
-						zap.String("type", targetMessage.Type.String()),
-						zap.Any("msg", msg))
+						zap.String("type", targetMessage.Type.String()))
 				}
 			}
 		}
@@ -640,6 +654,8 @@ func (c *EventCollector) controlCongestion(ctx context.Context) error {
 		case <-ctx.Done():
 			return context.Cause(ctx)
 		case <-ticker.C:
+			c.ds.CheckMemoryPressure()
+			c.redoDs.CheckMemoryPressure()
 			messages := c.newCongestionControlMessages()
 			for serverID, m := range messages {
 				if len(m.GetAvailables()) != 0 {
@@ -742,7 +758,10 @@ func (c *EventCollector) newCongestionControlMessages() map[node.ID]*event.Conge
 
 		// get available memory for this dispatcher
 		if pathMemory, exists := changefeedPathMemory[changefeedID][dispatcherID]; exists {
-			nodeDispatcherMemory[eventServiceID][changefeedID][dispatcherID] = uint64(pathMemory)
+			if !common.IsRedoMode(stat.target.GetMode()) && stat.target.ShouldPauseScan() {
+				pathMemory = 0
+			}
+			nodeDispatcherMemory[eventServiceID][changefeedID][dispatcherID] = pathMemory
 		}
 		return true
 	})

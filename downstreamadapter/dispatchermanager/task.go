@@ -95,10 +95,6 @@ func GetHeartBeatTaskScheduler() threadpool.ThreadPool {
 	return heartBeatTaskScheduler
 }
 
-func SetHeartBeatTaskScheduler(taskScheduler threadpool.ThreadPool) {
-	heartBeatTaskScheduler = taskScheduler
-}
-
 var (
 	mergeCheckTaskSchedulerOnce sync.Once
 	mergeCheckTaskScheduler     threadpool.ThreadPool
@@ -109,10 +105,6 @@ func GetMergeCheckTaskScheduler() threadpool.ThreadPool {
 		mergeCheckTaskScheduler = threadpool.NewThreadPoolDefault()
 	})
 	return mergeCheckTaskScheduler
-}
-
-func SetMergeCheckTaskScheduler(taskScheduler threadpool.ThreadPool) {
-	mergeCheckTaskScheduler = taskScheduler
 }
 
 // MergeCheckTask is a task to check the status of the merged dispatcher.
@@ -196,7 +188,7 @@ func abortMerge[T dispatcher.Dispatcher](t *MergeCheckTask, dispatcherMap *Dispa
 		zap.String("reason", reason),
 		zap.Int64("mode", t.mergedDispatcher.GetMode()),
 		zap.Any("dispatcherIDs", t.dispatcherIDs),
-		zap.Any("mergedDispatcher", t.mergedDispatcher.GetId()),
+		zap.Any("dispatcherID", t.mergedDispatcher.GetId()),
 	)
 
 	// Stop retrying and cleanup best-effort.
@@ -235,7 +227,7 @@ func doMerge[T dispatcher.Dispatcher](t *MergeCheckTask, dispatcherMap *Dispatch
 		zap.Stringer("changefeedID", t.manager.changefeedID),
 		zap.Int64("mode", t.mergedDispatcher.GetMode()),
 		zap.Any("dispatcherIDs", t.dispatcherIDs),
-		zap.Any("mergedDispatcher", t.mergedDispatcher.GetId()),
+		zap.Any("dispatcherID", t.mergedDispatcher.GetId()),
 	)
 	sinkType := getSinkType(t.mergedDispatcher, t.manager)
 
@@ -284,7 +276,7 @@ func doMerge[T dispatcher.Dispatcher](t *MergeCheckTask, dispatcherMap *Dispatch
 			zap.Int("total", len(t.dispatcherIDs)),
 			zap.Int("count", count),
 			zap.Int64("mode", t.mergedDispatcher.GetMode()),
-			zap.Any("mergedDispatcher", t.mergedDispatcher.GetId()),
+			zap.Any("dispatcherID", t.mergedDispatcher.GetId()),
 		)
 	}
 
@@ -305,7 +297,6 @@ func doMerge[T dispatcher.Dispatcher](t *MergeCheckTask, dispatcherMap *Dispatch
 		zap.Stringer("changefeedID", t.manager.changefeedID),
 		zap.Stringer("dispatcherID", t.mergedDispatcher.GetId()),
 		zap.Int64("mode", t.mergedDispatcher.GetMode()),
-		zap.Any("tableSpan", common.FormatTableSpan(t.mergedDispatcher.GetTableSpan())),
 		zap.Uint64("startTs", startTs),
 	)
 
@@ -467,11 +458,11 @@ func resolveMergedDispatcherStartTs(t *MergeCheckTask, minCheckpointTs uint64, p
 			log.Warn("pending ddl has zero commit ts, fallback to min checkpoint ts",
 				zap.Stringer("changefeedID", t.manager.changefeedID),
 				zap.Uint64("minCheckpointTs", minCheckpointTs),
-				zap.Any("mergedDispatcher", t.mergedDispatcher.GetId()))
+				zap.Any("dispatcherID", t.mergedDispatcher.GetId()))
 		}
 		log.Info("merge dispatcher uses pending block event to calculate start ts",
 			zap.Stringer("changefeedID", t.manager.changefeedID),
-			zap.Any("mergedDispatcher", t.mergedDispatcher.GetId()),
+			zap.Any("dispatcherID", t.mergedDispatcher.GetId()),
 			zap.Uint64("pendingCommitTs", candidate.pendingCommitTs),
 			zap.Bool("pendingIsSyncPoint", candidate.pendingIsSyncPoint),
 			zap.Uint64("startTs", candidate.startTs),

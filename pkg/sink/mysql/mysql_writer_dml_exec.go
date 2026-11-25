@@ -77,7 +77,6 @@ func (w *Writer) execDMLWithMaxRetries(dmls *preparedDMLs) error {
 						return err
 					}
 
-					log.Debug("Exec Rows succeeded", zap.Any("rowCount", dmls.rowCount), zap.Int("writerID", w.id))
 					return nil
 				}
 
@@ -145,7 +144,6 @@ func (w *Writer) sequenceExecute(
 ) error {
 	for i, query := range dmls.sqls {
 		args := dmls.values[i]
-		log.Debug("exec row", zap.String("sql", query), zap.String("args", util.RedactArgs(args)), zap.Int("writerID", w.id))
 		ctx, cancelFunc := context.WithTimeout(w.ctx, writeTimeout)
 
 		var prepStmt *sql.Stmt

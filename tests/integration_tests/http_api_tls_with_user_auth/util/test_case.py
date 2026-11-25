@@ -415,7 +415,7 @@ def move_table():
 
 
 def resign_owner():
-    url = BASE_URL1 + "/owner/resign"
+    url = BASE_URL1 + "/owner/resign?keyspace=keyspace1"
     resp = rq.post(url, auth=Auth, cert=CERT, verify=VERIFY)
     assert resp.status_code == rq.codes.ok
 
@@ -452,9 +452,15 @@ def get_status():
 
 
 def set_log_level():
-    url = BASE_URL0 + "/log"
+    keyspace = os.getenv("KEYSPACE_NAME", "default")
+    url = BASE_URL0 + "/log?keyspace=" + keyspace
     data = json.dumps({"log_level": "debug"})
     headers = {"Content-Type": "application/json"}
+
+    resp = rq.post(url, data=data, headers=headers,
+                   cert=CERT, verify=VERIFY)
+    assert resp.status_code == rq.codes.unauthorized
+
     resp = rq.post(url, data=data, auth=Auth,
                    headers=headers, cert=CERT, verify=VERIFY)
     assert resp.status_code == rq.codes.ok
@@ -465,6 +471,25 @@ def set_log_level():
     assert resp.status_code == rq.codes.ok
 
     print("pass test: set log level")
+
+
+def log_redact():
+    keyspace = os.getenv("KEYSPACE_NAME", "default")
+    url = BASE_URL0 + "/log/redact?keyspace=" + keyspace
+    # The server starts with redaction ON by default, so use the same mode
+    # to keep this test to the authentication behavior.
+    data = json.dumps({"redact_info_log": "on"})
+    headers = {"Content-Type": "application/json"}
+
+    resp = rq.post(url, data=data, headers=headers,
+                   cert=CERT, verify=VERIFY)
+    assert resp.status_code == rq.codes.unauthorized
+
+    resp = rq.post(url, data=data, auth=Auth,
+                   headers=headers, cert=CERT, verify=VERIFY)
+    assert resp.status_code == rq.codes.ok
+
+    print("pass test: log redact")
 
 
 def verify_table():
@@ -610,6 +635,7 @@ if __name__ == "__main__":
         "resume_changefeed": resume_changefeed,
         "move_table": move_table,
         "set_log_level": set_log_level,
+        "log_redact": log_redact,
         "remove_changefeed": remove_changefeed,
         "resign_owner": resign_owner,
         # api v2

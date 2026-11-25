@@ -30,6 +30,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/encryption"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/filter"
+	"github.com/pingcap/ticdc/pkg/ordering"
 	"github.com/pingcap/tidb/pkg/kv"
 	"github.com/pingcap/tidb/pkg/meta/model"
 	"go.uber.org/zap"
@@ -244,10 +245,6 @@ func writeUpperBoundMeta(db *pebble.DB, upperBound UpperBoundMeta) {
 	if err := batch.Commit(pebble.NoSync); err != nil {
 		log.Fatal("write upper bound failed")
 	}
-}
-
-func loadDatabasesInKVSnap(snap *pebble.Snapshot, gcTs uint64) (map[int64]*BasicDatabaseInfo, error) {
-	return loadDatabasesInKVSnapWithEncryption(snap, gcTs, nil, 0)
 }
 
 // loadDatabasesInKVSnapWithEncryption decrypts and loads databases from snapshot if encryption is enabled
@@ -510,10 +507,6 @@ func tryReadLogicalTableID(snap *pebble.Snapshot, tableID int64, version uint64)
 	return int64(binary.BigEndian.Uint64(val))
 }
 
-func readTableInfoInKVSnap(snap *pebble.Snapshot, tableID int64, version uint64) *common.TableInfo {
-	return readTableInfoInKVSnapWithEncryption(snap, tableID, version, nil, 0)
-}
-
 func readTableInfoInKVSnapWithEncryption(
 	snap *pebble.Snapshot,
 	tableID int64,
@@ -683,10 +676,6 @@ func writePersistedDDLEventWithEncryption(db *pebble.DB, ddlEvent *PersistedDDLE
 }
 
 const mTablePrefix = "Table"
-
-func isTableRawKey(key []byte) bool {
-	return strings.HasPrefix(string(key), mTablePrefix)
-}
 
 // addSchemaInfoToBatchWithEncryption encrypts and adds schema info to batch if encryption is enabled
 func addSchemaInfoToBatchWithEncryption(
@@ -1044,6 +1033,7 @@ func loadAllPhysicalTablesAtTs(
 	gcTs uint64,
 	snapVersion uint64,
 	tableFilter filter.Filter,
+	txnOrderMatcher *ordering.TxnOrderMatcher,
 	encMgr encryption.EncryptionManager,
 	keyspaceID uint32,
 ) ([]commonEvent.Table, error) {
@@ -1167,6 +1157,15 @@ func loadAllPhysicalTablesAtTs(
 		}
 
 		splitable := traits.splitable
+		if txnOrderMatcher.Match(schemaName, tableInfo.Name) {
+			_, isPartition := partitionMap[tableID]
+			if err := verifyTxnOrderTable(txnOrderMatcher, &common.TableInfo{TableName: common.TableName{
+				Schema: schemaName, Table: tableInfo.Name, TableID: tableID, IsPartition: isPartition,
+			}}); err != nil {
+				return nil, err
+			}
+			splitable = false
+		}
 		if partitionInfo, ok := partitionMap[tableID]; ok {
 			for partitionID := range partitionInfo {
 				tables = append(tables, commonEvent.Table{

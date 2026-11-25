@@ -235,8 +235,6 @@ func (w *Writer) SendDDLTs(event commonEvent.BlockEvent) error {
 	if len(dropTableIds) > 0 {
 		queries := dropItemQueries(dropTableIds, ticdcClusterID, changefeedID, w.maxDDLTsBatch)
 		for _, query := range queries {
-			log.Debug("send ddl ts table query", zap.String("query", query))
-
 			if _, err = tx.Exec(query); err != nil {
 				log.Error("failed to delete ddl ts item ", zap.Error(err))
 				err2 := tx.Rollback()
@@ -267,7 +265,6 @@ func (w *Writer) execInsertItemBatches(
 			end = len(tableIds)
 		}
 		query := buildInsertItemQuery(tableIds[start:end], ticdcClusterID, changefeedID, ddlTs, finished, isSyncpoint)
-		log.Debug("send ddl ts table query", zap.String("query", query))
 		if _, err := tx.Exec(query); err != nil {
 			return errors.WithMessage(err, fmt.Sprintf("failed to execute ddl ts insert chunk [%d:%d)", start, end))
 		}

@@ -124,8 +124,8 @@ type Credential struct {
 
 	// RedactInfoLog controls log redaction to prevent sensitive data from appearing in logs.
 	// Accepts boolean (true→ON, false→OFF) or string values ("off", "on", "marker").
-	// Default: OFF (no redaction). The omitempty tag ensures backward compatibility by
-	// omitting this field from JSON output when unset.
+	// The new-architecture server defaults to ON when unset. The omitempty tag
+	// omits this field from JSON output when unset for old-architecture compatibility.
 	RedactInfoLog RedactInfoLogType `toml:"redact-info-log" json:"redact-info-log,omitempty"`
 }
 
@@ -287,15 +287,18 @@ func addVerifyPeerCertificate(tlsCfg *tls.Config, verifyCN []string) {
 		}
 		tlsCfg.ClientAuth = tls.RequireAndVerifyClientCert
 		tlsCfg.VerifyPeerCertificate = func(
-			rawCerts [][]byte, verifiedChains [][]*x509.Certificate,
+			_ [][]byte, verifiedChains [][]*x509.Certificate,
 		) error {
 			cns := make([]string, 0, len(verifiedChains))
-			for _, chains := range verifiedChains {
-				for _, chain := range chains {
-					cns = append(cns, chain.Subject.CommonName)
-					if _, match := checkCN[chain.Subject.CommonName]; match {
-						return nil
-					}
+			for _, chain := range verifiedChains {
+				if len(chain) == 0 {
+					continue
+				}
+				// The first certificate in a verified chain is the peer's leaf certificate.
+				cn := chain[0].Subject.CommonName
+				cns = append(cns, cn)
+				if _, match := checkCN[cn]; match {
+					return nil
 				}
 			}
 			return errors.Errorf("client certificate authentication failed. "+

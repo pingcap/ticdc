@@ -15,9 +15,7 @@ package logger
 
 import (
 	"bytes"
-	"context"
 	"io"
-	stdlog "log"
 	"os"
 	"strconv"
 	"strings"
@@ -57,22 +55,6 @@ type Config struct {
 	ZapInternalErrOutput string `toml:"error-output" json:"error-output"`
 }
 
-// Adjust adjusts config
-func (cfg *Config) Adjust() {
-	if len(cfg.Level) == 0 {
-		cfg.Level = defaultLogLevel
-	}
-	if cfg.Level == "warning" {
-		cfg.Level = "warn"
-	}
-	if cfg.FileMaxSize == 0 {
-		cfg.FileMaxSize = defaultLogMaxSize
-	}
-	if cfg.FileMaxDays == 0 {
-		cfg.FileMaxDays = defaultLogMaxDays
-	}
-}
-
 // SetLogLevel changes TiCDC log level dynamically.
 func SetLogLevel(level string) error {
 	oldLevel := log.GetLevel()
@@ -98,7 +80,6 @@ type loggerOp struct {
 	isInitGRPCLogger   bool
 	isInitSaramaLogger bool
 	isInitMySQLLogger  bool
-	output             zapcore.WriteSyncer
 }
 
 func (op *loggerOp) applyOpts(opts []LoggerOpt) {
@@ -131,14 +112,6 @@ func WithInitMySQLLogger() LoggerOpt {
 	}
 }
 
-// WithOutputWriteSyncer will replace the WriteSyncer of global logger with customized WriteSyncer
-// Easy for test when using zaptest.Buffer as WriteSyncer
-func WithOutputWriteSyncer(output zapcore.WriteSyncer) LoggerOpt {
-	return func(op *loggerOp) {
-		op.output = output
-	}
-}
-
 // InitLogger initializes logger
 func InitLogger(cfg *Config, opts ...LoggerOpt) error {
 	var op loggerOp
@@ -162,31 +135,21 @@ func InitLogger(cfg *Config, opts ...LoggerOpt) error {
 
 	var lg *zap.Logger
 	var err error
-	if op.output == nil && cfg.File == "" {
+	if cfg.File == "" {
 		lg, globalP, err = log.InitLogger(pclogConfig)
 	} else {
-		var outputSyncer zapcore.WriteSyncer
-		var errSyncer zapcore.WriteSyncer
-		if op.output != nil {
-			outputSyncer = op.output
-			errSyncer = op.output
-		} else {
-			_, props, initErr := log.InitLogger(pclogConfig)
-			if initErr != nil {
-				return initErr
-			}
-			outputSyncer = props.Syncer
-			errSyncer = props.ErrSyncer
+		_, props, initErr := log.InitLogger(pclogConfig)
+		if initErr != nil {
+			return initErr
 		}
 
 		// Wrap output sink to record log write throughput.
 		// We only care about log-file mode (cfg.File != ""), as requested.
-		if cfg.File != "" {
-			errSinkIsOutput := errSyncer == outputSyncer
-			outputSyncer = newCountingWriteSyncer(outputSyncer)
-			if errSinkIsOutput {
-				errSyncer = outputSyncer
-			}
+		errSinkIsOutput := props.ErrSyncer == props.Syncer
+		outputSyncer := newCountingWriteSyncer(props.Syncer)
+		errSyncer := props.ErrSyncer
+		if errSinkIsOutput {
+			errSyncer = outputSyncer
 		}
 
 		lg, globalP, err = log.InitLoggerWithWriteSyncer(pclogConfig, outputSyncer, errSyncer)
@@ -205,22 +168,18 @@ func InitLogger(cfg *Config, opts ...LoggerOpt) error {
 
 // initOptionalComponent initializes some optional components
 func initOptionalComponent(op *loggerOp, cfg *Config) error {
-	var level zapcore.Level
-	if op.isInitGRPCLogger || op.isInitSaramaLogger {
-		err := level.UnmarshalText([]byte(cfg.Level))
-		if err != nil {
+	if op.isInitGRPCLogger {
+		var level zapcore.Level
+		if err := level.UnmarshalText([]byte(cfg.Level)); err != nil {
 			return errors.Trace(err)
 		}
-	}
-
-	if op.isInitGRPCLogger {
 		if err := initGRPCLogger(level); err != nil {
 			return err
 		}
 	}
 
 	if op.isInitSaramaLogger {
-		if err := initSaramaLogger(level); err != nil {
+		if err := initSaramaLogger(); err != nil {
 			return err
 		}
 	}
@@ -232,17 +191,6 @@ func initOptionalComponent(op *loggerOp, cfg *Config) error {
 	}
 
 	return nil
-}
-
-// ZapErrorFilter wraps zap.Error, if err is in given filterErrors, it will be set to nil
-func ZapErrorFilter(err error, filterErrors ...error) zap.Field {
-	cause := errors.Cause(err)
-	for _, ferr := range filterErrors {
-		if errors.Is(cause, ferr) {
-			return zap.Error(nil)
-		}
-	}
-	return zap.Error(err)
 }
 
 // initMySQLLogger setup logger used in mysql lib
@@ -257,13 +205,10 @@ func initMySQLLogger() error {
 }
 
 // initSaramaLogger hacks logger used in sarama lib
-func initSaramaLogger(level zapcore.Level) error {
-	if zapcore.InfoLevel.Enabled(level) {
-		sarama.Logger = stdlog.New(io.Discard, "[Sarama] ", stdlog.LstdFlags)
-		return nil
-	}
-
-	logger, err := zap.NewStdLogAt(log.L().With(zap.String("component", "sarama")), level)
+func initSaramaLogger() error {
+	// sarama has no log level, so all its messages are written at debug level
+	// and the log level decides whether they show up.
+	logger, err := zap.NewStdLogAt(log.L().With(zap.String("component", "sarama")), zapcore.DebugLevel)
 	if err != nil {
 		return errors.Trace(err)
 	}
@@ -333,34 +278,6 @@ func initGRPCLogger(level zapcore.Level) error {
 	writer := &loggerWriter{logFunc: logFunc}
 	grpclog.SetLoggerV2(grpclog.NewLoggerV2WithVerbosity(writer, writer, writer, v))
 	return nil
-}
-
-// ErrorFilterContextCanceled log the msg and fields but do nothing if fields have cancel error
-func ErrorFilterContextCanceled(logger *zap.Logger, msg string, fields ...zap.Field) {
-	for _, field := range fields {
-		switch field.Type {
-		case zapcore.StringType:
-			if field.Key == "error" && strings.Contains(field.String, context.Canceled.Error()) {
-				return
-			}
-		case zapcore.ErrorType:
-			err, ok := field.Interface.(error)
-			if ok && errors.Is(errors.Cause(err), context.Canceled) {
-				return
-			}
-		}
-	}
-
-	logger.WithOptions(zap.AddCallerSkip(1)).Error(msg, fields...)
-}
-
-// ShortError contructs a field which only records the error message without the
-// verbose text (i.e. excludes the stack trace).
-func ShortError(err error) zap.Field {
-	if err == nil {
-		return zap.Skip()
-	}
-	return zap.String("error", err.Error())
 }
 
 // WithComponent return a logger with specified component scope

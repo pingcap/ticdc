@@ -20,7 +20,6 @@ import (
 	"time"
 
 	"github.com/pingcap/kvproto/pkg/cdcpb"
-	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/security"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/backoff"
@@ -85,7 +84,6 @@ func createGRPCConn(ctx context.Context, credential *security.Credential, target
 		grpc.WithSharedWriteBuffer(true),
 	}
 
-	grpcMetrics := metrics.GetGlobalGrpcMetrics()
 	if grpcMetrics != nil {
 		dialOptions = append(dialOptions, grpc.WithUnaryInterceptor(grpcMetrics.UnaryClientInterceptor()))
 		dialOptions = append(dialOptions, grpc.WithStreamInterceptor(grpcMetrics.StreamClientInterceptor()))

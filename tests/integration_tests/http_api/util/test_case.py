@@ -547,7 +547,11 @@ def move_table(cfID="changefeed-test1"):
 
 
 def resign_owner():
-    url = BASE_URL1_V2 + "/owner/resign"
+    # keyspace1 has already been removed from PD by
+    # manage_changefeed_after_keyspace_deleted, and resigning only stops the
+    # local coordinator, so use the built-in SYSTEM keyspace. Classic mode
+    # ignores the keyspace parameter.
+    url = BASE_URL1_V2 + "/owner/resign?keyspace=SYSTEM"
     resp = rq.post(url)
     assert_status_code(resp, rq.codes.ok, url)
 

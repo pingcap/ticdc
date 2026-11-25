@@ -679,6 +679,31 @@ func TestFormatWithEscape(t *testing.T) {
 	}
 }
 
+func TestCSVMessageEncodeUpdate(t *testing.T) {
+	msg := &csvMessage{
+		config: &common.Config{
+			Delimiter:       ",",
+			Quote:           "\"",
+			Terminator:      "\n",
+			IncludeCommitTs: true,
+			OutputOldValue:  true,
+		},
+		opType:     operationUpdate,
+		tableName:  "table1",
+		schemaName: "test",
+		commitTs:   435661838416609281,
+		preColumns: []any{1, "before"},
+		columns:    []any{2, "after"},
+		newRecord:  true,
+	}
+	require.Equal(t, "\"D\",\"table1\",\"test\",435661838416609281,true,1,\"before\"\n"+
+		"\"I\",\"table1\",\"test\",435661838416609281,true,2,\"after\"\n", string(msg.encode()))
+
+	msg.config.OutputOldValue = false
+	msg.newRecord = true
+	require.Equal(t, "\"U\",\"table1\",\"test\",435661838416609281,2,\"after\"\n", string(msg.encode()))
+}
+
 func TestCSVMessageEncode(t *testing.T) {
 	type fields struct {
 		config     *common.Config

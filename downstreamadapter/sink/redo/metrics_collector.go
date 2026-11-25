@@ -17,8 +17,8 @@ import (
 	"time"
 
 	"github.com/pingcap/ticdc/pkg/common"
-	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/redo"
+	redoCommon "github.com/pingcap/ticdc/pkg/redo/common"
 	"github.com/prometheus/client_golang/prometheus"
 )
 
@@ -46,7 +46,7 @@ func newMetricCollector(changefeedID common.ChangeFeedID) *metricCollector {
 
 		ddlTotalCount:       redoTotalRowsCountGauge.WithLabelValues(keyspace, name, redo.RedoDDLLogFileType),
 		ddlWriteLogDuration: redoWriteLogDurationHistogram.WithLabelValues(keyspace, name, redo.RedoDDLLogFileType),
-		ddlWorkerBusyRatio:  metrics.RedoWorkerBusyRatio.WithLabelValues(keyspace, name, redo.RedoDDLLogFileType),
+		ddlWorkerBusyRatio:  redoCommon.RedoWorkerBusyRatio.WithLabelValues(keyspace, name, redo.RedoDDLLogFileType),
 	}
 }
 
@@ -70,5 +70,5 @@ func (m *metricCollector) close() {
 		redoWriteLogDurationHistogram.DeleteLabelValues(m.keyspace, m.name, logType)
 		redoTotalRowsCountGauge.DeleteLabelValues(m.keyspace, m.name, logType)
 	}
-	metrics.RedoWorkerBusyRatio.DeleteLabelValues(m.keyspace, m.name, redo.RedoDDLLogFileType)
+	redoCommon.RedoWorkerBusyRatio.DeleteLabelValues(m.keyspace, m.name, redo.RedoDDLLogFileType)
 }

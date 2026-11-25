@@ -31,6 +31,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"github.com/pingcap/ticdc/pkg/sink/codec/schemamanager"
 	"github.com/pingcap/ticdc/pkg/util"
+	"github.com/pingcap/tidb/pkg/types"
 	"github.com/pingcap/tidb/pkg/util/chunk"
 	"github.com/pingcap/tidb/pkg/util/rowcodec"
 	"github.com/stretchr/testify/require"
@@ -77,7 +78,7 @@ func TestDecodedTableInfoLocatesRowByPrimaryKey(t *testing.T) {
 	}
 	for _, primaryKeys := range [][]string{{"a", "b"}, {"b"}} {
 		t.Run(strings.Join(primaryKeys, ","), func(t *testing.T) {
-			columns, _, err := avroData2Columns(map[string]any{
+			columns, _, _, err := avroData2Columns(map[string]any{
 				"a": int64(1), "b": int64(2), "c": int64(3),
 			}, fields)
 			require.NoError(t, err)
@@ -108,7 +109,7 @@ func TestDecodeIntegerPrimaryKeyWithUpstreamChecksum(t *testing.T) {
 		WillReturnRows(sqlmock.NewRows([]string{"checksum"}).AddRow(checksum))
 	mock.ExpectClose()
 
-	dec := &decoder{upstreamTiDB: db}
+	dec := &decoder{upstreamTiDB: db, cache: common.NewTableInfoProvider()}
 	event := dec.assembleDMLEventFromDecoded(
 		map[string]any{"id": int64(42)},
 		map[string]any{
@@ -150,7 +151,7 @@ func TestDecodeTimestampChecksumUsesLocalTimeZone(t *testing.T) {
 			map[string]any{"name": "ts", "type": map[string]any{"connect.parameters": map[string]any{"tidb_type": "TIMESTAMP"}}},
 		},
 	}
-	source, err := assembleEvent(key, value, schema, false, true)
+	source, err := assembleEvent(common.NewTableInfoProvider(), key, value, schema, false, true, 0)
 	require.NoError(t, err)
 	t.Cleanup(source.PostFlush)
 	data := rowcodec.RowData{}
@@ -167,7 +168,7 @@ func TestDecodeTimestampChecksumUsesLocalTimeZone(t *testing.T) {
 	_, offset := time.Date(2020, 2, 20, 2, 20, 20, 0, local).Zone()
 	cfg := common.NewConfig(config.ProtocolAvro)
 	cfg.TimeZone = time.FixedZone("consumer", offset+3600)
-	dec := &decoder{config: cfg}
+	dec := &decoder{config: cfg, cache: common.NewTableInfoProvider()}
 	event := dec.assembleDMLEventFromDecoded(key, value, schema, false, true, 0)
 	require.NotNil(t, event)
 	t.Cleanup(event.PostFlush)
@@ -320,7 +321,7 @@ func TestAvroChecksumAfterColumnTypeChange(t *testing.T) {
 }
 
 func TestChecksumFailureStopsDecode(t *testing.T) {
-	dec := &decoder{}
+	dec := &decoder{cache: common.NewTableInfoProvider()}
 	require.PanicsWithValue(t, "verify row checksum failed", func() {
 		dec.assembleDMLEventFromDecoded(
 			map[string]any{"id": int64(1)},
@@ -346,13 +347,45 @@ func TestDecodedTableInfoWithoutKeyColumnsHasNoRowLocator(t *testing.T) {
 		map[string]any{"name": "a", "type": map[string]any{"connect.parameters": map[string]any{"tidb_type": "INT"}}},
 		map[string]any{"name": "b", "type": map[string]any{"connect.parameters": map[string]any{"tidb_type": "INT"}}},
 	}
-	columns, _, err := avroData2Columns(map[string]any{"a": int64(1), "b": int64(2)}, fields)
+	columns, _, _, err := avroData2Columns(map[string]any{"a": int64(1), "b": int64(2)}, fields)
 	require.NoError(t, err)
 
 	tableInfo := newTableInfo("test", "t", columns, nil)
 	require.False(t, tableInfo.PKIsHandle())
 	require.Empty(t, tableInfo.GetIndices())
 	require.Empty(t, tableInfo.GetOrderedHandleKeyColumnIDs())
+}
+
+// A TIME column takes its decimal from the value, so a NULL row leaves it
+// unknown: the layout fills the maximum so another event reusing it still prints
+// every digit, and it must not become the cached layout of the version.
+func TestNullTimeColumnPrecision(t *testing.T) {
+	fields := []any{
+		map[string]any{"name": "id", "type": map[string]any{"connect.parameters": map[string]any{"tidb_type": "INT"}}},
+		map[string]any{"name": "t", "type": map[string]any{"connect.parameters": map[string]any{"tidb_type": "TIME"}}},
+	}
+
+	columns, _, precise, err := avroData2Columns(map[string]any{"id": int64(1), "t": nil}, fields)
+	require.NoError(t, err)
+	require.False(t, precise)
+	require.Equal(t, types.MaxFsp, columns[1].GetDecimal())
+
+	columns, _, precise, err = avroData2Columns(map[string]any{
+		"id": int64(1), "t": "01:02:03.123",
+	}, fields)
+	require.NoError(t, err)
+	require.True(t, precise)
+	require.Equal(t, 3, columns[1].GetDecimal())
+
+	cache := common.NewTableInfoProvider()
+	queryTableInfo(cache, "test", "t", 100, columns, nil, false)
+	_, cached := cache.ReadAt("test", "t", 101)
+	require.Nil(t, cached)
+
+	queryTableInfo(cache, "test", "t", 100, columns, nil, true)
+	_, cached = cache.ReadAt("test", "t", 101)
+	require.NotNil(t, cached)
+	require.Equal(t, 3, cached.GetColumns()[1].GetDecimal())
 }
 
 func TestUpdateWithoutBeforeValue(t *testing.T) {
@@ -365,9 +398,9 @@ func TestUpdateWithoutBeforeValue(t *testing.T) {
 	}
 	key := map[string]any{"id": int64(1)}
 	makeEvent := func(op string, ts, value int64) *commonEvent.DMLEvent {
-		e, err := assembleEvent(key, map[string]any{
+		e, err := assembleEvent(common.NewTableInfoProvider(), key, map[string]any{
 			"id": int64(1), "v": value, tidbOp: op, tidbCommitTs: ts,
-		}, schema, false, true)
+		}, schema, false, true, 0)
 		require.NoError(t, err)
 		return e
 	}
@@ -396,7 +429,7 @@ func TestUpdateWithoutBeforeValueRequiresKey(t *testing.T) {
 		"fields": []any{map[string]any{"name": "id", "type": map[string]any{"connect.parameters": map[string]any{"tidb_type": "INT"}}}},
 	}
 	for _, key := range []map[string]any{nil, {"id": nil}, {"missing": int64(1)}} {
-		_, err := assembleEvent(key, map[string]any{"id": int64(1), tidbOp: updateOperation, tidbCommitTs: int64(100)}, schema, false, true)
+		_, err := assembleEvent(common.NewTableInfoProvider(), key, map[string]any{"id": int64(1), tidbOp: updateOperation, tidbCommitTs: int64(100)}, schema, false, true, 0)
 		require.ErrorContains(t, err, "handle")
 	}
 }

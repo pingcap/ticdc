@@ -30,11 +30,12 @@ import (
 )
 
 func TestDecoderReusesTableInfo(t *testing.T) {
-	d := &decoder{config: common.NewConfig(config.ProtocolOpen), idx: 1}
+	d := &decoder{config: common.NewConfig(config.ProtocolOpen), idx: 1, cache: common.NewTableInfoProvider()}
 	key := &messageKey{Schema: "test", Table: "t", Ts: 100}
 	cols := map[string]column{"id": {Type: mysql.TypeLong, Flag: primaryKeyFlag, Value: json.Number("1")}}
 	first := d.queryTableInfo(key, &messageRow{Update: cols})
-	require.Nil(t, d.tables[d.tableCacheKey(key)].columns["id"].Value)
+	_, cached := d.cache.ReadAt(key.Schema, key.Table, key.Ts)
+	require.Equal(t, mysql.TypeLong, cached.GetColumns()[0].GetType())
 	cols["id"] = column{Type: mysql.TypeLong, Flag: primaryKeyFlag, Value: json.Number("2")}
 	require.Same(t, first, d.queryTableInfo(key, &messageRow{Update: cols}))
 	// DDL messages can be repeated or arrive out of timestamp order.
@@ -50,7 +51,6 @@ func TestDecoderReusesTableInfo(t *testing.T) {
 		require.Equal(t, common.MessageTypeDDL, typ)
 		d.NextDDLEvent()
 	}
-	require.Equal(t, []uint64{200, 300}, d.ddlCommitTs[[2]string{"test", "t"}])
 	key.Ts = 200
 	require.Same(t, first, d.queryTableInfo(key, &messageRow{Update: cols}))
 	key.Ts = 201
@@ -66,14 +66,43 @@ func TestDecoderReusesTableInfo(t *testing.T) {
 	require.Equal(t, mysql.TypeLong, first.GetColumns()[0].GetType())
 }
 
+func TestRenameTableInvalidatesCachedTableInfo(t *testing.T) {
+	d := &decoder{config: common.NewConfig(config.ProtocolOpen), idx: 1, cache: common.NewTableInfoProvider()}
+	key := &messageKey{Schema: "test", Table: "a", Ts: 100}
+	cols := map[string]column{"id": {Type: mysql.TypeLong, Flag: primaryKeyFlag, Value: json.Number("1")}}
+	first := d.queryTableInfo(key, &messageRow{Update: cols})
+	require.Same(t, first, d.queryTableInfo(key, &messageRow{Update: cols}))
+
+	k, v, err := encodeDDLEvent(&commonEvent.DDLEvent{
+		SchemaName: "test", TableName: "a", FinishedTs: 200,
+		Type: byte(timodel.ActionRenameTable), Query: "rename table test.a to test.b",
+	}, d.config)
+	require.NoError(t, err)
+	d.AddKeyValue(k, v)
+	typ, ok := d.HasNext()
+	require.True(t, ok)
+	require.Equal(t, common.MessageTypeDDL, typ)
+	d.NextDDLEvent()
+
+	// A row at the DDL commit ts still reads the previous layout.
+	require.Same(t, first, d.queryTableInfo(key, &messageRow{Update: cols}))
+	// Rows after the DDL rebuild, even when they arrive under the old name.
+	key.Ts = 201
+	cols["e"] = column{Type: mysql.TypeVarchar}
+	second := d.queryTableInfo(key, &messageRow{Update: cols})
+	require.NotSame(t, first, second)
+	require.Len(t, second.GetColumns(), 2)
+}
+
 func TestDeleteReusesCompleteTableInfo(t *testing.T) {
-	d := &decoder{}
+	d := &decoder{cache: common.NewTableInfoProvider()}
 	key := &messageKey{Schema: "test", Table: "t", Ts: 100}
 	handle := map[string]column{"id": {Type: mysql.TypeLong, Flag: primaryKeyFlag, Value: json.Number("1")}}
 	// A cold key-only delete does not seed the full-table cache.
 	cold := d.queryTableInfo(key, &messageRow{Delete: handle})
 	require.Len(t, cold.GetColumns(), 1)
-	require.Empty(t, d.tables)
+	_, cached := d.cache.ReadAt(key.Schema, key.Table, key.Ts)
+	require.Nil(t, cached)
 	cols := map[string]column{
 		"id": handle["id"],
 		"v":  {Type: mysql.TypeVarchar, Value: "value"},
@@ -90,7 +119,7 @@ func TestHandleKeyOnlyPreservesEnumSetTypes(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	require.NoError(t, err)
 	defer db.Close()
-	d := &decoder{upstreamTiDB: db}
+	d := &decoder{upstreamTiDB: db, cache: common.NewTableInfoProvider()}
 	key := &messageKey{Schema: "test", Table: "t", Ts: 100}
 	cols := map[string]column{
 		"id": {Type: mysql.TypeLong, Flag: primaryKeyFlag, Value: json.Number("1")},
@@ -121,7 +150,7 @@ func TestHandleKeyOnlyColdCache(t *testing.T) {
 			db, mock, err := sqlmock.New()
 			require.NoError(t, err)
 			defer db.Close()
-			d := &decoder{upstreamTiDB: db}
+			d := &decoder{upstreamTiDB: db, cache: common.NewTableInfoProvider()}
 			// The new interval must discover its own schema even with an old
 			// interval already cached for this table.
 			oldKey := &messageKey{Schema: "test", Table: "t", Ts: 50}
@@ -129,7 +158,7 @@ func TestHandleKeyOnlyColdCache(t *testing.T) {
 				"id": {Type: mysql.TypeLong, Flag: primaryKeyFlag},
 				"e":  {Type: mysql.TypeVarchar},
 			}})
-			d.addDDLCommitTs("test", "t", 90)
+			d.cache.AddDDL("test", "t", 90)
 			mock.ExpectExec("set @@tidb_snapshot=100").WillReturnResult(sqlmock.NewResult(0, 0))
 			mock.ExpectQuery(`select \* from test.t where id = 1`).WillReturnRows(sqlmock.NewRowsWithColumnDefinition(
 				sqlmock.NewColumn("e").OfType("ENUM", "").Nullable(true),

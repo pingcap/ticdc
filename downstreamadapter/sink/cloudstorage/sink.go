@@ -23,13 +23,13 @@ import (
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/downstreamadapter/sink/columnselector"
 	"github.com/pingcap/ticdc/downstreamadapter/sink/helper"
+	"github.com/pingcap/ticdc/downstreamadapter/sink/metrics"
 	"github.com/pingcap/ticdc/downstreamadapter/sink/statistics"
 	"github.com/pingcap/ticdc/pkg/cloudstorage"
 	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
-	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/ticdc/pkg/writelease"
 	"github.com/pingcap/tidb/pkg/meta/model"
@@ -210,7 +210,7 @@ func (s *sink) AddDMLEvent(event *commonEvent.DMLEvent) {
 		log.Warn("ignore dml event because sink is not normal",
 			zap.String("keyspace", s.changefeedID.Keyspace()),
 			zap.String("changefeed", s.changefeedID.Name()),
-			zap.String("dispatcher", event.GetDispatcherID().String()))
+			zap.String("dispatcherID", event.GetDispatcherID().String()))
 		return
 	}
 	s.dmlWriters.addDMLEvent(event)
@@ -277,10 +277,9 @@ func (s *sink) writeDDLEvent(event *commonEvent.DDLEvent) error {
 		)
 		var sourceSchemaFile cloudstorage.SchemaFile
 		sourceSchemaFile.Build(&sourceEvent, s.cfg.OutputColumnID)
-		// Source schema file carries table structure only. The DDL is replayed
-		// from the exchanged table schema file.
+		// Replay the DDL only from the exchanged table schema file, but retain
+		// the type here so schema reuse still recognizes the exchange boundary.
 		sourceSchemaFile.Query = ""
-		sourceSchemaFile.Type = 0
 		if err := s.writeFile(&sourceEvent, sourceSchemaFile); err != nil {
 			return err
 		}
@@ -299,7 +298,7 @@ func (s *sink) writeDDLEvent(event *commonEvent.DDLEvent) error {
 		zap.String("changefeed", s.changefeedID.Name()),
 		zap.String("schema", event.GetTargetSchemaName()),
 		zap.String("table", event.GetTargetTableName()),
-		zap.String("dispatcher", event.GetDispatcherID().String()),
+		zap.String("dispatcherID", event.GetDispatcherID().String()),
 		zap.String("query", event.GetDDLQuery()),
 		zap.Uint64("finishedTs", event.GetCommitTs()),
 		zap.Stringer("ddlType", event.GetDDLType()))

@@ -226,6 +226,26 @@ func callback() {
 	count.Add(1)
 }
 
+func TestTxnOrderDDLErrorReachesDispatcher(t *testing.T) {
+	dispatcher := newTestBasicDispatcher(t, common.MysqlSinkType, false)
+	validationErr := errors.ErrInvalidReplicaConfig.GenWithStackByArgs(
+		"sink.mysql-config.txn-order-tables does not support partitioned table test.ordered")
+	ddl := &commonEvent.DDLEvent{
+		FinishedTs: dispatcher.startTs + 1,
+		Err:        errors.WrapChangefeedUnretryableErr(validationErr).Error(),
+	}
+	require.True(t, dispatcher.handleEvents([]DispatcherEvent{{Event: ddl}}, func() {
+		t.Fatal("a validation error must not wake the dispatcher")
+	}))
+	select {
+	case err := <-dispatcher.sharedInfo.errCh:
+		require.ErrorContains(t, err, "txn-order-tables does not support partitioned table")
+		require.True(t, errors.ShouldFailChangefeed(err))
+	default:
+		t.Fatal("expected the validation failure in the dispatcher error channel")
+	}
+}
+
 // test different events can be correctly handled by the dispatcher
 func TestDispatcherHandleEvents(t *testing.T) {
 	count.Swap(0)
@@ -501,7 +521,12 @@ func TestDispatcherHandleEvents(t *testing.T) {
 	syncPointEvent := &commonEvent.SyncPointEvent{
 		CommitTs: 6,
 	}
-	block = dispatcher.HandleEvents([]DispatcherEvent{NewDispatcherEvent(&nodeID, syncPointEvent)}, callback)
+	var pausedAtSyncPointWake atomic.Bool
+	pausedAtSyncPointWake.Store(true)
+	block = dispatcher.HandleEvents([]DispatcherEvent{NewDispatcherEvent(&nodeID, syncPointEvent)}, func() {
+		pausedAtSyncPointWake.Store(dispatcher.ShouldPauseScan())
+		callback()
+	})
 	require.Equal(t, true, block)
 	require.Eventually(t, func() bool {
 		blockPendingEvent, blockStage = dispatcher.blockEventStatus.getEventAndStage()
@@ -513,6 +538,7 @@ func TestDispatcherHandleEvents(t *testing.T) {
 	require.NotNil(t, blockPendingEvent)
 	require.Equal(t, blockStage, heartbeatpb.BlockStage_WAITING)
 
+	require.True(t, dispatcher.ShouldPauseScan())
 	// not available for write to sink
 	checkpointTs, isEmpty = tableProgress.GetCheckpointTs()
 	require.Equal(t, true, isEmpty)
@@ -548,6 +574,9 @@ func TestDispatcherHandleEvents(t *testing.T) {
 		}
 		return count.Load() == int32(6)
 	}, 5*time.Second, 10*time.Millisecond)
+
+	require.False(t, pausedAtSyncPointWake.Load(), "successful Pass must clear the pause before Wake")
+	require.False(t, dispatcher.ShouldPauseScan())
 
 	// ===== resolved event =====
 	checkpointTs = dispatcher.GetCheckpointTs()

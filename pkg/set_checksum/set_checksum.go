@@ -52,29 +52,6 @@ func (c *Checksum) Remove(id common.DispatcherID) {
 	c.SumLow -= id.Low
 }
 
-// Equal reports whether two checksums are equal.
-func (c Checksum) Equal(other Checksum) bool {
-	return c.Count == other.Count &&
-		c.XorHigh == other.XorHigh &&
-		c.XorLow == other.XorLow &&
-		c.SumHigh == other.SumHigh &&
-		c.SumLow == other.SumLow
-}
-
-// FromPB converts a protobuf checksum message into a Checksum.
-func FromPB(pb *heartbeatpb.DispatcherSetChecksum) Checksum {
-	if pb == nil {
-		return Checksum{}
-	}
-	return Checksum{
-		Count:   pb.Count,
-		XorHigh: pb.XorHigh,
-		XorLow:  pb.XorLow,
-		SumHigh: pb.SumHigh,
-		SumLow:  pb.SumLow,
-	}
-}
-
 // ToPB converts a Checksum into its protobuf message.
 func (c Checksum) ToPB() *heartbeatpb.DispatcherSetChecksum {
 	return &heartbeatpb.DispatcherSetChecksum{

@@ -31,7 +31,6 @@ import (
 	"github.com/pingcap/ticdc/pkg/integrity"
 	"github.com/pingcap/ticdc/pkg/liveness"
 	"github.com/pingcap/ticdc/pkg/messaging"
-	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/ticdc/pkg/util"
 	"go.uber.org/atomic"
@@ -142,14 +141,11 @@ func (s *eventService) Name() string {
 
 func (s *eventService) Run(ctx context.Context) error {
 	log.Info("event service start to run")
-	defer func() {
-		log.Info("event service exited")
-	}()
 
 	ticker := time.NewTicker(10 * time.Second)
 	defer ticker.Stop()
-	dispatcherChanSize := metrics.EventServiceChannelSizeGauge.WithLabelValues("dispatcherInfo")
-	heartbeatChanSize := metrics.EventServiceChannelSizeGauge.WithLabelValues("heartbeat")
+	dispatcherChanSize := eventServiceChannelSizeGauge.WithLabelValues("dispatcherInfo")
+	heartbeatChanSize := eventServiceChannelSizeGauge.WithLabelValues("heartbeat")
 	for {
 		select {
 		case <-ctx.Done():
@@ -288,7 +284,7 @@ func (s *eventService) handleMessage(ctx context.Context, msg *messaging.TargetM
 		m := msg.Message[0].(*event.CongestionControl)
 		s.handleCongestionControl(msg.From, m)
 	default:
-		log.Warn("unknown message type, ignore it", zap.String("type", msg.Type.String()), zap.Any("message", msg))
+		log.Warn("unknown message type, ignore it", zap.String("type", msg.Type.String()))
 	}
 	return nil
 }
@@ -390,8 +386,30 @@ func msgToDispatcherInfo(msg *messaging.TargetMessage) []DispatcherInfo {
 	res := make([]DispatcherInfo, 0, len(msg.Message))
 	for _, m := range msg.Message {
 		info, ok := m.(*messaging.DispatcherRequest)
-		if !ok {
+		if !ok || info == nil || info.DispatcherRequest == nil {
 			log.Warn("invalid dispatcher info, ignore it", zap.Any("info", m))
+			continue
+		}
+		if info.DispatcherId == nil || info.ChangefeedId == nil {
+			log.Warn("dispatcher info has no identity, ignore it",
+				zap.String("action", info.GetActionType().String()))
+			continue
+		}
+		if info.GetTableSpan() == nil {
+			log.Warn("dispatcher info has no table span, ignore it",
+				zap.Stringer("dispatcherID", info.GetID()),
+				zap.String("action", info.GetActionType().String()))
+			continue
+		}
+		if info.GetActionType() == eventpb.ActionType_ACTION_TYPE_REGISTER ||
+			info.GetActionType() == eventpb.ActionType_ACTION_TYPE_RESET {
+			filterConfig := info.GetFilterConfig()
+			if filterConfig == nil || filterConfig.FilterConfig == nil {
+				log.Warn("dispatcher info has no filter config, ignore it",
+					zap.Stringer("dispatcherID", info.GetID()),
+					zap.String("action", info.GetActionType().String()))
+				continue
+			}
 		}
 		res = append(res, info)
 	}

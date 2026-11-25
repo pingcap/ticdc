@@ -14,12 +14,67 @@
 package security
 
 import (
+	"crypto/tls"
+	"crypto/x509"
+	"crypto/x509/pkix"
 	"encoding/json"
 	"testing"
 
 	"github.com/BurntSushi/toml"
 	"github.com/stretchr/testify/require"
 )
+
+func TestVerifyPeerCertificateMatchesLeafCNOnly(t *testing.T) {
+	certificate := func(cn string) *x509.Certificate {
+		return &x509.Certificate{Subject: pkix.Name{CommonName: cn}}
+	}
+
+	testCases := []struct {
+		name           string
+		allowedCN      string
+		verifiedChains [][]*x509.Certificate
+		expectMatch    bool
+	}{
+		{
+			name:      "leaf CN matches",
+			allowedCN: "allowed-client",
+			verifiedChains: [][]*x509.Certificate{
+				{certificate("allowed-client"), certificate("intermediate"), certificate("root")},
+			},
+			expectMatch: true,
+		},
+		{
+			name:      "intermediate CN does not match",
+			allowedCN: "intermediate",
+			verifiedChains: [][]*x509.Certificate{
+				{certificate("unlisted-client"), certificate("intermediate"), certificate("root")},
+			},
+		},
+		{
+			name:      "root CN does not match",
+			allowedCN: "root",
+			verifiedChains: [][]*x509.Certificate{
+				{certificate("unlisted-client"), certificate("intermediate"), certificate("root")},
+			},
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			tlsConfig := &tls.Config{}
+			addVerifyPeerCertificate(tlsConfig, []string{tc.allowedCN})
+
+			require.Equal(t, tls.RequireAndVerifyClientCert, tlsConfig.ClientAuth)
+			require.NotNil(t, tlsConfig.VerifyPeerCertificate)
+			err := tlsConfig.VerifyPeerCertificate(nil, tc.verifiedChains)
+			if tc.expectMatch {
+				require.NoError(t, err)
+			} else {
+				require.Error(t, err)
+			}
+		})
+	}
+}
 
 func TestGetCommonName(t *testing.T) {
 	cd := &Credential{

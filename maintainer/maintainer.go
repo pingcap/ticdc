@@ -31,7 +31,6 @@ import (
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/messaging"
-	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/ticdc/pkg/pdutil"
 	"github.com/pingcap/ticdc/pkg/redo"
@@ -235,14 +234,14 @@ func NewMaintainer(cfID common.ChangeFeedID,
 		resolvedTsLagGauge:   maintainerResolvedTsLagGauge.WithLabelValues(keyspaceName, name),
 		eventChLenGauge:      maintainerEventChLenGauge.WithLabelValues(keyspaceName, name),
 
-		scheduledTaskGauge:  metrics.ScheduleTaskGauge.WithLabelValues(keyspaceName, name, "default"),
-		spanCountGauge:      metrics.SpanCountGauge.WithLabelValues(keyspaceName, name, "default"),
-		tableCountGauge:     metrics.TableCountGauge.WithLabelValues(keyspaceName, name, "default"),
+		scheduledTaskGauge:  scheduleTaskGauge.WithLabelValues(keyspaceName, name, "default"),
+		spanCountGauge:      spanCountGauge.WithLabelValues(keyspaceName, name, "default"),
+		tableCountGauge:     tableCountGauge.WithLabelValues(keyspaceName, name, "default"),
 		handleEventDuration: maintainerHandleEventDuration.WithLabelValues(keyspaceName, name),
 
-		redoScheduledTaskGauge: metrics.ScheduleTaskGauge.WithLabelValues(keyspaceName, name, "redo"),
-		redoSpanCountGauge:     metrics.SpanCountGauge.WithLabelValues(keyspaceName, name, "redo"),
-		redoTableCountGauge:    metrics.TableCountGauge.WithLabelValues(keyspaceName, name, "redo"),
+		redoScheduledTaskGauge: scheduleTaskGauge.WithLabelValues(keyspaceName, name, "redo"),
+		redoSpanCountGauge:     spanCountGauge.WithLabelValues(keyspaceName, name, "redo"),
+		redoTableCountGauge:    tableCountGauge.WithLabelValues(keyspaceName, name, "redo"),
 	}
 	m.controller.SetSelfNodeID(selfNode.ID)
 	m.controller.SetErrorReporter(m.handleError)
@@ -285,7 +284,7 @@ func NewMaintainer(cfID common.ChangeFeedID,
 		zap.Stringer("changefeedID", cfID),
 		zap.String("state", string(info.State)),
 		zap.Uint64("checkpointTs", checkpointTs),
-		zap.String("ddlDispatcherID", tableTriggerEventDispatcherID.String()),
+		zap.String("dispatcherID", tableTriggerEventDispatcherID.String()),
 		zap.String("redoTs", m.redoMetaTs.String()),
 		zap.Bool("newChangefeed", newChangefeed),
 	)
@@ -494,17 +493,17 @@ func (m *Maintainer) cleanupMetrics() {
 	maintainerSyncPointTsGauge.DeleteLabelValues(keyspace, name)
 	maintainerSyncPointTsLagGauge.DeleteLabelValues(keyspace, name)
 
-	metrics.TableStateGauge.DeleteLabelValues(keyspace, name, "Absent", "default")
-	metrics.TableStateGauge.DeleteLabelValues(keyspace, name, "Absent", "redo")
-	metrics.TableStateGauge.DeleteLabelValues(keyspace, name, "Working", "default")
-	metrics.TableStateGauge.DeleteLabelValues(keyspace, name, "Working", "redo")
+	tableStateGauge.DeleteLabelValues(keyspace, name, "Absent", "default")
+	tableStateGauge.DeleteLabelValues(keyspace, name, "Absent", "redo")
+	tableStateGauge.DeleteLabelValues(keyspace, name, "Working", "default")
+	tableStateGauge.DeleteLabelValues(keyspace, name, "Working", "redo")
 
-	metrics.ScheduleTaskGauge.DeleteLabelValues(keyspace, name, "default")
-	metrics.ScheduleTaskGauge.DeleteLabelValues(keyspace, name, "redo")
-	metrics.SpanCountGauge.DeleteLabelValues(keyspace, name, "default")
-	metrics.SpanCountGauge.DeleteLabelValues(keyspace, name, "redo")
-	metrics.TableCountGauge.DeleteLabelValues(keyspace, name, "default")
-	metrics.TableCountGauge.DeleteLabelValues(keyspace, name, "redo")
+	scheduleTaskGauge.DeleteLabelValues(keyspace, name, "default")
+	scheduleTaskGauge.DeleteLabelValues(keyspace, name, "redo")
+	spanCountGauge.DeleteLabelValues(keyspace, name, "default")
+	spanCountGauge.DeleteLabelValues(keyspace, name, "redo")
+	tableCountGauge.DeleteLabelValues(keyspace, name, "default")
+	tableCountGauge.DeleteLabelValues(keyspace, name, "redo")
 }
 
 func (m *Maintainer) markRemoved() {
@@ -566,8 +565,7 @@ func (m *Maintainer) onMessage(msg *messaging.TargetMessage) {
 	default:
 		log.Warn("unknown message type, ignore it",
 			zap.Stringer("changefeedID", m.changefeedID),
-			zap.String("type", msg.Type.String()),
-			zap.Any("message", msg.Message))
+			zap.String("type", msg.Type.String()))
 	}
 }
 
@@ -1033,13 +1031,29 @@ func (m *Maintainer) onBlockStateRequest(msg *messaging.TargetMessage) {
 	if !m.initialized.Load() || m.removing.Load() {
 		return
 	}
-	req := msg.Message[0].(*heartbeatpb.BlockStatusRequest)
+	if len(msg.Message) != 1 {
+		log.Warn("ignore block status request with invalid payload count",
+			zap.Stringer("changefeedID", m.changefeedID),
+			zap.Int("payloadCount", len(msg.Message)))
+		return
+	}
+	req, ok := msg.Message[0].(*heartbeatpb.BlockStatusRequest)
+	if !ok || req == nil {
+		log.Warn("ignore invalid block status request",
+			zap.Stringer("changefeedID", m.changefeedID))
+		return
+	}
 
 	var ackMsg []*messaging.TargetMessage
 	if common.IsDefaultMode(req.Mode) {
 		ackMsg = m.controller.barrier.HandleStatus(msg.From, req)
-	} else {
+	} else if common.IsRedoMode(req.Mode) && m.enableRedo && m.controller.redoBarrier != nil {
 		ackMsg = m.controller.redoBarrier.HandleStatus(msg.From, req)
+	} else {
+		log.Warn("ignore block status request with unsupported mode",
+			zap.Stringer("changefeedID", m.changefeedID),
+			zap.Int64("mode", req.Mode))
+		return
 	}
 	if ackMsg != nil {
 		m.sendMessages(ackMsg)
@@ -1393,8 +1407,8 @@ func (m *Maintainer) collectMetrics() {
 			blockingLen = m.controller.redoBarrier.blockedEvents.Len()
 		}
 		execDDLBlockingGauge.WithLabelValues(m.changefeedID.Keyspace(), m.changefeedID.Name(), common.StringMode(mode)).Set(float64(blockingLen))
-		metrics.TableStateGauge.WithLabelValues(m.changefeedID.Keyspace(), m.changefeedID.Name(), "Absent", common.StringMode(mode)).Set(float64(absent))
-		metrics.TableStateGauge.WithLabelValues(m.changefeedID.Keyspace(), m.changefeedID.Name(), "Working", common.StringMode(mode)).Set(float64(working))
+		tableStateGauge.WithLabelValues(m.changefeedID.Keyspace(), m.changefeedID.Name(), "Absent", common.StringMode(mode)).Set(float64(absent))
+		tableStateGauge.WithLabelValues(m.changefeedID.Keyspace(), m.changefeedID.Name(), "Working", common.StringMode(mode)).Set(float64(working))
 	}
 	if time.Since(m.lastPrintStatusTime) > time.Second*20 {
 		m.eventChLenGauge.Set(float64(m.eventCh.Len()))

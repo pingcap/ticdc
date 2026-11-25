@@ -111,7 +111,7 @@ func (w *Writer) execDDL(event *commonEvent.DDLEvent) error {
 		_, err = tx.ExecContext(ctx, "USE "+common.QuoteName(event.GetTargetSchemaName())+";")
 		if err != nil {
 			if rbErr := tx.Rollback(); rbErr != nil {
-				log.Error("Failed to rollback", zap.Error(err))
+				log.Error("Failed to rollback", zap.Error(rbErr))
 			}
 			return err
 		}
@@ -214,6 +214,17 @@ func (w *Writer) execDDL(event *commonEvent.DDLEvent) error {
 // If the downstream is TiDB, it will query the DDL and wait until it finishes.
 // For 'add index' ddl, it will return immediately without waiting and will query it during the next DDL execution.
 func (w *Writer) execDDLWithMaxRetries(event *commonEvent.DDLEvent) error {
+	if event.GetDDLType() == timodel.ActionCreateTables {
+		// Retry each CREATE separately so an ignorable error cannot skip the
+		// remaining statements. DDL ts bookkeeping still uses the original event.
+		for _, ddl := range event.GetEvents() {
+			if err := w.execDDLWithMaxRetries(ddl); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+
 	ddlCreateTime := getDDLCreateTime(w.ctx, w.db)
 	return retry.Do(w.ctx, func() error {
 		err := w.statistics.RecordDDLExecution(event.GetDDLType().String(), func() error {
@@ -335,7 +346,6 @@ func (w *Writer) waitAsyncDDLDone(event *commonEvent.DDLEvent) {
 func (w *Writer) doQueryAsyncDDL(query string, args ...any) (bool, error) {
 	start := time.Now()
 	rows, err := w.db.QueryContext(w.ctx, query, args...)
-	log.Debug("query duration", zap.Any("duration", time.Since(start)), zap.Any("query", query))
 	if err != nil {
 		return false, errors.WrapError(errors.ErrMySQLTxnError, errors.WithMessage(err, fmt.Sprintf("failed to query ddl jobs table; Query is %s", query)))
 	}

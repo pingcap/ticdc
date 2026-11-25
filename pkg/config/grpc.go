@@ -33,11 +33,3 @@ type GrpcServerConfig struct {
 	// MaxRecvMsgSize is the maximum message size in bytes the gRPC server can receive.
 	MaxRecvMsgSize int
 }
-
-func NewDefaultGrpcServerConfig() *GrpcServerConfig {
-	return &GrpcServerConfig{
-		KeepAliveTime:    defaultKeepaliveTime,
-		KeepAliveTimeout: defaultKeepaliveTimeout,
-		MaxRecvMsgSize:   defaultMaxRecvMsgSize,
-	}
-}
