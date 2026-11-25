@@ -45,10 +45,11 @@ import (
 // It keeps recently active routed-table schemas without retaining every historical version.
 const decoderCodecCacheSize = 128
 
+var tableIDAllocator = common.NewTableIDAllocator()
+
 type decoder struct {
-	allocator *common.TableIDAllocator
-	config    *common.Config
-	topic     string
+	config *common.Config
+	topic  string
 
 	upstreamTiDB *sql.DB
 	cache        *common.TableInfoProvider
@@ -69,11 +70,10 @@ func NewDecoder(
 	schemaM schemamanager.SchemaManager,
 	topic string,
 	db *sql.DB,
-	allocator *common.TableIDAllocator,
 ) common.Decoder {
+	tableIDAllocator.Clean()
 	codecs, _ := lru.New(decoderCodecCacheSize)
 	return &decoder{
-		allocator:    allocator,
 		config:       config,
 		topic:        topic,
 		schemaM:      schemaM,
@@ -82,6 +82,11 @@ func NewDecoder(
 		cache:        common.NewTableInfoProvider(),
 		valueSchemas: make(map[[2]string]map[string]any),
 	}
+}
+
+// ShareTableInfo reads table info through the cache shared by all partitions.
+func (d *decoder) ShareTableInfo(cache *common.TableInfoProvider) {
+	d.cache = cache
 }
 
 func (d *decoder) AddKeyValue(key, value []byte) {
@@ -200,7 +205,7 @@ func (d *decoder) assembleDMLEventFromDecoded(
 	hasValue bool,
 	deleteCommitTs uint64,
 ) *commonEvent.DMLEvent {
-	event, err := assembleEvent(d.allocator, d.cache, keyMap, valueMap, valueSchema, isDelete, hasValue, deleteCommitTs)
+	event, err := assembleEvent(d.cache, keyMap, valueMap, valueSchema, isDelete, hasValue, deleteCommitTs)
 	if err != nil {
 		log.Panic("assemble event failed", zap.Error(err))
 	}
@@ -278,15 +283,15 @@ func (d *decoder) decodeDeleteCommitTs() uint64 {
 // Legacy deletes use key values with NULLs for non-key columns from the cached schema.
 // schema is corresponding to the valueMap, it can be used to decode the valueMap to construct columns.
 func assembleEvent(
-	allocator *common.TableIDAllocator, cache *common.TableInfoProvider,
-	keyMap, valueMap, schema map[string]any, isDelete bool, hasValue bool, deleteCommitTs uint64,
+	cache *common.TableInfoProvider, keyMap, valueMap, schema map[string]any,
+	isDelete bool, hasValue bool, deleteCommitTs uint64,
 ) (*commonEvent.DMLEvent, error) {
 	fields, ok := schema["fields"].([]any)
 	if !ok {
 		return nil, errors.ErrCodecDecode.GenWithStack("schema fields should be a map")
 	}
 
-	columns, data, err := avroData2Columns(valueMap, fields)
+	columns, data, precise, err := avroData2Columns(valueMap, fields)
 	if err != nil {
 		return nil, errors.Trace(err)
 	}
@@ -297,7 +302,7 @@ func assembleEvent(
 	}
 	var beforeData map[string]any
 	if hasBefore {
-		_, beforeData, err = avroData2Columns(beforeMap, fields)
+		_, beforeData, _, err = avroData2Columns(beforeMap, fields)
 		if err != nil {
 			return nil, errors.Trace(err)
 		}
@@ -344,7 +349,7 @@ func assembleEvent(
 	}
 
 	event := new(commonEvent.DMLEvent)
-	event.TableInfo = queryTableInfo(cache, allocator, schemaName, tableName, uint64(commitTs), columns, keyMap)
+	event.TableInfo = queryTableInfo(cache, schemaName, tableName, uint64(commitTs), columns, keyMap, hasValue && precise)
 	event.StartTs = uint64(commitTs)
 	event.CommitTs = uint64(commitTs)
 	event.PhysicalTableID = event.TableInfo.TableName.TableID
@@ -414,7 +419,8 @@ func extractBeforeValueMap(valueMap map[string]any) (map[string]any, bool, error
 
 func avroData2Columns(
 	valueMap map[string]any, fields []any,
-) ([]*timodel.ColumnInfo, map[string]any, error) {
+) ([]*timodel.ColumnInfo, map[string]any, bool, error) {
+	precise := true
 	columns := make([]*timodel.ColumnInfo, 0, len(valueMap))
 	data := make(map[string]any, 0)
 	// fields is ordered by the column id, so iterate over it to build columns
@@ -422,7 +428,7 @@ func avroData2Columns(
 	for idx, item := range fields {
 		field, ok := item.(map[string]any)
 		if !ok {
-			return nil, nil, errors.ErrCodecDecode.GenWithStack("schema field should be a map")
+			return nil, nil, false, errors.ErrCodecDecode.GenWithStack("schema field should be a map")
 		}
 		// Extension fields are not real columns, so break here.
 		colName := field["name"].(string)
@@ -450,11 +456,11 @@ func avroData2Columns(
 		flag := flagFromTiDBType(tidbType)
 		value, ok := valueMap[colName]
 		if !ok {
-			return nil, nil, errors.ErrCodecDecode.GenWithStack("value not found")
+			return nil, nil, false, errors.ErrCodecDecode.GenWithStack("value not found")
 		}
 		value, err := getColumnValue(value, holder, mysqlType, flag)
 		if err != nil {
-			return nil, nil, errors.Trace(err)
+			return nil, nil, false, errors.Trace(err)
 		}
 		data[colName] = value
 
@@ -471,10 +477,18 @@ func avroData2Columns(
 			tiCol.SetDecimal(value.Fsp())
 		case types.Duration:
 			tiCol.SetDecimal(value.Fsp)
+		case nil:
+			if mysqlType == mysql.TypeDuration {
+				// A NULL TIME carries no decimal. Fill the maximum: the extra
+				// digits are zeros, so the written value stays the same. Leave
+				// the layout uncached: only a value reveals the precision.
+				tiCol.SetDecimal(types.MaxFsp)
+				precise = false
+			}
 		}
 		columns = append(columns, tiCol)
 	}
-	return columns, data, nil
+	return columns, data, precise, nil
 }
 
 func schemaAndTableName(schema map[string]any) (string, string) {
@@ -487,26 +501,26 @@ func schemaAndTableName(schema map[string]any) (string, string) {
 }
 
 func queryTableInfo(
-	cache *common.TableInfoProvider, allocator *common.TableIDAllocator,
-	schemaName, tableName string, commitTs uint64,
-	columns []*timodel.ColumnInfo, keyMap map[string]any,
+	cache *common.TableInfoProvider, schemaName, tableName string, commitTs uint64,
+	columns []*timodel.ColumnInfo, keyMap map[string]any, cacheable bool,
 ) *commonType.TableInfo {
 	version, tableInfo := cache.ReadAt(schemaName, tableName, commitTs)
 	if tableInfo != nil {
 		return tableInfo
 	}
-	tableInfo = newTableInfo(allocator, schemaName, tableName, columns, keyMap)
-	cache.Write(schemaName, tableName, version, tableInfo)
+	tableInfo = newTableInfo(schemaName, tableName, columns, keyMap)
+	// A key-only delete has the handle columns alone, and a NULL time column
+	// has no decimal yet; neither may define the layout of later rows.
+	if cacheable {
+		cache.Write(schemaName, tableName, version, tableInfo)
+	}
 	return tableInfo
 }
 
-func newTableInfo(
-	allocator *common.TableIDAllocator, schemaName, tableName string,
-	columns []*timodel.ColumnInfo, keyMap map[string]any,
-) *commonType.TableInfo {
+func newTableInfo(schemaName, tableName string, columns []*timodel.ColumnInfo, keyMap map[string]any) *commonType.TableInfo {
 	tidbTableInfo := new(timodel.TableInfo)
-	tidbTableInfo.ID = allocator.Allocate(schemaName, tableName)
-	allocator.AddBlockTableID(schemaName, tableName, tidbTableInfo.ID)
+	tidbTableInfo.ID = tableIDAllocator.Allocate(schemaName, tableName)
+	tableIDAllocator.AddBlockTableID(schemaName, tableName, tidbTableInfo.ID)
 	tidbTableInfo.Name = ast.NewCIStr(tableName)
 	tidbTableInfo.Columns = columns
 	indexColumns := make([]*timodel.IndexColumn, 0)
@@ -689,8 +703,8 @@ func (d *decoder) NextDDLEvent() *commonEvent.DDLEvent {
 	actionType := common.GetDDLActionType(result.Query)
 	result.Type = byte(actionType)
 
-	d.allocator.AddBlockTableID(result.SchemaName, result.TableName, d.allocator.Allocate(result.SchemaName, result.TableName))
-	result.BlockedTables = common.GetBlockedTables(d.allocator, result)
+	tableIDAllocator.AddBlockTableID(result.SchemaName, result.TableName, tableIDAllocator.Allocate(result.SchemaName, result.TableName))
+	result.BlockedTables = common.GetBlockedTables(tableIDAllocator, result)
 	d.cache.AddDDL(result.SchemaName, result.TableName, result.FinishedTs)
 	return result
 }

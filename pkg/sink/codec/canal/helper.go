@@ -85,6 +85,10 @@ func mysqlType2JavaType(t byte, isBinary bool) common.JavaSQLType {
 		return common.JavaSQLTypeVARCHAR
 	case mysql.TypeTiDBVectorFloat32:
 		return common.JavaSQLTypeVARCHAR
+	case mysql.TypeNull:
+		return common.JavaSQLTypeNULL
+	case mysql.TypeGeometry:
+		return common.JavaSQLTypeBINARY
 	default:
 	}
 	return common.JavaSQLTypeVARCHAR

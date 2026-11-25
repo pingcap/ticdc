@@ -16,7 +16,6 @@ import (
 	"testing"
 
 	"github.com/pingcap/ticdc/downstreamadapter/sink/columnselector"
-	commonModel "github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/stretchr/testify/require"
 )
@@ -117,29 +116,4 @@ func TestSetCheckpointMessageLogInfo(t *testing.T) {
 
 	SetCheckpointMessageLogInfo(message, 900)
 	require.Equal(t, uint64(900), message.LogInfo.Checkpoint.CommitTs)
-}
-
-func makeTestRowEvents(
-	t *testing.T,
-	helper *commonEvent.EventTestHelper,
-	tableInfo *commonModel.TableInfo,
-	sql string,
-) []*commonEvent.RowEvent {
-	dml := helper.DML2Event("test", "t", sql)
-	events := make([]*commonEvent.RowEvent, 0)
-	for {
-		row, ok := dml.GetNextRow()
-		if !ok {
-			break
-		}
-		events = append(events, &commonEvent.RowEvent{
-			TableInfo:      tableInfo,
-			StartTs:        dml.StartTs,
-			CommitTs:       dml.GetCommitTs(),
-			Event:          row,
-			ColumnSelector: columnselector.NewDefaultColumnSelector(),
-		})
-	}
-	require.NotEmpty(t, events)
-	return events
 }

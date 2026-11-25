@@ -54,7 +54,7 @@ func (s *Sink) SetWriteGate(_ *writelease.Gate) {
 }
 
 func (s *Sink) AddDMLEvent(event *commonEvent.DMLEvent) {
-	// NOTE: don't change the log, integration test `lossy_ddl` depends on it.
+	// NOTE: don't change the log, integration test `lossy_ddl` and `log_redaction` depend on it.
 	// ref: https://github.com/pingcap/ticdc/blob/da834db76e0662ff15ef12645d1f37bfa6506d83/tests/integration_tests/lossy_ddl/run.sh#L23
 	// Use zap.Stringer to call String() method which applies log redaction
 	log.Debug("BlackHoleSink: WriteEvents", zap.Stringer("dml", event))
@@ -80,15 +80,13 @@ func (s *Sink) WriteBlockEvent(event commonEvent.BlockEvent) error {
 		}
 	case commonEvent.TypeSyncPointEvent:
 	default:
-		log.Error("unknown event type",
-			zap.Any("event", event))
+		log.Error("unknown event type", zap.String("eventType", commonEvent.TypeToString(event.GetType())))
 	}
 	event.PostFlush()
 	return nil
 }
 
-func (s *Sink) AddCheckpointTs(ts uint64) {
-	log.Debug("BlackHoleSink: Checkpoint Ts Event", zap.Uint64("ts", ts))
+func (s *Sink) AddCheckpointTs(_ uint64) {
 }
 
 func (s *Sink) Close() {

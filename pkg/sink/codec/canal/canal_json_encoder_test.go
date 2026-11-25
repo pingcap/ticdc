@@ -53,7 +53,7 @@ func TestDMLE2E(t *testing.T) {
 
 		encoder := encIface.(*JSONRowEventEncoder)
 
-		decoder, err := NewDecoder(ctx, codecConfig, nil, common.NewTableIDAllocator())
+		decoder, err := NewDecoder(ctx, codecConfig, nil)
 		require.NoError(t, err)
 
 		message, err := encoder.EncodeDDLEvent(createTableDDLEvent)
@@ -148,7 +148,7 @@ func TestCanalJSONCompressionE2E(t *testing.T) {
 
 	message := encoder.Build()[0]
 
-	decoder, err := NewDecoder(ctx, codecConfig, nil, common.NewTableIDAllocator())
+	decoder, err := NewDecoder(ctx, codecConfig, nil)
 	require.NoError(t, err)
 
 	decoder.AddKeyValue(message.Key, message.Value)
@@ -222,7 +222,7 @@ func TestEncodeRoutedDMLEventUsesTargetNames(t *testing.T) {
 
 	message := encoder.Build()[0]
 
-	decoder, err := NewDecoder(ctx, codecConfig, nil, common.NewTableIDAllocator())
+	decoder, err := NewDecoder(ctx, codecConfig, nil)
 	require.NoError(t, err)
 	decoder.AddKeyValue(message.Key, message.Value)
 
@@ -245,7 +245,7 @@ func TestEncodeRoutedDDLEventUsesTargetNames(t *testing.T) {
 	message, err := encoder.EncodeDDLEvent(common.NewRoutedDDLEvent4Test())
 	require.NoError(t, err)
 
-	decoder, err := NewDecoder(ctx, codecConfig, nil, common.NewTableIDAllocator())
+	decoder, err := NewDecoder(ctx, codecConfig, nil)
 	require.NoError(t, err)
 	decoder.AddKeyValue(message.Key, message.Value)
 
@@ -291,7 +291,7 @@ func TestCanalJSONClaimCheckE2E(t *testing.T) {
 		// this is a large message, should be delivered to the external storage.
 		claimCheckLocationMessage := encoder.Build()[0]
 
-		decoder, err := NewDecoder(ctx, codecConfig, nil, common.NewTableIDAllocator())
+		decoder, err := NewDecoder(ctx, codecConfig, nil)
 		require.NoError(t, err)
 
 		decoder.AddKeyValue(claimCheckLocationMessage.Key, claimCheckLocationMessage.Value)
@@ -329,7 +329,7 @@ func TestNewCanalJSONMessageHandleKeyOnly4LargeMessage(t *testing.T) {
 
 	message := encoder.Build()[0]
 
-	dec, err := NewDecoder(context.Background(), codecConfig, &sql.DB{}, common.NewTableIDAllocator())
+	dec, err := NewDecoder(context.Background(), codecConfig, &sql.DB{})
 	require.NoError(t, err)
 
 	dec.AddKeyValue(message.Key, message.Value)
@@ -453,7 +453,7 @@ func TestEncodeCheckpointEvent(t *testing.T) {
 		require.NotNil(t, msg)
 
 		ctx := context.Background()
-		decoder, err := NewDecoder(ctx, codecConfig, nil, common.NewTableIDAllocator())
+		decoder, err := NewDecoder(ctx, codecConfig, nil)
 		require.NoError(t, err)
 
 		decoder.AddKeyValue(msg.Key, msg.Value)
@@ -526,7 +526,7 @@ func TestDDLEventWithExtension(t *testing.T) {
 	message, err := encoder.EncodeDDLEvent(ddlEvent)
 	require.NoError(t, err)
 
-	decoder, err := NewDecoder(ctx, codecConfig, nil, common.NewTableIDAllocator())
+	decoder, err := NewDecoder(ctx, codecConfig, nil)
 	require.NoError(t, err)
 
 	decoder.AddKeyValue(message.Key, message.Value)
@@ -688,7 +688,7 @@ func TestCanalJSONContentCompatibleE2E(t *testing.T) {
 	encoder, err := NewJSONRowEventEncoder(codecConfig, nil)
 	require.NoError(t, err)
 
-	decoder, err := NewDecoder(ctx, codecConfig, nil, common.NewTableIDAllocator())
+	decoder, err := NewDecoder(ctx, codecConfig, nil)
 	require.NoError(t, err)
 
 	_, insertEvent, updateEvent, deleteEvent := common.NewLargeEvent4Test(t)
@@ -736,7 +736,7 @@ func TestE2EPartitionTableByHash(t *testing.T) {
 	encoder, err := NewJSONRowEventEncoder(codecConfig, nil)
 	require.NoError(t, err)
 
-	decoder, err := NewDecoder(ctx, codecConfig, nil, common.NewTableIDAllocator())
+	decoder, err := NewDecoder(ctx, codecConfig, nil)
 	require.NoError(t, err)
 
 	message, err := encoder.EncodeDDLEvent(createTableDDLEvent)
@@ -793,7 +793,7 @@ func TestE2EPartitionTableByRange(t *testing.T) {
 	encoder, err := NewJSONRowEventEncoder(codecConfig, nil)
 	require.NoError(t, err)
 
-	decoder, err := NewDecoder(ctx, codecConfig, nil, common.NewTableIDAllocator())
+	decoder, err := NewDecoder(ctx, codecConfig, nil)
 	require.NoError(t, err)
 
 	message, err := encoder.EncodeDDLEvent(createTableDDLEvent)
@@ -857,7 +857,7 @@ func TestE2EPartitionTable(t *testing.T) {
 		encoder, err := NewJSONRowEventEncoder(codecConfig, nil)
 		require.NoError(t, err)
 
-		decoder, err := NewDecoder(ctx, codecConfig, nil, common.NewTableIDAllocator())
+		decoder, err := NewDecoder(ctx, codecConfig, nil)
 		require.NoError(t, err)
 
 		message, err := encoder.EncodeDDLEvent(createPartitionTableDDL)

@@ -79,7 +79,7 @@ func TestIntegerContentCompatible(t *testing.T) {
 	messages := encoder.Build()
 	require.Len(t, messages, 1)
 
-	decoder, err := NewDecoder(ctx, codecConfig, nil, common.NewTableIDAllocator())
+	decoder, err := NewDecoder(ctx, codecConfig, nil)
 	require.NoError(t, err)
 
 	decoder.AddKeyValue(messages[0].Key, messages[0].Value)
@@ -163,7 +163,7 @@ func TestIntegerTypes(t *testing.T) {
 			messages := encoder.Build()
 			require.Len(t, messages, 1)
 
-			decoder, err := NewDecoder(ctx, codecConfig, nil, common.NewTableIDAllocator())
+			decoder, err := NewDecoder(ctx, codecConfig, nil)
 			require.NoError(t, err)
 
 			decoder.AddKeyValue(messages[0].Key, messages[0].Value)
@@ -224,7 +224,7 @@ func TestFloatTypes(t *testing.T) {
 
 	m := encoder.Build()[0]
 
-	decoder, err := NewDecoder(ctx, codecConfig, nil, common.NewTableIDAllocator())
+	decoder, err := NewDecoder(ctx, codecConfig, nil)
 	require.NoError(t, err)
 
 	decoder.AddKeyValue(m.Key, m.Value)
@@ -273,7 +273,7 @@ func TestTimeTypes(t *testing.T) {
 
 	m := encoder.Build()[0]
 
-	decoder, err := NewDecoder(ctx, codecConfig, nil, common.NewTableIDAllocator())
+	decoder, err := NewDecoder(ctx, codecConfig, nil)
 	require.NoError(t, err)
 
 	decoder.AddKeyValue(m.Key, m.Value)
@@ -323,7 +323,7 @@ func TestStringTypes(t *testing.T) {
 
 	m := encoder.Build()[0]
 
-	decoder, err := NewDecoder(ctx, codecConfig, nil, common.NewTableIDAllocator())
+	decoder, err := NewDecoder(ctx, codecConfig, nil)
 	require.NoError(t, err)
 
 	decoder.AddKeyValue(m.Key, m.Value)
@@ -373,7 +373,7 @@ func TestBlobTypes(t *testing.T) {
 
 	m := encoder.Build()[0]
 
-	decoder, err := NewDecoder(ctx, codecConfig, nil, common.NewTableIDAllocator())
+	decoder, err := NewDecoder(ctx, codecConfig, nil)
 	require.NoError(t, err)
 
 	decoder.AddKeyValue(m.Key, m.Value)
@@ -423,7 +423,7 @@ func TestTextTypes(t *testing.T) {
 
 	m := encoder.Build()[0]
 
-	decoder, err := NewDecoder(ctx, codecConfig, nil, common.NewTableIDAllocator())
+	decoder, err := NewDecoder(ctx, codecConfig, nil)
 	require.NoError(t, err)
 
 	decoder.AddKeyValue(m.Key, m.Value)
@@ -482,7 +482,7 @@ func TestOtherTypes(t *testing.T) {
 
 	m := encoder.Build()[0]
 
-	decoder, err := NewDecoder(ctx, codecConfig, nil, common.NewTableIDAllocator())
+	decoder, err := NewDecoder(ctx, codecConfig, nil)
 	require.NoError(t, err)
 
 	decoder.AddKeyValue(m.Key, m.Value)
@@ -540,7 +540,7 @@ func TestDMLEventWithColumnSelector(t *testing.T) {
 
 	m := encoder.Build()[0]
 
-	decoder, err := NewDecoder(ctx, codecConfig, nil, common.NewTableIDAllocator())
+	decoder, err := NewDecoder(ctx, codecConfig, nil)
 	require.NoError(t, err)
 
 	decoder.AddKeyValue(m.Key, m.Value)
@@ -599,7 +599,7 @@ func TestDMLMultiplePK(t *testing.T) {
 
 	m := encoder.Build()[0]
 
-	decoder, err := NewDecoder(ctx, codecConfig, nil, common.NewTableIDAllocator())
+	decoder, err := NewDecoder(ctx, codecConfig, nil)
 	require.NoError(t, err)
 
 	decoder.AddKeyValue(m.Key, m.Value)
@@ -787,7 +787,7 @@ func TestLargeMessageClaimCheck(t *testing.T) {
 	m := encoder.Build()[0]
 	require.NotNil(t, m.Callback)
 
-	dec, err := NewDecoder(ctx, codecConfig, nil, common.NewTableIDAllocator())
+	dec, err := NewDecoder(ctx, codecConfig, nil)
 	require.NoError(t, err)
 
 	dec.AddKeyValue(m.Key, m.Value)
@@ -878,7 +878,7 @@ func TestMessageLargeHandleKeyOnly(t *testing.T) {
 	m := encoder.Build()[0]
 	require.NotNil(t, m.Callback)
 
-	decoder, err := NewDecoder(ctx, codecConfig, nil, common.NewTableIDAllocator())
+	decoder, err := NewDecoder(ctx, codecConfig, nil)
 	require.NoError(t, err)
 
 	decoder.AddKeyValue(m.Key, m.Value)
@@ -958,7 +958,7 @@ func TestDMLTypeEvent(t *testing.T) {
 	encoder, err := NewJSONRowEventEncoder(codecConfig, nil)
 	require.NoError(t, err)
 
-	decoder, err := NewDecoder(ctx, codecConfig, nil, common.NewTableIDAllocator())
+	decoder, err := NewDecoder(ctx, codecConfig, nil)
 	require.NoError(t, err)
 
 	for _, event := range []*commonEvent.RowEvent{
@@ -995,7 +995,7 @@ func TestDMLTypeEvent(t *testing.T) {
 
 	message := encoder.Build()[0]
 
-	decoder, err = NewDecoder(ctx, codecConfig, nil, common.NewTableIDAllocator())
+	decoder, err = NewDecoder(ctx, codecConfig, nil)
 	require.NoError(t, err)
 
 	decoder.AddKeyValue(message.Key, message.Value)
@@ -1021,7 +1021,7 @@ func TestDDLSequence(t *testing.T) {
 	encoder, err := NewJSONRowEventEncoder(codecConfig, nil)
 	require.NoError(t, err)
 
-	dec, err := NewDecoder(ctx, codecConfig, nil, common.NewTableIDAllocator())
+	dec, err := NewDecoder(ctx, codecConfig, nil)
 	require.NoError(t, err)
 
 	createDB := helper.DDL2Event(`create database abc`)
@@ -1154,7 +1154,7 @@ func TestCreateTableDDL(t *testing.T) {
 		message, err := encoder.EncodeDDLEvent(ddlEvent)
 		require.NoError(t, err)
 
-		decoder, err := NewDecoder(ctx, codecConfig, nil, common.NewTableIDAllocator())
+		decoder, err := NewDecoder(ctx, codecConfig, nil)
 		require.NoError(t, err)
 
 		decoder.AddKeyValue(message.Key, message.Value)
@@ -1194,7 +1194,7 @@ func TestCheckpointTs(t *testing.T) {
 	message, err = encoder.EncodeCheckpointEvent(watermark)
 	require.NoError(t, err)
 
-	decoder, err := NewDecoder(ctx, codecConfig, nil, common.NewTableIDAllocator())
+	decoder, err := NewDecoder(ctx, codecConfig, nil)
 	require.NoError(t, err)
 
 	decoder.AddKeyValue(message.Key, message.Value)
@@ -1281,10 +1281,7 @@ func TestRowKey(t *testing.T) {
 // alphabetically first column (s_data here, because the decoder sorts columns by
 // name) was used instead, which made every UPDATE scan the whole table.
 func TestTableInfoFromMessageLocatesRowByPrimaryKey(t *testing.T) {
-	dec := &decoder{
-		cache:     common.NewTableInfoProvider(),
-		allocator: common.NewTableIDAllocator(),
-	}
+	dec := &decoder{cache: common.NewTableInfoProvider()}
 	tableInfo := dec.queryTableInfo(&canalJSONMessageWithTiDBExtension{
 		JSONMessage: &JSONMessage{
 			Schema:  "test",

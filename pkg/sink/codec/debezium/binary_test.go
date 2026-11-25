@@ -109,7 +109,7 @@ func TestDebeziumBinaryHandling(t *testing.T) {
 				require.Equal(t, "bytes", bitField["type"])
 				require.Equal(t, "BQAAAAAAAAA=", bitField["default"])
 
-				decoder := NewDecoder(cfg, nil, common.NewTableIDAllocator())
+				decoder := NewDecoder(cfg, nil)
 				decoder.AddKeyValue(messages[0].Key, messages[0].Value)
 				decoded := decoder.NextDMLEvent()
 				change, ok := decoded.GetNextRow()

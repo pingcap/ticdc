@@ -40,7 +40,7 @@ func TestDecoderCodecCacheIsBounded(t *testing.T) {
 	const schema = "{\"type\":\"record\",\"name\":\"test\",\"fields\":[{\"name\":\"id\",\"type\":\"int\"}]}"
 	codec, err := GenCodec(schema)
 	require.NoError(t, err)
-	decoder := NewDecoder(nil, nil, "topic", nil, common.NewTableIDAllocator()).(*decoder)
+	decoder := NewDecoder(nil, nil, "topic", nil).(*decoder)
 
 	var firstID, secondID schemamanager.SchemaID
 	for i := 1; i <= decoderCodecCacheSize; i++ {
@@ -77,7 +77,7 @@ func TestDecodedTableInfoLocatesRowByPrimaryKey(t *testing.T) {
 	}
 	for _, primaryKeys := range [][]string{{"a", "b"}, {"b"}} {
 		t.Run(strings.Join(primaryKeys, ","), func(t *testing.T) {
-			columns, _, err := avroData2Columns(map[string]any{
+			columns, _, _, err := avroData2Columns(map[string]any{
 				"a": int64(1), "b": int64(2), "c": int64(3),
 			}, fields)
 			require.NoError(t, err)
@@ -86,7 +86,7 @@ func TestDecodedTableInfoLocatesRowByPrimaryKey(t *testing.T) {
 				keyMap[key] = nil
 			}
 
-			tableInfo := newTableInfo(common.NewTableIDAllocator(), "test", "t", columns, keyMap)
+			tableInfo := newTableInfo("test", "t", columns, keyMap)
 			require.Equal(t, primaryKeys, tableInfo.GetPrimaryKeyColumnNames())
 			require.True(t, tableInfo.HasPKOrNotNullUK)
 			common.RequireRowLocatorByPrimaryKey(t, tableInfo, primaryKeys...)
@@ -108,7 +108,7 @@ func TestDecodeIntegerPrimaryKeyWithUpstreamChecksum(t *testing.T) {
 		WillReturnRows(sqlmock.NewRows([]string{"checksum"}).AddRow(checksum))
 	mock.ExpectClose()
 
-	dec := &decoder{upstreamTiDB: db, allocator: common.NewTableIDAllocator(), cache: common.NewTableInfoProvider()}
+	dec := &decoder{upstreamTiDB: db, cache: common.NewTableInfoProvider()}
 	event := dec.assembleDMLEventFromDecoded(
 		map[string]any{"id": int64(42)},
 		map[string]any{
@@ -150,7 +150,7 @@ func TestDecodeTimestampChecksumUsesLocalTimeZone(t *testing.T) {
 			map[string]any{"name": "ts", "type": map[string]any{"connect.parameters": map[string]any{"tidb_type": "TIMESTAMP"}}},
 		},
 	}
-	source, err := assembleEvent(common.NewTableIDAllocator(), common.NewTableInfoProvider(), key, value, schema, false, true, 0)
+	source, err := assembleEvent(common.NewTableInfoProvider(), key, value, schema, false, true, 0)
 	require.NoError(t, err)
 	t.Cleanup(source.PostFlush)
 	data := rowcodec.RowData{}
@@ -167,7 +167,7 @@ func TestDecodeTimestampChecksumUsesLocalTimeZone(t *testing.T) {
 	_, offset := time.Date(2020, 2, 20, 2, 20, 20, 0, local).Zone()
 	cfg := common.NewConfig(config.ProtocolAvro)
 	cfg.TimeZone = time.FixedZone("consumer", offset+3600)
-	dec := &decoder{config: cfg, allocator: common.NewTableIDAllocator(), cache: common.NewTableInfoProvider()}
+	dec := &decoder{config: cfg, cache: common.NewTableInfoProvider()}
 	event := dec.assembleDMLEventFromDecoded(key, value, schema, false, true, 0)
 	require.NotNil(t, event)
 	t.Cleanup(event.PostFlush)
@@ -233,7 +233,7 @@ func TestAvroTemporalChecksum(t *testing.T) {
 					require.NoError(t, encoder.AppendRowChangedEvent(ctx, topic, event))
 					messages := encoder.Build()
 					require.Len(t, messages, 1)
-					dec := NewDecoder(cfg, encoder.schemaM, topic, nil, common.NewTableIDAllocator())
+					dec := NewDecoder(cfg, encoder.schemaM, topic, nil)
 					dec.AddKeyValue(messages[0].Key, messages[0].Value)
 					messageType, hasNext := dec.HasNext()
 					require.True(t, hasNext)
@@ -304,7 +304,7 @@ func TestAvroChecksumAfterColumnTypeChange(t *testing.T) {
 			require.Equal(t, []string{"id", "c1", "c2"}, []string{
 				columns[0].Name.O, columns[1].Name.O, columns[2].Name.O,
 			})
-			dec := NewDecoder(cfg, encoder.schemaM, topic, nil, common.NewTableIDAllocator())
+			dec := NewDecoder(cfg, encoder.schemaM, topic, nil)
 			dec.AddKeyValue(messages[0].Key, messages[0].Value)
 			messageType, hasNext := dec.HasNext()
 			require.True(t, hasNext)
@@ -320,7 +320,7 @@ func TestAvroChecksumAfterColumnTypeChange(t *testing.T) {
 }
 
 func TestChecksumFailureStopsDecode(t *testing.T) {
-	dec := &decoder{allocator: common.NewTableIDAllocator(), cache: common.NewTableInfoProvider()}
+	dec := &decoder{cache: common.NewTableInfoProvider()}
 	require.PanicsWithValue(t, "verify row checksum failed", func() {
 		dec.assembleDMLEventFromDecoded(
 			map[string]any{"id": int64(1)},
@@ -346,10 +346,10 @@ func TestDecodedTableInfoWithoutKeyColumnsHasNoRowLocator(t *testing.T) {
 		map[string]any{"name": "a", "type": map[string]any{"connect.parameters": map[string]any{"tidb_type": "INT"}}},
 		map[string]any{"name": "b", "type": map[string]any{"connect.parameters": map[string]any{"tidb_type": "INT"}}},
 	}
-	columns, _, err := avroData2Columns(map[string]any{"a": int64(1), "b": int64(2)}, fields)
+	columns, _, _, err := avroData2Columns(map[string]any{"a": int64(1), "b": int64(2)}, fields)
 	require.NoError(t, err)
 
-	tableInfo := newTableInfo(common.NewTableIDAllocator(), "test", "t", columns, nil)
+	tableInfo := newTableInfo("test", "t", columns, nil)
 	require.False(t, tableInfo.PKIsHandle())
 	require.Empty(t, tableInfo.GetIndices())
 	require.Empty(t, tableInfo.GetOrderedHandleKeyColumnIDs())
@@ -365,7 +365,7 @@ func TestUpdateWithoutBeforeValue(t *testing.T) {
 	}
 	key := map[string]any{"id": int64(1)}
 	makeEvent := func(op string, ts, value int64) *commonEvent.DMLEvent {
-		e, err := assembleEvent(common.NewTableIDAllocator(), common.NewTableInfoProvider(), key, map[string]any{
+		e, err := assembleEvent(common.NewTableInfoProvider(), key, map[string]any{
 			"id": int64(1), "v": value, tidbOp: op, tidbCommitTs: ts,
 		}, schema, false, true, 0)
 		require.NoError(t, err)
@@ -396,7 +396,7 @@ func TestUpdateWithoutBeforeValueRequiresKey(t *testing.T) {
 		"fields": []any{map[string]any{"name": "id", "type": map[string]any{"connect.parameters": map[string]any{"tidb_type": "INT"}}}},
 	}
 	for _, key := range []map[string]any{nil, {"id": nil}, {"missing": int64(1)}} {
-		_, err := assembleEvent(common.NewTableIDAllocator(), common.NewTableInfoProvider(), key, map[string]any{"id": int64(1), tidbOp: updateOperation, tidbCommitTs: int64(100)}, schema, false, true, 0)
+		_, err := assembleEvent(common.NewTableInfoProvider(), key, map[string]any{"id": int64(1), tidbOp: updateOperation, tidbCommitTs: int64(100)}, schema, false, true, 0)
 		require.ErrorContains(t, err, "handle")
 	}
 }

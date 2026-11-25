@@ -17,41 +17,7 @@ import (
 	"strings"
 
 	"github.com/pingcap/errors"
-	"github.com/pingcap/tidb/pkg/parser/ast"
 )
-
-// AstToDDLEvent returns filter.DDLEvent
-func AstToDDLEvent(node ast.StmtNode) EventType {
-	switch n := node.(type) {
-	case *ast.CreateDatabaseStmt:
-		return CreateDatabase
-	case *ast.DropDatabaseStmt:
-		return DropDatabase
-	case *ast.CreateTableStmt:
-		return CreateTable
-	case *ast.DropTableStmt:
-		if n.IsView {
-			return DropView
-		}
-		return DropTable
-	case *ast.TruncateTableStmt:
-		return TruncateTable
-	case *ast.RenameTableStmt:
-		return RenameTable
-	case *ast.CreateIndexStmt:
-		return CreateIndex
-	case *ast.DropIndexStmt:
-		return DropIndex
-	case *ast.AlterTableStmt:
-		return AlterTable
-	case *ast.CreateViewStmt:
-		return CreateView
-	case *ast.AlterDatabaseStmt:
-		return AlterDatabase
-	}
-
-	return NullEvent
-}
 
 // toEventType converts event type string to EventType and check if it is valid.
 func toEventType(es string) (EventType, error) {

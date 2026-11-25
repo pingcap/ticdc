@@ -14,15 +14,12 @@
 package util
 
 import (
-	"context"
 	"math"
-	"time"
 
 	"github.com/KimMachineGun/automemlimit/memlimit"
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/tidb/pkg/util/memory"
-	"github.com/shirou/gopsutil/v3/mem"
 	"go.uber.org/zap"
 )
 
@@ -41,37 +38,4 @@ func GetMemoryLimit() (uint64, error) {
 		}
 	}
 	return totalMemory, nil
-}
-
-// CheckMemoryUsage checks if the memory usage is less than the limit.
-func CheckMemoryUsage(limit float64) (bool, error) {
-	stat, err := mem.VirtualMemory()
-	if err != nil {
-		return false, err
-	}
-
-	log.Info("check memory usage", zap.Any("memory", stat))
-	return stat.UsedPercent < limit, nil
-}
-
-// WaitMemoryAvailable waits until the memory usage is less than the limit.
-func WaitMemoryAvailable(ctx context.Context, limit float64, timeout time.Duration) error {
-	ticker := time.NewTicker(time.Second * 5)
-	timeoutTimer := time.NewTimer(timeout)
-	for {
-		select {
-		case <-ctx.Done():
-			return errors.WrapError(errors.ErrWaitFreeMemoryTimeout, ctx.Err())
-		case <-ticker.C:
-			hasFreeMemory, err := CheckMemoryUsage(limit)
-			if err != nil {
-				return err
-			}
-			if hasFreeMemory {
-				return nil
-			}
-		case <-timeoutTimer.C:
-			return errors.ErrWaitFreeMemoryTimeout.GenWithStackByArgs()
-		}
-	}
 }

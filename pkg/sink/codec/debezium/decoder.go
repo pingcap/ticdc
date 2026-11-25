@@ -41,10 +41,11 @@ import (
 	"go.uber.org/zap"
 )
 
+var tableIDAllocator = common.NewTableIDAllocator()
+
 // decoder implement the Decoder interface
 type decoder struct {
-	allocator *common.TableIDAllocator
-	config    *common.Config
+	config *common.Config
 
 	upstreamTiDB *sql.DB
 	cache        *common.TableInfoProvider
@@ -59,10 +60,9 @@ type decoder struct {
 func NewDecoder(
 	config *common.Config,
 	db *sql.DB,
-	allocator *common.TableIDAllocator,
 ) common.Decoder {
+	tableIDAllocator.Clean()
 	return &decoder{
-		allocator:    allocator,
 		config:       config,
 		upstreamTiDB: db,
 		cache:        common.NewTableInfoProvider(),
@@ -141,14 +141,19 @@ func (d *decoder) NextDDLEvent() *commonEvent.DDLEvent {
 	event.Type = byte(actionType)
 	d.cache.AddDDL(schemaName, tableName, event.FinishedTs)
 
-	d.allocator.AddBlockTableID(event.SchemaName, event.TableName, d.allocator.Allocate(event.SchemaName, event.TableName))
-	event.BlockedTables = common.GetBlockedTables(d.allocator, event)
+	tableIDAllocator.AddBlockTableID(event.SchemaName, event.TableName, tableIDAllocator.Allocate(event.SchemaName, event.TableName))
+	event.BlockedTables = common.GetBlockedTables(tableIDAllocator, event)
 	if event.Type == byte(timodel.ActionRenameTable) {
 		schemaName = event.ExtraSchemaName
 		tableName = event.ExtraTableName
 	}
 
 	return event
+}
+
+// ShareTableInfo reads table info through the cache shared by all partitions.
+func (d *decoder) ShareTableInfo(cache *common.TableInfoProvider) {
+	d.cache = cache
 }
 
 // NextDMLEvent returns the next dml event if exists
@@ -193,8 +198,8 @@ func (d *decoder) assembleDMLEventFromPayload(
 	valuePayload map[string]any,
 	valueSchema map[string]any,
 ) *commonEvent.DMLEvent {
-	tableInfo := d.queryTableInfoFromPayload(keyPayload, valuePayload, valueSchema)
 	commitTs := getCommitTsFromPayload(valuePayload)
+	tableInfo := d.queryTableInfoFromPayload(keyPayload, valuePayload, valueSchema)
 	startTs, hasStartTs := getStartTsFromPayload(valuePayload)
 	if !hasStartTs {
 		// Keep old messages consumable when start_ts is absent. Invalid values
@@ -317,21 +322,19 @@ func (d *decoder) queryTableInfoFromPayload(
 	if tableInfo != nil {
 		return tableInfo
 	}
-	tableInfo = d.newTableInfoFromPayload(schemaName, tableName, keyPayload, valuePayload, valueSchema)
+	tableInfo = newTableInfoFromPayload(schemaName, tableName, keyPayload, valueSchema)
 	d.cache.Write(schemaName, tableName, version, tableInfo)
 	return tableInfo
 }
 
-func (d *decoder) newTableInfoFromPayload(
+func newTableInfoFromPayload(
 	schemaName, tableName string,
 	keyPayload map[string]any,
-	valuePayload map[string]any,
 	valueSchema map[string]any,
 ) *commonType.TableInfo {
-	allocator := d.allocator
 	tidbTableInfo := new(timodel.TableInfo)
-	tidbTableInfo.ID = allocator.Allocate(schemaName, tableName)
-	allocator.AddBlockTableID(schemaName, tableName, tidbTableInfo.ID)
+	tidbTableInfo.ID = tableIDAllocator.Allocate(schemaName, tableName)
+	tableIDAllocator.AddBlockTableID(schemaName, tableName, tidbTableInfo.ID)
 	tidbTableInfo.Name = ast.NewCIStr(tableName)
 
 	fields := valueSchema["fields"].([]any)

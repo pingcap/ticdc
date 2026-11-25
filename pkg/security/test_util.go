@@ -22,53 +22,8 @@ import (
 	"encoding/pem"
 	"math/big"
 	"net"
-	"os"
 	"time"
 )
-
-// WriteFile write content to a temp file
-func WriteFile(fileName string, content []byte) (path string, err error) {
-	cert, err := os.CreateTemp("", fileName)
-	if err != nil {
-		return "", err
-	}
-	_, err = cert.Write(content)
-	return cert.Name(), err
-}
-
-// NewServerCredential4Test return a Credential for testing
-func NewServerCredential4Test(cn string) (*CA, *Credential, error) {
-	var caPath, certPath, keyPath string
-
-	ca, err := NewCA()
-	if err != nil {
-		return nil, nil, err
-	}
-	if caPath, err = WriteFile("ticdc-test-ca", ca.CAPEM); err != nil {
-		return nil, nil, err
-	}
-
-	certPEM, keyPEM, err := ca.GenerateCerts(cn)
-	if err != nil {
-		return nil, nil, err
-	}
-	if certPath, err = WriteFile("ticdc-test-cert", certPEM); err != nil {
-		return nil, nil, err
-	}
-	if keyPath, err = WriteFile("ticdc-test-key", keyPEM); err != nil {
-		return nil, nil, err
-	}
-
-	res := &Credential{
-		CAPath:   caPath,
-		CertPath: certPath,
-		KeyPath:  keyPath,
-	}
-	if cn != "" {
-		res.CertAllowedCN = append(res.CertAllowedCN, cn)
-	}
-	return ca, res, nil
-}
 
 // CA represents a certificate authority
 type CA struct {
@@ -121,19 +76,6 @@ func NewCA() (*CA, error) {
 		Cert:       caCert,
 		CAPEM:      caPem.Bytes(),
 	}, err
-}
-
-// GetPrivKeyPEM returns the PEM contents of the private key.
-func (ca *CA) GetPrivKeyPEM() ([]byte, error) {
-	caPrivKeyPEM := new(bytes.Buffer)
-	err := pem.Encode(caPrivKeyPEM, &pem.Block{
-		Type:  "RSA PRIVATE KEY",
-		Bytes: x509.MarshalPKCS1PrivateKey(ca.privateKey),
-	})
-	if err != nil {
-		return nil, err
-	}
-	return caPrivKeyPEM.Bytes(), nil
 }
 
 // GenerateCerts returns the PEM contents of a CA certificate and some certificates

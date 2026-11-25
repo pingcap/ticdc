@@ -41,9 +41,11 @@ import (
 	"go.uber.org/zap"
 )
 
+var tableIDAllocator = common.NewTableIDAllocator()
+
 type decoder struct {
-	// Keep old intervals available for delayed decoding of buffered messages.
-	cache      *common.TableInfoProvider
+	cache *common.TableInfoProvider
+
 	keyBytes   []byte
 	valueBytes []byte
 
@@ -54,13 +56,11 @@ type decoder struct {
 	config *common.Config
 
 	upstreamTiDB *sql.DB
-
-	allocator *common.TableIDAllocator
 }
 
 // NewDecoder creates a new decoder.
 func NewDecoder(
-	ctx context.Context, config *common.Config, db *sql.DB, allocator *common.TableIDAllocator,
+	ctx context.Context, config *common.Config, db *sql.DB,
 ) (common.Decoder, error) {
 	var (
 		externalStorage storeapi.Storage
@@ -80,8 +80,8 @@ func NewDecoder(
 		}
 	}
 
+	tableIDAllocator.Clean()
 	return &decoder{
-		allocator:    allocator,
 		config:       config,
 		storage:      externalStorage,
 		upstreamTiDB: db,
@@ -181,19 +181,17 @@ func (b *decoder) NextDDLEvent() *commonEvent.DDLEvent {
 	result.SchemaName = b.nextKey.Schema
 	result.TableName = b.nextKey.Table
 
-	// Every partition decoder must record the boundary, even though only
-	// partition zero executes the DDL downstream.
-	schema, table := result.SchemaName, result.TableName
 	switch m.Type {
 	case timodel.ActionRenameTable, timodel.ActionRenameTables, timodel.ActionExchangeTablePartition:
-		// These DDLs affect multiple names. Start a new cache interval for all
-		// tables rather than relying on the single name carried by the message.
-		schema, table = "", ""
+		// These DDLs move the layout between names, so the entry cached for a
+		// name may belong to another table afterwards.
+		b.cache.InvalidateAll(result.FinishedTs)
+	default:
+		b.cache.AddDDL(result.SchemaName, result.TableName, result.FinishedTs)
 	}
-	b.cache.AddDDL(schema, table, result.FinishedTs)
 
-	b.allocator.AddBlockTableID(result.SchemaName, result.TableName, b.allocator.Allocate(result.SchemaName, result.TableName))
-	result.BlockedTables = common.GetBlockedTables(b.allocator, result)
+	tableIDAllocator.AddBlockTableID(result.SchemaName, result.TableName, tableIDAllocator.Allocate(result.SchemaName, result.TableName))
+	result.BlockedTables = common.GetBlockedTables(tableIDAllocator, result)
 
 	b.nextKey = nil
 	b.valueBytes = nil
@@ -273,9 +271,6 @@ func (b *decoder) decodeDMLMessage(key *messageKey, value []byte) *commonEvent.D
 func buildColumns(
 	holder *common.ColumnsHolder, columns map[string]column,
 ) map[string]column {
-	if columns == nil {
-		columns = make(map[string]column, holder.Length())
-	}
 	columnsCount := holder.Length()
 	for i := 0; i < columnsCount; i++ {
 		columnType := holder.Types[i]
@@ -301,9 +296,8 @@ func buildColumns(
 	return columns
 }
 
-// snapshotColumns fills the rows of a handle-key-only event from the upstream
-// snapshot. The columns keep the layout of the messages, which carry the types
-// a snapshot query does not report back.
+// snapshotColumns uses protocol metadata so snapshot rows have the same chunk
+// layout as ordinary messages. Cached columns never retain row values.
 func (b *decoder) snapshotColumns(ctx context.Context, key *messageKey, ts uint64, conditions map[string]any, columns map[string]column) map[string]column {
 	schema, table := key.Schema, key.Table
 	_, info := b.cachedTable(key)
@@ -322,13 +316,20 @@ func (b *decoder) snapshotColumns(ctx context.Context, key *messageKey, ts uint6
 	for i, typ := range holder.Types {
 		values[typ.Name()] = holder.Values[i]
 	}
+	flags := initColumnFlags(info)
 	result := make(map[string]column, len(info.GetColumns()))
 	for _, col := range info.GetColumns() {
-		result[col.Name.O] = column{Type: col.GetType(), Value: values[col.Name.O]}
+		result[col.Name.O] = column{
+			Type:  col.GetType(),
+			Flag:  flags[col.Name.O],
+			Value: values[col.Name.O],
+		}
 	}
 	return result
 }
 
+// A row at a DDL commit ts still reads the previous version: it is flushed
+// before that DDL.
 func isEnumOrSet(col *timodel.ColumnInfo) bool {
 	return col.GetType() == mysql.TypeEnum || col.GetType() == mysql.TypeSet
 }
@@ -418,10 +419,6 @@ func (b *decoder) cachedTable(key *messageKey) (uint64, *commonType.TableInfo) {
 }
 
 func (b *decoder) queryTableInfo(key *messageKey, value *messageRow) *commonType.TableInfo {
-	columns := value.Update
-	if columns == nil {
-		columns = value.Delete
-	}
 	version, info := b.cachedTable(key)
 	if info != nil {
 		id := info.TableName.TableID
@@ -439,8 +436,8 @@ func (b *decoder) queryTableInfo(key *messageKey, value *messageRow) *commonType
 }
 
 func (b *decoder) newTableInfo(key *messageKey, value *messageRow) *commonType.TableInfo {
-	physicalTableID := b.allocator.Allocate(key.Schema, key.Table)
-	b.allocator.AddBlockTableID(key.Schema, key.Table, physicalTableID)
+	physicalTableID := tableIDAllocator.Allocate(key.Schema, key.Table)
+	tableIDAllocator.AddBlockTableID(key.Schema, key.Table, physicalTableID)
 	key.Partition = &physicalTableID
 	tableInfo := new(timodel.TableInfo)
 	tableInfo.ID = *key.Partition

@@ -27,11 +27,6 @@ import (
 )
 
 const (
-	// If the heartbeat has been in a non-match state for more than the `warnAfter` time period,
-	// and more than the `warnInterval` time period has elapsed since the last `heartbeat unmatch` warning log was printed,
-	// then print the `warn` log.
-	warnAfter    = 2 * time.Minute
-	warnInterval = 2 * time.Minute
 	// resendInterval is the minimum interval between resending unacknowledged updates to a node.
 	// It can be overridden in tests to disable throttling.
 	resendInterval time.Duration = 1 * time.Second
@@ -54,7 +49,7 @@ func newNodeSetChecksumState(nodeCap int) nodeSetChecksumState {
 	}
 }
 
-// nodeChecksumState tracks expected checksum progress and heartbeat observation for a node.
+// nodeChecksumState tracks expected checksum progress for a node.
 //
 // Invariant: for any dispatcher ID that exists in nodeSetChecksumState.dispatcherToNode,
 // the corresponding nodeChecksumState.checksum must include that dispatcher ID, and it must
@@ -64,44 +59,6 @@ type nodeChecksumState struct {
 	ackedSeq   uint64                // Highest acknowledged sequence from this node.
 	checksum   set_checksum.Checksum // Expected set checksum on this node.
 	lastSendAt time.Time             // Last send time for resend throttling.
-
-	lastObservedState heartbeatpb.ChecksumState // Latest checksum state observed from heartbeat.
-	nonMatchSince     time.Time                 // Start time of continuous non-MATCH duration.
-	lastWarnAt        time.Time                 // Last warning time for log throttling.
-}
-
-// observe checksum state in heartbeat for log print if necessary
-func (s *nodeChecksumState) observeHeartbeat(
-	now time.Time,
-	state heartbeatpb.ChecksumState,
-	warnAfter time.Duration,
-	warnInterval time.Duration,
-) (shouldWarn bool, duration time.Duration) {
-	if state == heartbeatpb.ChecksumState_MATCH {
-		s.lastObservedState = state
-		s.nonMatchSince = time.Time{}
-		s.lastWarnAt = time.Time{}
-		return false, 0
-	}
-
-	if s.lastObservedState == heartbeatpb.ChecksumState_MATCH ||
-		s.lastObservedState != state ||
-		s.nonMatchSince.IsZero() {
-		s.nonMatchSince = now
-		s.lastWarnAt = time.Time{}
-	}
-
-	s.lastObservedState = state
-
-	duration = now.Sub(s.nonMatchSince)
-	shouldWarn = duration >= warnAfter
-	if shouldWarn && !s.lastWarnAt.IsZero() && now.Sub(s.lastWarnAt) < warnInterval {
-		shouldWarn = false
-	}
-	if shouldWarn {
-		s.lastWarnAt = now
-	}
-	return shouldWarn, duration
 }
 
 // nodeSetChecksumManager maintains maintainer-side expected dispatcher IDs for a single mode.
@@ -144,78 +101,6 @@ func (m *nodeSetChecksumManager) getOrCreateNodeState(node node.ID) *nodeChecksu
 	state = &nodeChecksumState{}
 	m.state.nodes[node] = state
 	return state
-}
-
-// ResetAndSendFull resets all internal states and builds full checksum updates for all nodes.
-//
-// It is typically used after an epoch change, so old acknowledgements become invalid.
-func (m *nodeSetChecksumManager) ResetAndSendFull(
-	epoch uint64,
-	nodes []node.ID,
-	expected map[node.ID][]common.DispatcherID,
-) []*messaging.TargetMessage {
-	now := time.Now()
-
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.epoch = epoch
-	m.state = newNodeSetChecksumState(len(nodes))
-
-	msgs := make([]*messaging.TargetMessage, 0, len(nodes))
-	for _, node := range nodes {
-		m.state.nodes[node] = &nodeChecksumState{
-			seq:        1,
-			ackedSeq:   0,
-			lastSendAt: now,
-		}
-	}
-
-	m.applyExpectedSet(expected)
-
-	for _, node := range nodes {
-		state := m.state.nodes[node]
-		msgs = append(msgs, m.buildUpdateMessage(node, state.seq, state.checksum))
-	}
-	m.mu.Unlock()
-
-	// Return built messages to the caller (Maintainer), which owns message sending.
-	return msgs
-}
-
-// Note: it's not thread safe. caller must hold m.mu
-func (m *nodeSetChecksumManager) applyExpectedSet(expected map[node.ID][]common.DispatcherID) {
-	for node, ids := range expected {
-		state, ok := m.state.nodes[node]
-		if !ok {
-			continue
-		}
-		for _, id := range ids {
-			oldNode, exists := m.state.dispatcherToNode[id]
-			if exists {
-				if oldNode == node {
-					log.Warn("dispatcher already exists in expected set, ignore it",
-						zap.Stringer("changefeedID", m.changefeedID),
-						zap.String("dispatcherID", id.String()),
-						zap.String("node", node.String()),
-						zap.String("mode", common.StringMode(m.mode)),
-					)
-					continue
-				}
-				log.Warn("dispatcher exists in another node, override expected node",
-					zap.Stringer("changefeedID", m.changefeedID),
-					zap.String("dispatcherID", id.String()),
-					zap.String("oldNode", oldNode.String()),
-					zap.String("newNode", node.String()),
-					zap.String("mode", common.StringMode(m.mode)),
-				)
-				if oldState, ok := m.state.nodes[oldNode]; ok {
-					oldState.checksum.Remove(id)
-				}
-			}
-			m.state.dispatcherToNode[id] = node
-			state.checksum.Add(id)
-		}
-	}
 }
 
 // ApplyDelta applies incremental dispatcher set changes for a node.
@@ -326,13 +211,6 @@ func (m *nodeSetChecksumManager) HandleAck(from node.ID, ack *heartbeatpb.Dispat
 	}
 }
 
-// FlushAndResendIfNeeded flushes dirty updates and resends unacknowledged updates when needed.
-func (m *nodeSetChecksumManager) FlushAndResendIfNeeded() []*messaging.TargetMessage {
-	msgs := m.FlushDirty()
-	msgs = append(msgs, m.ResendPending()...)
-	return msgs
-}
-
 // ResendPending builds the last unacknowledged update if it has been pending for long enough.
 func (m *nodeSetChecksumManager) ResendPending() []*messaging.TargetMessage {
 	now := time.Now()
@@ -379,58 +257,6 @@ func (m *nodeSetChecksumManager) RemoveNodes(nodes []node.ID) {
 			delete(m.state.dispatcherToNode, id)
 		}
 	}
-}
-
-// ObserveHeartbeat consumes checksum states from heartbeat and emits warning logs.
-//
-// A warning is triggered when a node stays in a non-OK state for warnAfter, and the log
-// emission is throttled by warnInterval.
-func (m *nodeSetChecksumManager) ObserveHeartbeat(from node.ID, state heartbeatpb.ChecksumState) {
-	now := time.Now()
-
-	type warnSnapshot struct {
-		state      heartbeatpb.ChecksumState
-		duration   time.Duration
-		epoch      uint64
-		seq        uint64
-		ackedSeq   uint64
-		lastSend   time.Time
-		changefeed common.ChangeFeedID
-		node       node.ID
-	}
-
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	nodeState, ok := m.state.nodes[from]
-	if !ok {
-		return
-	}
-	shouldWarn, duration := nodeState.observeHeartbeat(now, state, warnAfter, warnInterval)
-	snapshot := warnSnapshot{
-		state:      state,
-		duration:   duration,
-		epoch:      m.epoch,
-		seq:        nodeState.seq,
-		ackedSeq:   nodeState.ackedSeq,
-		lastSend:   nodeState.lastSendAt,
-		changefeed: m.changefeedID,
-		node:       from,
-	}
-	if !shouldWarn {
-		return
-	}
-
-	log.Warn("node set checksum state not ok for a long time",
-		zap.Stringer("changefeedID", snapshot.changefeed),
-		zap.String("node", snapshot.node.String()),
-		zap.String("mode", common.StringMode(m.mode)),
-		zap.String("state", snapshot.state.String()),
-		zap.Duration("duration", snapshot.duration),
-		zap.Uint64("epoch", snapshot.epoch),
-		zap.Uint64("expectedSeq", snapshot.seq),
-		zap.Uint64("ackedSeq", snapshot.ackedSeq),
-		zap.Time("lastSendAt", snapshot.lastSend),
-	)
 }
 
 // buildUpdateMessage builds a checksum update request for one node.

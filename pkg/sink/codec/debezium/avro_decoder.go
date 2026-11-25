@@ -61,7 +61,6 @@ func NewAvroDecoder(
 	ctx context.Context,
 	config *common.Config,
 	db *sql.DB,
-	allocator *common.TableIDAllocator,
 ) (common.Decoder, error) {
 	registryURL := strings.TrimRight(config.AvroConfluentSchemaRegistry, "/")
 	if registryURL == "" {
@@ -73,7 +72,7 @@ func NewAvroDecoder(
 		ctx:         ctx,
 		registryURL: registryURL,
 		httpClient:  http.DefaultClient,
-		inner:       NewDecoder(config, db, allocator).(*decoder),
+		inner:       NewDecoder(config, db).(*decoder),
 		schemas:     schemas,
 	}, nil
 }
@@ -92,6 +91,10 @@ func (d *avroDecoder) AddKeyValue(key, value []byte) {
 
 func (d *avroDecoder) HasNext() (common.MessageType, bool) {
 	return d.inner.HasNext()
+}
+
+func (d *avroDecoder) ShareTableInfo(cache *common.TableInfoProvider) {
+	d.inner.ShareTableInfo(cache)
 }
 
 func (d *avroDecoder) NextResolvedEvent() uint64 {

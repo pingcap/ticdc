@@ -43,11 +43,6 @@ import (
 	"golang.org/x/text/encoding/charmap"
 )
 
-type tableKey struct {
-	schema string
-	table  string
-}
-
 type bufferedJSONDecoder struct {
 	buf     *bytes.Buffer
 	decoder *json.Decoder
@@ -92,13 +87,13 @@ type decoder struct {
 	storage      storeapi.Storage
 	upstreamTiDB *sql.DB
 	cache        *common.TableInfoProvider
-	ddlCommitTs  map[[2]string][]uint64
-	allocator    *common.TableIDAllocator
 }
+
+var tableIDAllocator = common.NewTableIDAllocator()
 
 // NewDecoder return a decoder for canal-json
 func NewDecoder(
-	ctx context.Context, codecConfig *common.Config, db *sql.DB, allocator *common.TableIDAllocator,
+	ctx context.Context, codecConfig *common.Config, db *sql.DB,
 ) (common.Decoder, error) {
 	var (
 		externalStorage storeapi.Storage
@@ -118,9 +113,9 @@ func NewDecoder(
 		}
 	}
 
+	tableIDAllocator.Clean()
 	return &decoder{
 		config:       codecConfig,
-		allocator:    allocator,
 		decoder:      newBufferedJSONDecoder(),
 		storage:      externalStorage,
 		upstreamTiDB: db,
@@ -195,7 +190,7 @@ func (d *decoder) assembleClaimCheckDMLEvent(
 	}
 
 	d.msg = message
-	return d.NextDMLEvent()
+	return d.decodeDMLMessage(message)
 }
 
 func buildData(holder *common.ColumnsHolder) (map[string]interface{}, map[string]string) {
@@ -293,18 +288,26 @@ func (d *decoder) assembleHandleKeyOnlyDMLEvent(
 	}
 
 	d.msg = result
-	return d.NextDMLEvent()
+	return d.decodeDMLMessage(result)
 }
 
 // NextDMLEvent implements the Decoder interface
 // `HasNext` should be called before this.
 func (d *decoder) NextDMLEvent() *commonEvent.DMLEvent {
 	if d.msg == nil || d.msg.messageType() != common.MessageTypeRow {
+		messageType := common.MessageTypeUnknown
+		if d.msg != nil {
+			messageType = d.msg.messageType()
+		}
 		log.Panic("message type is not row changed",
-			zap.Any("messageType", d.msg.messageType()), zap.Any("msg", d.msg))
+			zap.Any("messageType", messageType), zap.Any("msg", d.msg))
 	}
 
-	message, withExtension := d.msg.(*canalJSONMessageWithTiDBExtension)
+	return d.decodeDMLMessage(d.msg)
+}
+
+func (d *decoder) decodeDMLMessage(msg canalJSONMessageInterface) *commonEvent.DMLEvent {
+	message, withExtension := msg.(*canalJSONMessageWithTiDBExtension)
 	if withExtension {
 		ctx := context.Background()
 		if message.Extensions.OnlyHandleKey && d.upstreamTiDB != nil {
@@ -314,11 +317,10 @@ func (d *decoder) NextDMLEvent() *commonEvent.DMLEvent {
 			return d.assembleClaimCheckDMLEvent(ctx, message.Extensions.ClaimCheckLocation)
 		}
 	}
-	return d.canalJSONMessage2DMLEvent()
+	return d.canalJSONMessage2DMLEvent(msg)
 }
 
-func (d *decoder) canalJSONMessage2DMLEvent() *commonEvent.DMLEvent {
-	msg := d.msg
+func (d *decoder) canalJSONMessage2DMLEvent(msg canalJSONMessageInterface) *commonEvent.DMLEvent {
 	tableInfo := d.queryTableInfo(msg)
 
 	result := new(commonEvent.DMLEvent)
@@ -375,12 +377,13 @@ func (d *decoder) NextDDLEvent() *commonEvent.DDLEvent {
 	result.Query = d.msg.getQuery()
 	actionType := common.GetDDLActionType(result.Query)
 	result.Type = byte(actionType)
-	d.allocator.AddBlockTableID(result.SchemaName, result.TableName, d.allocator.Allocate(result.SchemaName, result.TableName))
+	tableIDAllocator.AddBlockTableID(result.SchemaName, result.TableName, tableIDAllocator.Allocate(result.SchemaName, result.TableName))
 
-	result.BlockedTables = common.GetBlockedTables(d.allocator, result)
+	result.BlockedTables = common.GetBlockedTables(tableIDAllocator, result)
 	// Rows after this DDL carry its commit ts, so they read the new table info;
 	// rows buffered before it keep reading the cached older version.
-	d.cache.AddDDL(result.SchemaName, result.TableName, result.FinishedTs)
+	d.cache.AddDDL(result.SchemaName, result.TableName, result.GetCommitTs())
+	d.cache.AddDDL(result.ExtraSchemaName, result.ExtraTableName, result.GetCommitTs())
 	return result
 }
 
@@ -400,14 +403,15 @@ func (d *decoder) NextResolvedEvent() uint64 {
 }
 
 func formatAllColumnsValue(data map[string]any, columns []*timodel.ColumnInfo) map[string]any {
+	result := make(map[string]any, len(data))
 	for _, col := range columns {
 		raw, ok := data[col.Name.O]
 		if !ok {
 			continue
 		}
-		data[col.Name.O] = formatValue(raw, col.FieldType)
+		result[col.Name.O] = formatValue(raw, col.FieldType)
 	}
-	return data
+	return result
 }
 
 func formatValue(value any, ft types.FieldType) any {
@@ -541,24 +545,21 @@ func (d *decoder) queryTableInfo(msg canalJSONMessageInterface) *commonType.Tabl
 	schemaName := *msg.getSchema()
 	tableName := *msg.getTable()
 
-	version, cached := d.cache.ReadAt(schemaName, tableName, msg.getCommitTs())
-	if cached != nil {
-		return cached
-	}
-	{
+	version, tableInfo := d.cache.ReadAt(schemaName, tableName, msg.getCommitTs())
+	if tableInfo == nil {
 		tidbTableInfo := new(timodel.TableInfo)
-		tidbTableInfo.ID = d.allocator.Allocate(schemaName, tableName)
-		d.allocator.AddBlockTableID(schemaName, tableName, tidbTableInfo.ID)
+		tidbTableInfo.ID = tableIDAllocator.Allocate(schemaName, tableName)
+		tableIDAllocator.AddBlockTableID(schemaName, tableName, tidbTableInfo.ID)
 		tidbTableInfo.Name = ast.NewCIStr(tableName)
 
 		columns := newTiColumns(msg)
 		tidbTableInfo.Columns = columns
 		tidbTableInfo.Indices = newTiIndices(columns, msg.pkNameSet())
 		commonType.SetHandleKeyFlags(tidbTableInfo)
-		tableInfo := commonType.NewTableInfo4Decoder(schemaName, tidbTableInfo)
+		tableInfo = commonType.NewTableInfo4Decoder(schemaName, tidbTableInfo)
 		d.cache.Write(schemaName, tableName, version, tableInfo)
-		return tableInfo
 	}
+	return tableInfo
 }
 
 func newTiColumns(msg canalJSONMessageInterface) []*timodel.ColumnInfo {

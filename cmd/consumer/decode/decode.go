@@ -70,7 +70,6 @@ type Group struct {
 	selectors   *columnselector.ColumnSelectors
 	decoders    []decoder
 	schemas     *common.TableInfoProvider
-	allocator   *common.TableIDAllocator
 	// inputs dispatches an undecoded input to the decoder owning its partition.
 	queues []chan *Future
 	// output queues inputs for the conductor in submission order. A Future may
@@ -116,7 +115,6 @@ func NewGroup(ctx context.Context, opts Options) *Group {
 	group := &Group{
 		codecConfig: codecConfig,
 		upstreamDB:  upstreamDB,
-		allocator:   common.NewTableIDAllocator(),
 		schemas:     common.NewTableInfoProvider(),
 		decoders:    make([]decoder, partitions),
 		queues:      make([]chan *Future, partitions),
@@ -138,26 +136,19 @@ func NewGroup(ctx context.Context, opts Options) *Group {
 		return group
 	}
 	for i := range group.decoders {
-		if group.schemas == nil {
-			item, err := codec.NewEventDecoder(ctx, codecConfig, opts.Topic, upstreamDB, group.allocator)
-			if err != nil {
-				log.Panic("consumer event decoder initialization failed", zap.String("protocol", codecConfig.Protocol.String()), zap.Error(err))
-			}
-			if sharer, ok := item.(tableInfoSharer); ok {
-				sharer.ShareTableInfo(group.schemas)
-			}
-			group.decoders[i] = decoder{Decoder: item}
-			continue
-		}
-		decoded, err := simple.NewDecoder(ctx, codecConfig, upstreamDB, group.schemas, group.allocator)
+		item, err := codec.NewEventDecoder(ctx, codecConfig, opts.Topic, upstreamDB)
 		if err != nil {
 			log.Panic("consumer event decoder initialization failed", zap.String("protocol", codecConfig.Protocol.String()), zap.Error(err))
 		}
-		schema, ok := decoded.(*simple.Decoder)
-		if !ok {
-			log.Panic("consumer simple decoder does not support schema waiting")
+		if sharer, ok := item.(tableInfoSharer); ok {
+			sharer.ShareTableInfo(group.schemas)
 		}
-		group.decoders[i] = decoder{Decoder: decoded, schema: schema}
+		schema, ok := item.(*simple.Decoder)
+		if !ok {
+			group.decoders[i] = decoder{Decoder: item}
+			continue
+		}
+		group.decoders[i] = decoder{Decoder: item, schema: schema}
 	}
 	return group
 }

@@ -30,7 +30,7 @@ import (
 )
 
 func TestDecoderReusesTableInfo(t *testing.T) {
-	d := &decoder{config: common.NewConfig(config.ProtocolOpen), allocator: common.NewTableIDAllocator(), cache: common.NewTableInfoProvider()}
+	d := &decoder{config: common.NewConfig(config.ProtocolOpen), cache: common.NewTableInfoProvider()}
 	key := &messageKey{Schema: "test", Table: "t", Ts: 100}
 	cols := map[string]column{"id": {Type: mysql.TypeLong, Flag: primaryKeyFlag, Value: json.Number("1")}}
 	first := d.queryTableInfo(key, &messageRow{Update: cols})
@@ -67,7 +67,7 @@ func TestDecoderReusesTableInfo(t *testing.T) {
 }
 
 func TestDeleteReusesCompleteTableInfo(t *testing.T) {
-	d := &decoder{allocator: common.NewTableIDAllocator(), cache: common.NewTableInfoProvider()}
+	d := &decoder{cache: common.NewTableInfoProvider()}
 	key := &messageKey{Schema: "test", Table: "t", Ts: 100}
 	handle := map[string]column{"id": {Type: mysql.TypeLong, Flag: primaryKeyFlag, Value: json.Number("1")}}
 	// A cold key-only delete does not seed the full-table cache.
@@ -91,7 +91,7 @@ func TestHandleKeyOnlyPreservesEnumSetTypes(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	require.NoError(t, err)
 	defer db.Close()
-	d := &decoder{upstreamTiDB: db, allocator: common.NewTableIDAllocator(), cache: common.NewTableInfoProvider()}
+	d := &decoder{upstreamTiDB: db, cache: common.NewTableInfoProvider()}
 	key := &messageKey{Schema: "test", Table: "t", Ts: 100}
 	cols := map[string]column{
 		"id": {Type: mysql.TypeLong, Flag: primaryKeyFlag, Value: json.Number("1")},
@@ -122,7 +122,7 @@ func TestHandleKeyOnlyColdCache(t *testing.T) {
 			db, mock, err := sqlmock.New()
 			require.NoError(t, err)
 			defer db.Close()
-			d := &decoder{upstreamTiDB: db, allocator: common.NewTableIDAllocator(), cache: common.NewTableInfoProvider()}
+			d := &decoder{upstreamTiDB: db, cache: common.NewTableInfoProvider()}
 			// The new interval must discover its own schema even with an old
 			// interval already cached for this table.
 			oldKey := &messageKey{Schema: "test", Table: "t", Ts: 50}

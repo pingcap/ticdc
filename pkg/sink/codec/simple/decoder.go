@@ -40,6 +40,8 @@ import (
 	"go.uber.org/zap"
 )
 
+var tableIDAllocator = common.NewTableIDAllocator()
+
 // Decoder implement the Decoder interface
 type Decoder struct {
 	config *common.Config
@@ -49,10 +51,9 @@ type Decoder struct {
 	upstreamTiDB *sql.DB
 	storage      storeapi.Storage
 
-	value     []byte
-	msg       *message
-	memo      *common.TableInfoProvider
-	allocator *common.TableIDAllocator
+	value []byte
+	msg   *message
+	memo  *common.TableInfoProvider
 
 	// cachedMessages is used to store the messages which does not have received corresponding table info yet.
 	cachedMessages *list.List
@@ -62,8 +63,7 @@ type Decoder struct {
 
 // NewDecoder returns a new Decoder
 func NewDecoder(
-	ctx context.Context, config *common.Config, db *sql.DB, provider *common.TableInfoProvider,
-	allocator *common.TableIDAllocator,
+	ctx context.Context, config *common.Config, db *sql.DB,
 ) (common.Decoder, error) {
 	var (
 		externalStorage storeapi.Storage
@@ -83,6 +83,7 @@ func NewDecoder(
 	}
 
 	m, err := newMarshaller(config)
+	tableIDAllocator.Clean()
 	return &Decoder{
 		config:     config,
 		marshaller: m,
@@ -90,10 +91,14 @@ func NewDecoder(
 		storage:      externalStorage,
 		upstreamTiDB: db,
 
-		memo:           provider,
-		allocator:      allocator,
+		memo:           common.NewTableInfoProvider(),
 		cachedMessages: list.New(),
 	}, errors.Trace(err)
+}
+
+// ShareTableInfo reads table info through the cache shared by all partitions.
+func (d *Decoder) ShareTableInfo(cache *common.TableInfoProvider) {
+	d.memo = cache
 }
 
 // AddKeyValue add the received key and values to the Decoder,
@@ -167,7 +172,7 @@ func (d *Decoder) NextDMLEvent() *commonEvent.DMLEvent {
 		return nil
 	}
 
-	d.allocator.AddBlockTableID(msg.Schema, msg.Table, msg.TableID)
+	tableIDAllocator.AddBlockTableID(msg.Schema, msg.Table, msg.TableID)
 	return d.assembleDMLEvent(msg, tableInfo)
 }
 
@@ -281,15 +286,15 @@ func (d *Decoder) NextDDLEvent() *commonEvent.DDLEvent {
 	ddl := d.buildDDLEvent(d.msg)
 	d.msg = nil
 
-	d.memo.WriteInfo(ddl.TableInfo)
-	d.memo.WriteInfo(ddl.MultipleTableInfos[1])
+	d.memo.WriteTableInfo(ddl.TableInfo)
+	d.memo.WriteTableInfo(ddl.MultipleTableInfos[1])
 
 	for ele := d.cachedMessages.Front(); ele != nil; {
 		msg := ele.Value.(*message)
 		next := ele.Next()
 		tableInfo := d.memo.Read(msg.Schema, msg.Table, msg.SchemaVersion)
 		if tableInfo != nil {
-			d.allocator.AddBlockTableID(msg.Schema, msg.Table, msg.TableID)
+			tableIDAllocator.AddBlockTableID(msg.Schema, msg.Table, msg.TableID)
 			d.CachedRowChangedEvents = append(d.CachedRowChangedEvents, d.assembleDMLEvent(msg, tableInfo))
 			d.cachedMessages.Remove(ele)
 		}
@@ -307,7 +312,7 @@ func (d *Decoder) GetCachedEvents() []*commonEvent.DMLEvent {
 
 // GetTableIDs identifies every table and partition whose events belong to the logical table.
 func (d *Decoder) GetTableIDs(schema, table string) []int64 {
-	return d.allocator.GetBlockedTables(schema, table)
+	return tableIDAllocator.GetBlockedTables(schema, table)
 }
 
 // newTiColumnInfo uses columnSchema and IndexSchema to construct a tidb column info.
@@ -449,7 +454,7 @@ func (d *Decoder) buildDDLEvent(msg *message) *commonEvent.DDLEvent {
 	result.FinishedTs = msg.CommitTs
 	result.SchemaName = tableInfo.TableName.Schema
 	result.TableName = tableInfo.TableName.Table
-	d.allocator.AddBlockTableID(result.SchemaName, result.TableName, tableInfo.TableName.TableID)
+	tableIDAllocator.AddBlockTableID(result.SchemaName, result.TableName, tableInfo.TableName.TableID)
 
 	if preTableInfo != nil {
 		result.ExtraSchemaName = preTableInfo.GetSchemaName()
@@ -463,7 +468,7 @@ func (d *Decoder) buildDDLEvent(msg *message) *commonEvent.DDLEvent {
 
 	actionType := common.GetDDLActionType(result.Query)
 	result.Type = byte(actionType)
-	result.BlockedTables = common.GetBlockedTables(d.allocator, result)
+	result.BlockedTables = common.GetBlockedTables(tableIDAllocator, result)
 	return result
 }
 

@@ -104,7 +104,7 @@ func TestChecksumFailureStopsDecode(t *testing.T) {
 				Type: DMLTypeUpdate, Data: map[string]any{"id": int64(1)},
 				Old: map[string]any{"id": int64(1)}, Checksum: &value,
 			}
-			decoder := &Decoder{config: common.NewConfig(config.ProtocolSimple), allocator: common.NewTableIDAllocator()}
+			decoder := &Decoder{config: common.NewConfig(config.ProtocolSimple)}
 			decoder.config.EnableRowChecksum = true
 			require.PanicsWithValue(t, "consumer detect checksum corrupted", func() {
 				decoder.assembleDMLEvent(msg, ddl.TableInfo)
@@ -126,7 +126,6 @@ func TestCachedDMLReturnsMessage(t *testing.T) {
 	decoder := &Decoder{
 		config:         common.NewConfig(config.ProtocolSimple),
 		memo:           common.NewTableInfoProvider(),
-		allocator:      common.NewTableIDAllocator(),
 		cachedMessages: list.New(),
 	}
 	decoder.msg = &message{

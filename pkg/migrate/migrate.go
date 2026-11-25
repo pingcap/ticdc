@@ -266,7 +266,6 @@ func (m *migrator) migrate(ctx context.Context, etcdNoMetaVersion bool, oldVersi
 	err = m.migrateGcServiceSafePoint(ctx, pdClient,
 		m.config.Security, m.cli.GetGCServiceID(), m.config.GcTTL)
 	if err != nil {
-		log.Error("update meta version failed, etcd meta data migration failed", zap.Error(err))
 		return errors.WrapError(errors.ErrEtcdMigrateFailed, err)
 	}
 

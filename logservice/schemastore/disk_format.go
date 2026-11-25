@@ -247,10 +247,6 @@ func writeUpperBoundMeta(db *pebble.DB, upperBound UpperBoundMeta) {
 	}
 }
 
-func loadDatabasesInKVSnap(snap *pebble.Snapshot, gcTs uint64) (map[int64]*BasicDatabaseInfo, error) {
-	return loadDatabasesInKVSnapWithEncryption(snap, gcTs, nil, 0)
-}
-
 // loadDatabasesInKVSnapWithEncryption decrypts and loads databases from snapshot if encryption is enabled
 func loadDatabasesInKVSnapWithEncryption(snap *pebble.Snapshot, gcTs uint64, encMgr encryption.EncryptionManager, keyspaceID uint32) (map[int64]*BasicDatabaseInfo, error) {
 	databaseMap := make(map[int64]*BasicDatabaseInfo)
@@ -511,10 +507,6 @@ func tryReadLogicalTableID(snap *pebble.Snapshot, tableID int64, version uint64)
 	return int64(binary.BigEndian.Uint64(val))
 }
 
-func readTableInfoInKVSnap(snap *pebble.Snapshot, tableID int64, version uint64) *common.TableInfo {
-	return readTableInfoInKVSnapWithEncryption(snap, tableID, version, nil, 0)
-}
-
 func readTableInfoInKVSnapWithEncryption(
 	snap *pebble.Snapshot,
 	tableID int64,
@@ -684,10 +676,6 @@ func writePersistedDDLEventWithEncryption(db *pebble.DB, ddlEvent *PersistedDDLE
 }
 
 const mTablePrefix = "Table"
-
-func isTableRawKey(key []byte) bool {
-	return strings.HasPrefix(string(key), mTablePrefix)
-}
 
 // addSchemaInfoToBatchWithEncryption encrypts and adds schema info to batch if encryption is enabled
 func addSchemaInfoToBatchWithEncryption(
