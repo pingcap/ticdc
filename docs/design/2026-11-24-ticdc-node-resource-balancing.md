@@ -46,9 +46,10 @@ optimizer or a bounded convergence time.
 ```mermaid
 flowchart LR
     subgraph Capture[Each capture]
-        ES[EventStore reads and writes] --> Counters[Atomic resource counters]
+        ES[EventStore reads and writes] --> Counters[Component counters: 16 shards each]
         Sink[Successful sink flushes] --> Counters
-        Counters --> Manager[Maintainer Manager]
+        Counters --> Stats[NodeStats: cached node totals]
+        Stats --> Manager[Maintainer Manager]
         Manager --> Tracker[Shared immutable node view]
         Tracker --> Maintainers[Maintainers for local changefeeds]
         Details[Per-dispatcher complete heartbeats] --> Maintainers
@@ -65,8 +66,9 @@ runs on a capture.
 
 | Owner | State and responsibility |
 | --- | --- |
-| Resource producers | Process-wide cumulative counters; updates do not consume dispatcher samples. |
-| Maintainer Manager | Reports local counters even when no changefeed Maintainer is hosted locally; validates Coordinator responses. |
+| Resource producers | Component-owned cumulative counters; writers select a shard once and update it at the measurement boundary. |
+| `NodeStats` | One capture-owned registry, integer aggregation baselines, node totals, and a cached sample; retains retired components' contributions. |
+| Maintainer Manager | Reports cached node totals even when no changefeed Maintainer is hosted locally; validates Coordinator responses. |
 | Coordinator | Stores counter baselines and smoothed rates by capture, then publishes node totals and availability. |
 | `NodeLoadTracker` | Shares one immutable view among local Maintainers and their normal/redo span controllers. |
 | Maintainer | Owns its changefeed's dispatcher details and temporary migration projections. |
@@ -103,6 +105,8 @@ continue using observations until the next accepted sample.
 `pkg/scheduler/resource.Load` maps `ResourceType` to a nonnegative rate. Each
 dimension is evaluated independently against its own cluster average; raw byte
 rates from different pipeline stages are never added into one traffic score.
+`load.go` defines types and wire conversions. `stats.go` owns local collection;
+there are no exported package-global byte counters.
 
 | Resource type | Measurement point | Meaning |
 | --- | --- | --- |
@@ -115,6 +119,60 @@ access counters, not physical device IO, WAL, or compaction measurements. Sink
 event-size accounting is also distinct from downstream protocol or socket
 bytes. Existing Prometheus byte metrics can have different accounting
 boundaries and should not be substituted without checking their definitions.
+
+### Capture ownership and component shards
+
+Server creates one `NodeStats` per capture in `setPreServices` and registers it
+as `NodeResourceStats` in the existing application service context. It is passed
+explicitly to EventStore; Maintainer Manager and DispatcherManager obtain the
+same instance during construction. Hot paths retain their recorder pointers
+instead of looking up a service on each event.
+
+Each DispatcherManager registers one sink `Counter`, shared by its normal and
+redo dispatchers. EventStore registers separate write and read counters. Each
+counter has 16 fixed shards. A write worker, dispatcher, or iterator chooses a
+recorder once at creation; writers can share a shard when their count exceeds
+16. Shard padding reduces contention between independent shard updates on common
+64-byte-cache-line platforms.
+
+The node registry contains component counters, not every dispatcher or
+short-lived iterator. EventStore reads first accumulate in the iterator's own
+goroutine, then update its recorder at 64 KiB, when `Next` returns, or at close.
+Filtered records can be combined without delaying a successfully returned row
+until iterator shutdown. Writes record the committed batch size; sink updates
+occur in the existing successful-flush callback.
+
+### On-demand aggregation and retirement
+
+For component `c`, shard `s`, and resource `r`, local aggregation uses integer
+deltas:
+
+```text
+delta[c,s] = current[c,s] - previously_collected[c,s]
+node_total[r] += sum(delta[c,s] for counters of resource r)
+```
+
+Reading a shard never clears it. Integer subtraction precedes conversion to
+floating-point rates, preserving small increments in large cumulative values.
+
+`NodeStats.Snapshot(now)` performs a full collection on the first call, after
+cache invalidation, or when at least one second has elapsed since the last
+collection. Other calls reuse the cached totals and construct independent
+protobuf objects. There is
+no separate sampling goroutine and no promise of refresh at each wall-clock
+second: aggregation is driven by heartbeat requests. Registering an already
+known resource or retiring a component does not force a full collection. Adding
+a previously unknown resource dimension invalidates the cache so that the next
+snapshot includes a complete vector.
+
+The component owner must stop its writers and flush iterator remainders before
+calling `Counter.Close`. Retirement collects that component's final delta and
+removes its shards under the node lock. The accumulated node total retains its
+contribution without keeping a registry entry for every retired component.
+Repeated close is harmless; the cached wire sample reflects the contribution
+at the next normal refresh. DispatcherManager retires its counter after its
+shutdown wait, while EventStore defers retirement to its close path. These
+calls do not themselves join arbitrary outstanding recorder writers.
 
 ### Batch lifetime and dispatcher sample lifetime
 
@@ -135,7 +193,7 @@ The existing dispatcher contract distinguishes:
 | --- | --- |
 | `0` | No usable recent sample; reject resource-aware count moves for this dispatcher. |
 | `1` | Idle sentinel; use zero traffic cost for count moves and exclude it from traffic-initiated moves. |
-| `> 1` | Sampled sink event-size rate used as migration cost. |
+| Other positive values | Sampled sink event-size rate; traffic-initiated moves require the raw value to exceed one. |
 
 ### Wire representation
 
@@ -156,6 +214,11 @@ Coordinator-version checks; it does not add a migration-approval protocol.
 
 ## 4. Sampling, smoothing, and freshness
 
+There are three calculation stages: `NodeStats` aggregates local integer
+counters, Coordinator derives node rates and smoothing, and each Maintainer
+computes resource averages and migration constraints. The resource package
+does not run the balancing policy or compute node rates.
+
 For cumulative counter `C[n,r]`, the Coordinator derives the instantaneous rate
 for resource `r` on node `n` from two accepted observations:
 
@@ -173,6 +236,7 @@ asynchronous flushes and workload steps.
 | Timing | Current value | Role |
 | --- | --- | --- |
 | Capture heartbeat cadence | 500 ms | Existing heartbeat throttle; execution and transport can delay actual arrival. |
+| Full local component aggregation | At least 1 s between collections | Heartbeat-driven cache refresh for a stable resource set; extra sends reuse totals. |
 | Minimum accepted counter interval | 1 s | Extra witness/drain heartbeats do not replace a useful rate window with tiny deltas. |
 | Coordinator node-sample freshness | 5 s | Reject stale baselines and cluster views. |
 | Local node-view freshness | 5 s | A Maintainer stops resource-aware balancing when responses stop arriving. |
@@ -308,14 +372,16 @@ before its new placement is observable.
 The one-move limit applies to traffic-initiated moves. Count balancing retains
 its configured batch behavior, and count moves do not start a traffic cooldown.
 Basic scheduling and drain operations retain their own limits and are not
-globally serialized by this state. The existing `balance-move-batch-size`
+globally serialized by this state. Split-group balancing is also separate;
+default-group split checks run before the shared move-state check. The existing `balance-move-batch-size`
 defaults to 1,024 and covers split and move work for a default-group invocation.
 
 ## 6. Concurrency and failure boundaries
 
 | State | Access discipline |
 | --- | --- |
-| Process resource counters | Atomic increments and loads; sampling never resets counters. |
+| Component shard counters | Atomic increments and loads; iterator accumulation stays in its scan goroutine. |
+| `NodeStats` registry, collection baselines, totals, and cache | Protected by a node mutex; wire snapshots own their protobuf objects. Retirement requires writers to have stopped first. |
 | Coordinator baselines and rates | Owned by its single event-handling goroutine. |
 | Local node resource view | `Replace` constructs fresh maps and publishes them with status/timestamp under `RWMutex`; returned snapshots are immutable by contract. |
 | Migration projection | Clones both the node map and each resource map before updates. |
@@ -363,9 +429,11 @@ can ignore the new vector while retaining the scalar sink fields.
 To add another cumulative traffic resource:
 
 1. Append a stable `ResourceType` value and regenerate the protobuf code.
-2. Add a counter and register it in the resource snapshot list.
+2. Declare its support in `NodeStats` initialization when idle captures must
+   advertise a zero value; create component counters with `NewCounter`.
 3. Instrument a defined measurement boundary, checking buffer ownership and
-   failure semantics before choosing when to increment it.
+   failure semantics before choosing when to increment a recorder. Retire the
+   component counter only after its writers stop.
 4. Reuse generic Coordinator rate sampling and common-dimension publication.
 5. Verify destination screening, resets, stale data, mixed peers, and resource
    ownership with focused tests.
@@ -375,6 +443,13 @@ CPU, memory, capacities, or gauges need an explicit sampling/normalization
 contract before being added. A resource that should actively initiate moves
 also needs a cost model for the work being moved; registering a new counter
 alone does not provide one.
+
+For `K` registered component-resource counters and `S = 16` shards per counter,
+full local aggregation costs `O(K * S + R)` with `O(K * S + R)` stored state.
+Cached wire snapshots cost `O(R)` to construct; retirement collects only the
+closing counter's `S` shards. This work does not scale with the number of
+dispatcher or iterator objects. Recorder assignment and byte updates are
+constant-time operations, but concurrent writers can still share a shard.
 
 The Coordinator stores `O(N * R)` state for `N` nodes and `R` resources. Each
 reply carries that node view, giving approximately `O(N^2 * R)` aggregate
@@ -392,6 +467,9 @@ document. The following existing tests cover the main contracts:
 
 | Contract | Test location / example |
 | --- | --- |
+| Capture isolation, cache cadence, retirement, precision, and concurrent collection | `pkg/scheduler/resource/stats_test.go`: `TestNodeStatsLifecycleAndSampling`, `TestNodeStatsIntegerPrecision`, `TestNodeStatsConcurrentCollection` |
+| Normal/redo dispatchers share the component sink counter without consuming individual samples | `downstreamadapter/dispatcher/table_progress_test.go`: `TestDispatcherModesShareComponentResourceCounter`, `TestResourceCountersPreserveDispatcherSamples` |
+| Iterator batching and final remainder accounting | `logservice/eventstore/event_store_test.go`: `TestEventStoreReadLoadBatchAndClose`, `TestEventStoreCompressionAndIterDecodeBufferReuse` |
 | Nine whole tables with initially concentrated hotspots | `maintainer/scheduler/balance_test.go`: `TestBalanceSchedulerBalancesWholeTableTraffic` |
 | Other changefeeds affect node totals | `TestBalanceSchedulerUsesNodeTotalsAcrossChangefeeds` |
 | Busy EventStore destinations are screened | `TestBalanceSchedulerAvoidsBusyEventStoreTargets` |
@@ -407,12 +485,47 @@ For a focused run on a checkout containing the implementation, the repository
 test target enables failpoints and uses race detection plus `intest`:
 
 ```bash
-make unit_test_pkg PKG='./coordinator/... ./maintainer/... ./logservice/eventstore ./pkg/scheduler/...'
+make unit_test_pkg PKG='./pkg/scheduler/... ./coordinator/... ./maintainer/... ./downstreamadapter/dispatcher ./downstreamadapter/dispatchermanager ./logservice/eventstore ./server'
 ```
 
 See [the validation guide](../agents/validation.md) for the repository test
 commands. The recorded totals below describe particular runs, not a fixed
 expected test count for this command.
+
+### Collection validation and microbenchmarks
+
+The final collection simplification was checked with
+`make unit_test_pkg PKG='./pkg/scheduler/resource ./downstreamadapter/dispatcher' P=2`:
+82 tests passed with race detection, `intest`, and failpoints; incremental lint
+reported zero issues. The Go source tree of that validated working copy matches
+`d92790ab6`; the run preceded the commit. Earlier collection-refactor runs
+covered the broader component set, EventStore regression cases, and a
+successful `make cdc` build.
+These are recorded implementation runs; this documentation update did not
+rerun them or a live replication workload.
+
+A recorded collection microbenchmark on Linux/amd64, Intel Xeon Gold 6240,
+used `GOMAXPROCS=8`, a 300 ms benchmark duration, and three repetitions:
+
+| Operation | Recorded range |
+| --- | --- |
+| Shared atomic update, comparison baseline | 18.8-21.9 ns/op |
+| Component-shard update | 0.98-0.99 ns/op |
+| Cached node snapshot | 147-179 ns/op |
+| Full collection of 1,000 component counters | 193-203 microseconds/collection |
+
+These measurements were collected during the refactor, before its final
+simplification, and have not been repeated at the documented commit. They
+measure synthetic accounting cost and parallel throughput, not end-to-end CDC
+performance or a guarantee for other CPUs and writer counts. Reproduce with:
+
+```bash
+GOMAXPROCS=8 go test ./pkg/scheduler/resource -run '^$' \
+  -bench 'Benchmark(ResourceRecord|NodeStatsSnapshot)$' \
+  -benchmem -benchtime=300ms -count=3
+```
+
+### Historical real-chain and protocol validation
 
 A real-chain run of the multi-resource implementation at `8a71717eb` used one
 PD, one TiKV, one TiDB, three independent TiCDC processes, and MySQL 8.0.46 on
@@ -441,8 +554,8 @@ covered concurrent snapshot publication/private projections and concurrent
 dispatcher binding/traffic updates.
 
 Twenty-seven protocol assertions used regenerated codecs from `9d8506167`
-(sink-only load reporting), `b7e1a7058` (before node-load fields), and the current
-snapshot. They checked both request/response directions, scalar compatibility,
+(sink-only load reporting), `b7e1a7058` (before node-load fields), and
+`09c351f60`. They checked both request/response directions, scalar compatibility,
 lease/witness metadata, missing load fields, and unknown resource dimensions.
 The namespace was changed only to load historical and current codecs in the
 same test process.
@@ -451,6 +564,8 @@ The ten-minute real-chain run predates those review corrections and was not
 repeated on `09c351f60`. The runs establish the stated scheduling and correctness
 cases; they do not establish multi-host capacity, live mixed-version rolling
 upgrade safety, fault recovery, or convergence under arbitrary concurrent load.
+The real-chain run also predates `NodeStats`; no equivalent live run was
+recorded for the component-shard implementation described here.
 
 Useful additional acceptance scenarios are two changefeeds with one indivisible
 hot table each initially colocated, independently busy EventStore nodes, and
@@ -460,11 +575,13 @@ rows rather than relying only on metric slopes or final dispatcher counts.
 
 ## 9. Source navigation
 
-Inspect these paths at `09c351f60` using `git show <revision>:<path>`:
+Inspect these paths at `d92790ab6` using `git show <revision>:<path>`:
 
 | Area | Source |
 | --- | --- |
-| Resource types, counters, and conversion | `pkg/scheduler/resource/load.go`; `heartbeatpb/heartbeat.proto` |
+| Resource types and conversion | `pkg/scheduler/resource/load.go`; `heartbeatpb/heartbeat.proto` |
+| Capture-owned counters, shards, caching, and retirement | `pkg/scheduler/resource/stats.go` |
+| Capture initialization and shared statistics wiring | `server/server.go`; `pkg/common/context/app_context.go`; `downstreamadapter/dispatchermanager/dispatcher_manager.go` |
 | Complete traffic period | `heartbeatpb/node_load.go`; `downstreamadapter/dispatchermanager/task.go` |
 | Sink flush accounting | `downstreamadapter/dispatcher/table_progress.go` |
 | EventStore accounting | `logservice/eventstore/event_store.go` |
