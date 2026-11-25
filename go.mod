@@ -69,7 +69,7 @@ require (
 	github.com/pingcap/tidb v1.1.0-beta.0.20261113093556-507927a8e87b
 	github.com/pingcap/tidb-dashboard v0.0.0-20260603054940-9e92195886c3
 	github.com/pingcap/tidb/pkg/parser v0.0.0-20261113093556-507927a8e87b
-	github.com/pingcap/tiflow v0.0.0-20261119055844-e34a98a08abc
+	github.com/pingcap/tiflow v0.0.0-20261125085924-56d6f29c9aa5
 	github.com/prometheus/client_golang v1.23.2
 	github.com/prometheus/client_model v0.6.2
 	github.com/r3labs/diff v1.1.0
