@@ -48,10 +48,6 @@ type partitionProgress struct {
 	decoder     *util.DMLMessageDecoder
 }
 
-type tableIDProvider interface {
-	GetTableIDs(schema, table string) []int64
-}
-
 func newPartitionProgress(partition int32, decoder common.Decoder) *partitionProgress {
 	return &partitionProgress{
 		partition:   partition,
@@ -338,17 +334,8 @@ func (w *writer) getBlockTableIDs(ddl *event.DDLEvent) map[int64]struct{} {
 	}
 	if w.partitionTableAccessor != nil &&
 		w.partitionTableAccessor.IsPartitionTable(ddl.GetSchemaName(), ddl.GetTableName()) {
-		if w.tableInfoProvider != nil {
-			for _, tableID := range w.tableInfoProvider.GetBlockedTables(ddl.GetSchemaName(), ddl.GetTableName()) {
-				tableIDs[tableID] = struct{}{}
-			}
-		} else if len(w.progresses) > 0 && w.progresses[0].decoder != nil {
-			provider, ok := w.progresses[0].decoder.Unwrap().(tableIDProvider)
-			if ok {
-				for _, tableID := range provider.GetTableIDs(ddl.GetSchemaName(), ddl.GetTableName()) {
-					tableIDs[tableID] = struct{}{}
-				}
-			}
+		for _, tableID := range w.tableInfoProvider.GetBlockedTables(ddl.GetSchemaName(), ddl.GetTableName()) {
+			tableIDs[tableID] = struct{}{}
 		}
 	}
 	return tableIDs

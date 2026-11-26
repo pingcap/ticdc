@@ -302,34 +302,23 @@ func (t *tableVersions) set(version, effectiveTs uint64, info *common.TableInfo)
 }
 
 func (t *tableVersions) releaseBefore(watermark uint64) {
-	var (
-		hasVersionFloor   bool
-		floorVersion      uint64
-		hasEffectiveFloor bool
-		floorEffectiveTs  uint64
-	)
+	// ReadAt resolves by version, while WriteTableInfoAt orders retention by
+	// effectiveTs, so the newest released entry of either stays as a floor.
+	var versionFloor, effectiveTsFloor uint64
 	for _, item := range t.entries {
-		if item.version <= watermark && (!hasVersionFloor || item.version > floorVersion) {
-			hasVersionFloor = true
-			floorVersion = item.version
+		if item.version <= watermark {
+			versionFloor = max(versionFloor, item.version)
 		}
-		if item.effectiveTs <= watermark && (!hasEffectiveFloor || item.effectiveTs > floorEffectiveTs) {
-			hasEffectiveFloor = true
-			floorEffectiveTs = item.effectiveTs
+		if item.effectiveTs <= watermark {
+			effectiveTsFloor = max(effectiveTsFloor, item.effectiveTs)
 		}
 	}
-	kept := 0
+	kept := t.entries[:0]
 	for _, item := range t.entries {
-		keepVersion := item.version > watermark || (hasVersionFloor && item.version == floorVersion)
-		keepEffective := item.effectiveTs > watermark || (hasEffectiveFloor && item.effectiveTs == floorEffectiveTs)
-		if keepVersion || keepEffective {
-			t.entries[kept] = item
-			kept++
+		if item.version >= versionFloor || item.effectiveTs >= effectiveTsFloor {
+			kept = append(kept, item)
 		}
 	}
-	if kept == len(t.entries) {
-		return
-	}
-	clear(t.entries[kept:])
-	t.entries = t.entries[:kept]
+	clear(t.entries[len(kept):])
+	t.entries = kept
 }

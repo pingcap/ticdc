@@ -218,12 +218,8 @@ func GetBlockedTables(
 		timodel.ActionAddForeignKey, timodel.ActionDropForeignKey,
 		timodel.ActionAddPrimaryKey, timodel.ActionDropPrimaryKey,
 		timodel.ActionModifyTableCharsetAndCollate, timodel.ActionModifyTableComment, timodel.ActionAlterIndexVisibility,
-		timodel.ActionRebaseAutoID, timodel.ActionMultiSchemaChange, timodel.ActionDropView:
-		return &commonEvent.InfluencedTables{
-			InfluenceType: commonEvent.InfluenceTypeNormal,
-			TableIDs:      blockedTableIDs,
-		}
-	case timodel.ActionAddTablePartition, timodel.ActionDropTablePartition,
+		timodel.ActionRebaseAutoID, timodel.ActionMultiSchemaChange, timodel.ActionDropView,
+		timodel.ActionAddTablePartition, timodel.ActionDropTablePartition,
 		timodel.ActionTruncateTablePartition, timodel.ActionReorganizePartition,
 		timodel.ActionAlterTablePartitioning, timodel.ActionRemovePartitioning,
 		timodel.ActionExchangeTablePartition, timodel.ActionAlterTTLInfo, timodel.ActionAlterTTLRemove:

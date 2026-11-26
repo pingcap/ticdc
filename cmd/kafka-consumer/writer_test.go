@@ -362,10 +362,7 @@ func TestPartitionDDLFlushOrder(t *testing.T) {
 		spillStore: util.NewSpillStore(),
 		progresses: []*partitionProgress{
 			{
-				partition: 0,
-				decoder: util.NewDMLMessageDecoder(&tableIDDecoder{
-					tableIDs: []int64{logicalTableID, physicalTableID},
-				}),
+				partition:   0,
 				eventsGroup: make(map[int64]*util.EventsGroup),
 			},
 			{
@@ -378,8 +375,11 @@ func TestPartitionDDLFlushOrder(t *testing.T) {
 		},
 		mysqlSink:              s,
 		partitionTableAccessor: codeccommon.NewPartitionTableAccessor(),
+		tableInfoProvider:      codeccommon.NewTableInfoProvider(),
 	}
 	w.partitionTableAccessor.Add("test", "members")
+	w.tableInfoProvider.AddBlockTableID("test", "members", logicalTableID)
+	w.tableInfoProvider.AddBlockTableID("test", "members", physicalTableID)
 
 	err := w.flushDDLEvent(context.Background(), &commonEvent.DDLEvent{
 		Query:      "ALTER TABLE members DROP PARTITION p0",
@@ -602,15 +602,6 @@ func attachDMLMessageDataForWriterTest(message *codeccommon.DMLMessage) *codecco
 type singleDMLDecoder struct {
 	message  *codeccommon.DMLMessage
 	consumed bool
-}
-
-type tableIDDecoder struct {
-	codeccommon.Decoder
-	tableIDs []int64
-}
-
-func (d *tableIDDecoder) GetTableIDs(string, string) []int64 {
-	return d.tableIDs
 }
 
 func (d *singleDMLDecoder) AddKeyValue(_, _ []byte) {
