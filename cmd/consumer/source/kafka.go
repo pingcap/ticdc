@@ -53,7 +53,8 @@ func newKafkaReader(ctx context.Context, opts Options) *kafkaReader {
 	if strings.Contains(topic, ",") {
 		log.Panic("consumer accepts one Kafka topic", zap.String("topic", topic))
 	}
-	router, err := eventrouter.NewEventRouter(replicaConfig.Sink, util.GetOrZero(replicaConfig.CaseSensitive), topic, false, codecConfig.Protocol == config.ProtocolAvro)
+	isAvroLike := codecConfig.Protocol == config.ProtocolAvro || codecConfig.Protocol == config.ProtocolDebeziumAvro
+	router, err := eventrouter.NewEventRouter(replicaConfig.Sink, util.GetOrZero(replicaConfig.CaseSensitive), topic, false, isAvroLike)
 	if err != nil {
 		log.Panic("kafka event routing configuration is invalid", zap.Error(err))
 	}

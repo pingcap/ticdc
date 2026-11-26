@@ -71,6 +71,18 @@ func (d *decoder) AddKeyValue(key, value []byte) {
 	if d.valuePayload != nil || d.valueSchema != nil {
 		log.Panic("add key / value to the decoder failed, since it's already set")
 	}
+	if d.config.Protocol != config.ProtocolDebeziumAvro {
+		cc := d.config.LargeMessageHandle.LargeMessageHandleCompression
+		var err error
+		key, err = common.Decompress(cc, key)
+		if err != nil {
+			log.Panic("decompress key failed", zap.String("compression", cc), zap.Any("key", util.RedactAny(key)), zap.Error(err))
+		}
+		value, err = common.Decompress(cc, value)
+		if err != nil {
+			log.Panic("decompress value failed", zap.String("compression", cc), zap.Any("value", util.RedactAny(value)), zap.Error(err))
+		}
+	}
 	keyPayload, keySchema, err := decodeRawBytes(key)
 	if err != nil {
 		log.Panic("decode key failed", zap.Error(err), zap.ByteString("key", key))
@@ -83,7 +95,6 @@ func (d *decoder) AddKeyValue(key, value []byte) {
 	d.keySchema = keySchema
 	d.valuePayload = valuePayload
 	d.valueSchema = valueSchema
-	return
 }
 
 // HasNext returns whether there is any event need to be consumed
