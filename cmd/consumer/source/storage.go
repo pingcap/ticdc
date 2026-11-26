@@ -83,6 +83,7 @@ type storageReader struct {
 	sourceCheckpoint uint64
 	watermark        uint64
 	schemas          map[cloudstorage.SchemaPathKey]*cloudstorage.SchemaFile
+	pathTableKeys    map[string]string
 	fileIndices      map[cloudstorage.DMLPathKey]map[cloudstorage.FileIndexKey]uint64
 	ddlWatermarks    map[string]uint64
 	pendingSchema    chan struct{} // Header decoding determines the next file groups.
@@ -111,6 +112,7 @@ func newStorageReader(ctx context.Context, opts Options) *storageReader {
 		fileIndexWidth: util.GetOrZero(replicaConfig.Sink.FileIndexWidth),
 		scheme:         opts.UpstreamURI.Scheme,
 		schemas:        make(map[cloudstorage.SchemaPathKey]*cloudstorage.SchemaFile),
+		pathTableKeys:  make(map[string]string),
 		fileIndices:    make(map[cloudstorage.DMLPathKey]map[cloudstorage.FileIndexKey]uint64),
 		ddlWatermarks:  make(map[string]uint64),
 		tableIDs:       make(map[storageTableKey]int64),
@@ -122,6 +124,7 @@ func newStorageReader(ctx context.Context, opts Options) *storageReader {
 		reader.bucket = opts.UpstreamURI.Host
 		reader.bucketPath = opts.UpstreamURI.Path
 		reader.s3Client = newS3Client(ctx, opts.UpstreamURI)
+	case config.GCSScheme, config.GSScheme, config.AzblobScheme, config.AzureScheme:
 	default:
 		log.Panic("storage consumer does not support the storage schema", zap.String("scheme", reader.scheme))
 	}
@@ -134,24 +137,67 @@ func (c *storageReader) ddlWatermark(table string) uint64 {
 	return c.ddlWatermarks[table]
 }
 
+func (c *storageReader) schemaWatermark(key cloudstorage.SchemaPathKey, schema *cloudstorage.SchemaFile) uint64 {
+	if schema != nil && schema.Schema != "" {
+		return c.ddlWatermark(common.QuoteSchema(schema.Schema, schema.Table))
+	}
+	if realKey, ok := c.pathTableKeys[key.GetKey()]; ok {
+		return c.ddlWatermark(realKey)
+	}
+	return c.ddlWatermark(key.GetKey())
+}
+
 func (c *storageReader) scanFiles(ctx context.Context) (map[cloudstorage.DMLPathKey]map[cloudstorage.FileIndexKey]storageIndexRange, error) {
 	// Read already rejects older schema versions after observing their DDL.
 	// Retire those caches at the next scan, after its captured inputs are drained.
 	for key := range c.fileIndices {
-		if key.TableVersion < c.ddlWatermark(key.GetKey()) {
+		if key.TableVersion < c.schemaWatermark(key.SchemaPathKey, c.schemas[key.SchemaPathKey]) {
 			delete(c.fileIndices, key)
 		}
 	}
-	for key := range c.schemas {
-		if key.TableVersion < c.ddlWatermark(key.GetKey()) {
+	for key, schema := range c.schemas {
+		if key.TableVersion < c.schemaWatermark(key, schema) {
 			delete(c.schemas, key)
 		}
 	}
 	files := make(map[cloudstorage.DMLPathKey]map[cloudstorage.FileIndexKey]storageIndexRange)
-	if err := c.discoverDir(ctx, "", 0, files); err != nil {
+	var err error
+	if c.localPath != "" || c.s3Client != nil {
+		err = c.discoverDir(ctx, "", 0, files)
+	} else {
+		err = c.walkStorage(ctx, files)
+	}
+	if err != nil {
 		return nil, err
 	}
 	return files, nil
+}
+
+func (c *storageReader) walkStorage(
+	ctx context.Context,
+	files map[cloudstorage.DMLPathKey]map[cloudstorage.FileIndexKey]storageIndexRange,
+) error {
+	return c.storage.WalkDir(ctx, &storeapi.WalkOption{SubDir: ""}, func(filePath string, _ int64) error {
+		normalized := strings.TrimPrefix(filePath, "/")
+		switch {
+		case cloudstorage.IsSchemaFile(normalized):
+			key, added, err := c.readSchema(ctx, normalized)
+			if err != nil {
+				return err
+			}
+			if added {
+				files[cloudstorage.NewSchemaFileDMLPathKey(key)] = nil
+			}
+		case strings.HasSuffix(normalized, ".index"):
+			if err := c.addIndex(ctx, normalized, files); err != nil {
+				if errors.ErrStorageSinkInvalidFileName.Equal(err) {
+					return nil
+				}
+				return err
+			}
+		}
+		return nil
+	})
 }
 
 // discoverDir finds data directories and schema files below dir. Only
@@ -164,19 +210,21 @@ func (c *storageReader) discoverDir(
 	if err != nil {
 		return err
 	}
-	meta := path.Join(dir, "meta")
-	if slices.Contains(dirs, "meta") {
-		_, names, err := c.listEntries(ctx, meta)
+	var skipMetaDir bool
+	if depth > 0 && slices.Contains(dirs, "meta") {
+		meta := path.Join(dir, "meta")
+		metaDirs, names, err := c.listEntries(ctx, meta)
 		if err != nil {
 			return err
 		}
 		indices := make([]string, 0, len(names))
 		for _, name := range names {
+			fullPath := path.Join(meta, name)
 			switch {
 			case strings.HasSuffix(name, ".index"):
-				indices = append(indices, name)
-			case cloudstorage.IsSchemaFile(name):
-				key, added, err := c.readSchema(ctx, path.Join(meta, name))
+				indices = append(indices, fullPath)
+			case cloudstorage.IsSchemaFile(fullPath):
+				key, added, err := c.readSchema(ctx, fullPath)
 				if err != nil {
 					return err
 				}
@@ -186,19 +234,22 @@ func (c *storageReader) discoverDir(
 			}
 		}
 		if len(indices) > 0 {
-			for _, name := range indices {
-				if err := c.addIndex(ctx, path.Join(meta, name), files); err != nil {
+			for _, indexPath := range indices {
+				if err := c.addIndex(ctx, indexPath, files); err != nil {
 					return err
 				}
 			}
 			return nil
 		}
+		// Keep descending into "meta" when it is a table under a database (depth == 1 with
+		// subdirs) or a database at root (depth == 0); skip pure metadata directories.
+		skipMetaDir = depth >= 2 || len(metaDirs) == 0
 	}
 	if depth == storageDiscoveryDepth {
 		return nil
 	}
 	for _, child := range dirs {
-		if child == "meta" {
+		if child == "meta" && skipMetaDir {
 			continue
 		}
 		if err := c.discoverDir(ctx, path.Join(dir, child), depth+1, files); err != nil {
@@ -216,7 +267,8 @@ func (c *storageReader) addIndex(
 	if err := key.ParseIndexFilePath(c.dateSeparator, indexPath); err != nil {
 		return errors.WrapError(errors.ErrStorageSinkInvalidFileName, err, "parse Storage index path")
 	}
-	if (c.sourceCheckpoint > 0 && key.TableVersion > c.sourceCheckpoint) || key.TableVersion < c.ddlWatermark(key.GetKey()) {
+	if (c.sourceCheckpoint > 0 && key.TableVersion > c.sourceCheckpoint) ||
+		key.TableVersion < c.schemaWatermark(key.SchemaPathKey, c.schemas[key.SchemaPathKey]) {
 		return nil
 	}
 	index, err := c.readIndex(ctx, indexPath)
@@ -318,7 +370,7 @@ func (c *storageReader) readIndex(ctx context.Context, path string) (cloudstorag
 func (c *storageReader) readSchema(ctx context.Context, path string) (cloudstorage.SchemaPathKey, bool, error) {
 	var key cloudstorage.SchemaPathKey
 	key.Parse(path)
-	if (c.sourceCheckpoint > 0 && key.TableVersion > c.sourceCheckpoint) || c.schemas[key] != nil || key.TableVersion < c.ddlWatermark(key.GetKey()) {
+	if (c.sourceCheckpoint > 0 && key.TableVersion > c.sourceCheckpoint) || c.schemas[key] != nil || key.TableVersion < c.schemaWatermark(key, nil) {
 		return key, false, nil
 	}
 	data, err := c.storage.ReadFile(ctx, path)
@@ -336,6 +388,14 @@ func (c *storageReader) readSchema(ctx context.Context, path string) (cloudstora
 	}
 	if file.Checksum() != uint32(checksum) || key.TableVersion != file.TableVersion {
 		return key, false, errors.ErrCodecDecode.FastGenByArgs("Storage schema checksum or table version does not match its path")
+	}
+	if file.Schema != "" {
+		if realKey := common.QuoteSchema(file.Schema, file.Table); realKey != key.GetKey() {
+			c.pathTableKeys[key.GetKey()] = realKey
+		}
+	}
+	if file.TableVersion < c.schemaWatermark(key, &file) {
+		return key, false, nil
 	}
 	c.schemas[key] = &file
 	return key, true, nil
@@ -373,7 +433,8 @@ func (c *storageReader) Read(ctx context.Context) ([]*Payload, error) {
 	}
 	item := c.ranges[0]
 	key := item.key
-	ddlWatermark := c.ddlWatermark(key.GetKey())
+	schema := c.schemas[key.SchemaPathKey]
+	ddlWatermark := c.schemaWatermark(key.SchemaPathKey, schema)
 	switch {
 	case item.index.Idx < item.end && key.TableVersion >= ddlWatermark:
 		c.ranges[0].index.Idx++
@@ -381,7 +442,6 @@ func (c *storageReader) Read(ctx context.Context) ([]*Payload, error) {
 		c.ranges[0] = storageRange{}
 		c.ranges = c.ranges[1:]
 	}
-	schema := c.schemas[key.SchemaPathKey]
 	if schema == nil {
 		log.Panic("storage DML file has no matching schema", zap.String("schema", key.Schema), zap.String("table", key.Table), zap.Uint64("tableVersion", key.TableVersion))
 	}
@@ -399,9 +459,13 @@ func (c *storageReader) Read(ctx context.Context) ([]*Payload, error) {
 		c.mu.Unlock()
 		return []*Payload{{File: &File{Schema: schema}}}, nil
 	}
+	schemaName, tableName := key.Schema, key.Table
+	if schema.Schema != "" {
+		schemaName, tableName = schema.Schema, schema.Table
+	}
 	idKey := storageTableKey{
-		schema:    key.Schema,
-		table:     key.Table,
+		schema:    schemaName,
+		table:     tableName,
 		partition: key.PartitionNum,
 	}
 	tableID := c.tableIDs[idKey]
@@ -505,14 +569,20 @@ func (c *storageReader) Close() {
 func newS3Client(ctx context.Context, uri *url.URL) *s3.Client {
 	values := uri.Query()
 	region := cmp.Or(values.Get("s3.region"), values.Get("region"))
-	cfg, err := awsconfig.LoadDefaultConfig(ctx,
+	cfgOpts := []func(*awsconfig.LoadOptions) error{
 		awsconfig.WithRegion(cmp.Or(region, defaultS3Region)),
-		awsconfig.WithCredentialsProvider(credentials.NewStaticCredentialsProvider(
-			values.Get("access-key"),
-			values.Get("secret-access-key"),
-			values.Get("session-token"),
-		)),
-	)
+	}
+	accessKey := values.Get("access-key")
+	secretKey := values.Get("secret-access-key")
+	sessionToken := values.Get("session-token")
+	if cmp.Or(accessKey, secretKey, sessionToken) != "" {
+		cfgOpts = append(cfgOpts, awsconfig.WithCredentialsProvider(credentials.NewStaticCredentialsProvider(
+			accessKey,
+			secretKey,
+			sessionToken,
+		)))
+	}
+	cfg, err := awsconfig.LoadDefaultConfig(ctx, cfgOpts...)
 	if err != nil {
 		log.Panic("storage client initialization failed", zap.Error(err))
 	}

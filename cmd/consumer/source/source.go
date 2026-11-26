@@ -101,8 +101,8 @@ func TypeOf(uri *url.URL) Kind {
 		return KindKafka
 	case config.PulsarScheme, config.PulsarSSLScheme, config.PulsarHTTPScheme, config.PulsarHTTPSScheme:
 		return KindPulsar
-	case config.FileScheme, config.S3Scheme, config.GCSScheme, config.GSScheme,
-		config.AzblobScheme, config.AzureScheme:
+	case config.FileScheme, "local", config.S3Scheme, "ks3", "oss",
+		config.GCSScheme, config.GSScheme, config.AzblobScheme, config.AzureScheme:
 		return KindStorage
 	}
 	log.Panic("consumer upstream scheme is unsupported", zap.String("scheme", uri.Scheme))
