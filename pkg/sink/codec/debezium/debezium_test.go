@@ -248,6 +248,7 @@ func TestEncodeRoutedDDLEventUsesTargetNames(t *testing.T) {
 	require.Equal(t, "target_table", decoded.TableName)
 	require.Equal(t, routedDDL.Query, decoded.Query)
 }
+
 func TestDebeziumSuiteEnableSchema(t *testing.T) {
 	suite.Run(t, &debeziumSuite{
 		disableSchema: false,
