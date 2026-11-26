@@ -62,7 +62,7 @@ func NewAvroDecoder(
 	if registryURL == "" {
 		return nil, errors.ErrAvroSchemaAPIError.GenWithStackByArgs("schema registry URI is empty")
 	}
-	schemaM, err := schemamanager.NewConfluentSchemaManager(ctx, registryURL, nil)
+	schemaM, err := schemamanager.NewConfluentSchemaManagerWithoutProbe(ctx, registryURL, nil)
 	if err != nil {
 		return nil, err
 	}

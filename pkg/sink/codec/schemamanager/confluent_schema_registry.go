@@ -84,40 +84,64 @@ func NewConfluentSchemaManager(
 	registryURL string,
 	credential *security.Credential,
 ) (SchemaManager, error) {
+	return newConfluentSchemaManager(ctx, registryURL, credential, true)
+}
+
+// NewConfluentSchemaManagerWithoutProbe creates a schema manager without
+// testing connectivity to the registry root, for decode paths that only use
+// the schema-ID endpoint and may reach the registry through a gateway that
+// does not serve the root path.
+func NewConfluentSchemaManagerWithoutProbe(
+	ctx context.Context,
+	registryURL string,
+	credential *security.Credential,
+) (SchemaManager, error) {
+	return newConfluentSchemaManager(ctx, registryURL, credential, false)
+}
+
+func newConfluentSchemaManager(
+	ctx context.Context,
+	registryURL string,
+	credential *security.Credential,
+	probe bool,
+) (SchemaManager, error) {
 	registryURL = strings.TrimRight(registryURL, "/")
 	httpCli, err := httputil.NewClient(credential)
 	if err != nil {
 		return nil, errors.Trace(err)
 	}
 	httpCli.SetTimeout(schemaRegistryRequestTimeout)
-	ctx, cancel := context.WithTimeout(ctx, schemaRegistryRequestTimeout)
-	defer cancel()
-	resp, err := httpCli.Get(ctx, registryURL)
-	if err != nil {
-		err = util.MaskSensitiveDataInURLError(err)
-		log.Error("Test connection to Schema Registry failed", zap.Error(err))
-		return nil, errors.WrapError(errors.ErrAvroSchemaAPIError, err)
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return nil, errors.ErrAvroSchemaAPIError.GenWithStack(
-			"Schema Registry connection check failed with HTTP status %d", resp.StatusCode)
-	}
 
-	text, err := io.ReadAll(resp.Body)
-	if err != nil {
-		log.Error("Reading response from Schema Registry failed", zap.Error(err))
-		return nil, errors.WrapError(errors.ErrAvroSchemaAPIError, err)
-	}
+	if probe {
+		probeCtx, cancel := context.WithTimeout(ctx, schemaRegistryRequestTimeout)
+		defer cancel()
+		resp, err := httpCli.Get(probeCtx, registryURL)
+		if err != nil {
+			err = util.MaskSensitiveDataInURLError(err)
+			log.Error("Test connection to Schema Registry failed", zap.Error(err))
+			return nil, errors.WrapError(errors.ErrAvroSchemaAPIError, err)
+		}
+		defer resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			return nil, errors.ErrAvroSchemaAPIError.GenWithStack(
+				"Schema Registry connection check failed with HTTP status %d", resp.StatusCode)
+		}
 
-	if string(text[:]) != "{}" {
-		log.Error("Unexpected response from Schema Registry", zap.Int("status", resp.StatusCode))
-		return nil, errors.ErrAvroSchemaAPIError.GenWithStack(
-			"Unexpected response from Schema Registry",
-		)
-	}
+		text, err := io.ReadAll(resp.Body)
+		if err != nil {
+			log.Error("Reading response from Schema Registry failed", zap.Error(err))
+			return nil, errors.WrapError(errors.ErrAvroSchemaAPIError, err)
+		}
 
-	log.Info("Successfully tested connectivity to Schema Registry")
+		if string(text) != "{}" {
+			log.Error("Unexpected response from Schema Registry", zap.Int("status", resp.StatusCode))
+			return nil, errors.ErrAvroSchemaAPIError.GenWithStack(
+				"Unexpected response from Schema Registry",
+			)
+		}
+
+		log.Info("Successfully tested connectivity to Schema Registry")
+	}
 
 	return &confluentSchemaManager{
 		registryURL:  registryURL,
