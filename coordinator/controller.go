@@ -488,6 +488,12 @@ func (c *Controller) shouldHandleMaintainerHeartbeat(from node.ID) bool {
 
 func (c *Controller) onLogCoordinatorReportResolvedTs(msg *messaging.TargetMessage) {
 	resp := msg.Message[0].(*heartbeatpb.LogCoordinatorResolvedTsResponse)
+	if resp.ChangefeedID == nil {
+		log.Warn("ignore invalid log coordinator resolved ts message",
+			zap.Stringer("from", msg.From),
+			zap.String("type", msg.Type.String()))
+		return
+	}
 	c.changefeedDB.UpdateLogCoordinatorResolvedTsByID(common.NewChangefeedIDFromPB(resp.ChangefeedID), resp.ResolvedTs)
 }
 
@@ -663,6 +669,11 @@ func (c *Controller) handleBootstrapResponses(ctx context.Context, responses map
 	runningCfs := make(map[common.ChangeFeedID][]remoteMaintainer)
 	for nodeID, resp := range responses {
 		for _, status := range resp.Statuses {
+			// AddMaintainerRequest omits the ID when the field is empty, so a peer
+			// can report a status without one. Skip it instead of dereferencing nil.
+			if status.ChangefeedID == nil {
+				continue
+			}
 			changeFeedID := common.NewChangefeedIDFromPB(status.ChangefeedID)
 			runningCfs[changeFeedID] = append(runningCfs[changeFeedID], remoteMaintainer{
 				nodeID: nodeID,
@@ -682,6 +693,10 @@ func (c *Controller) handleBootstrapResponses(ctx context.Context, responses map
 func (c *Controller) handleMaintainerStatus(from node.ID, statusList []*heartbeatpb.MaintainerStatus) {
 	changes := make([]*changefeedChange, 0, len(statusList))
 	for _, status := range statusList {
+		if status.ChangefeedID == nil {
+			log.Warn("ignore maintainer status without changefeed ID", zap.Stringer("from", from))
+			continue
+		}
 		cfID := common.NewChangefeedIDFromPB(status.ChangefeedID)
 		change := c.handleSingleMaintainerStatus(from, status, cfID)
 		if change != nil {

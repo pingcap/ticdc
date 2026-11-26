@@ -258,11 +258,19 @@ func (c *HeartBeatCollector) RecvMessages(_ context.Context, msg *messaging.Targ
 	case messaging.TypeHeartBeatResponse:
 		// TODO: Change a more appropriate name for HeartBeatResponse. It should be BlockStatusResponse or something else.
 		heartbeatResponse := msg.Message[0].(*heartbeatpb.HeartBeatResponse)
+		if heartbeatResponse.ChangefeedID == nil {
+			log.Warn("ignore heartbeat response without changefeed ID", zap.Stringer("from", msg.From))
+			return nil
+		}
 		c.heartBeatResponseDynamicStream.Push(
 			common.NewChangefeedGIDFromPB(heartbeatResponse.ChangefeedID),
 			NewHeartBeatResponse(msg.From, heartbeatResponse))
 	case messaging.TypeScheduleDispatcherRequest:
 		schedulerDispatcherRequest := msg.Message[0].(*heartbeatpb.ScheduleDispatcherRequest)
+		if schedulerDispatcherRequest.ChangefeedID == nil {
+			log.Warn("ignore schedule dispatcher request without changefeed ID", zap.Stringer("from", msg.From))
+			return nil
+		}
 		c.schedulerDispatcherRequestDynamicStream.Push(
 			common.NewChangefeedGIDFromPB(schedulerDispatcherRequest.ChangefeedID),
 			NewSchedulerDispatcherRequest(msg.From, schedulerDispatcherRequest))
@@ -270,21 +278,37 @@ func (c *HeartBeatCollector) RecvMessages(_ context.Context, msg *messaging.Targ
 		handleDispatcherRequsetCounter.WithLabelValues("default", schedulerDispatcherRequest.ChangefeedID.Name, "receive").Inc()
 	case messaging.TypeCheckpointTsMessage:
 		checkpointTsMessage := msg.Message[0].(*heartbeatpb.CheckpointTsMessage)
+		if checkpointTsMessage.ChangefeedID == nil {
+			log.Warn("ignore checkpoint ts message without changefeed ID", zap.Stringer("from", msg.From))
+			return nil
+		}
 		c.checkpointTsMessageDynamicStream.Push(
 			common.NewChangefeedGIDFromPB(checkpointTsMessage.ChangefeedID),
 			NewCheckpointTsMessage(checkpointTsMessage))
 	case messaging.TypeRedoResolvedTsForwardMessage:
 		redoMessage := msg.Message[0].(*heartbeatpb.RedoResolvedTsForwardMessage)
+		if redoMessage.ChangefeedID == nil {
+			log.Warn("ignore redo resolved ts forward message without changefeed ID", zap.Stringer("from", msg.From))
+			return nil
+		}
 		c.redoResolvedTsForwardMessageDynamicStream.Push(
 			common.NewChangefeedGIDFromPB(redoMessage.ChangefeedID),
 			NewRedoResolvedTsForwardMessage(msg.From, redoMessage))
 	case messaging.TypeRedoMetaMessage:
 		redoMessage := msg.Message[0].(*heartbeatpb.RedoMetaMessage)
+		if redoMessage.ChangefeedID == nil {
+			log.Warn("ignore redo meta message without changefeed ID", zap.Stringer("from", msg.From))
+			return nil
+		}
 		c.redoMetaMessageDynamicStream.Push(
 			common.NewChangefeedGIDFromPB(redoMessage.ChangefeedID),
 			NewRedoMetaMessage(msg.From, redoMessage))
 	case messaging.TypeMergeDispatcherRequest:
 		mergeDispatcherRequest := msg.Message[0].(*heartbeatpb.MergeDispatcherRequest)
+		if mergeDispatcherRequest.ChangefeedID == nil {
+			log.Warn("ignore merge dispatcher request without changefeed ID", zap.Stringer("from", msg.From))
+			return nil
+		}
 		// The handler owns journaling because it first applies the maintainer fence.
 		// Tracking here would let stale requests leak into bootstrap recovery.
 		c.mergeDispatcherRequestDynamicStream.Push(

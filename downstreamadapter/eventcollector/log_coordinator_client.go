@@ -60,6 +60,12 @@ func (l *LogCoordinatorClient) MessageCenterHandler(_ context.Context, targetMes
 		case *common.LogCoordinatorBroadcastRequest:
 			l.setCoordinatorInfo(targetMessage.From)
 		case *logservicepb.ReusableEventServiceResponse:
+			if msg.ID == nil {
+				log.Warn("ignore reusable event service response without dispatcher ID",
+					zap.Stringer("from", targetMessage.From),
+					zap.String("type", targetMessage.Type.String()))
+				continue
+			}
 			dispatcherID := common.NewDispatcherIDFromPB(msg.ID)
 			dispatcher := l.eventCollector.getDispatcherStatByID(dispatcherID)
 			if dispatcher != nil && l.enableRemoteEventService {
