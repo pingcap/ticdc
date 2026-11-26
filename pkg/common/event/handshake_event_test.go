@@ -39,3 +39,11 @@ func TestHandshakeEvent(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, &e, e2)
 }
+
+func TestHandshakeEventRejectsShortPayload(t *testing.T) {
+	data, err := MarshalEventWithHeader(TypeHandshakeEvent, HandshakeEventVersion, nil)
+	require.NoError(t, err)
+
+	err = new(HandshakeEvent).Unmarshal(data)
+	require.ErrorContains(t, err, "incomplete handshake event payload")
+}

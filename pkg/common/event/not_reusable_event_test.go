@@ -134,6 +134,9 @@ func TestNotReusableEventHeader(t *testing.T) {
 
 // TestNotReusableEventUnmarshalErrors tests error handling in Unmarshal
 func TestNotReusableEventUnmarshalErrors(t *testing.T) {
+	shortPayload, err := MarshalEventWithHeader(TypeNotReusableEvent, NotReusableEventVersion, nil)
+	require.NoError(t, err)
+
 	testCases := []struct {
 		name      string
 		data      []byte
@@ -182,6 +185,11 @@ func TestNotReusableEventUnmarshalErrors(t *testing.T) {
 				return header
 			}(),
 			wantError: "incomplete data",
+		},
+		{
+			name:      "payload too short",
+			data:      shortPayload,
+			wantError: "incomplete not reusable event payload",
 		},
 	}
 
