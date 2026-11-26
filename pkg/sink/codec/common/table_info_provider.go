@@ -17,6 +17,7 @@ import (
 	"slices"
 	"sort"
 	"sync"
+	"sync/atomic"
 
 	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
@@ -28,11 +29,12 @@ import (
 // message asks for, and versions are released once the watermark passes them.
 // Tables are keyed by their original name, so T and t are different tables.
 type TableInfoProvider struct {
-	mu            sync.RWMutex
-	tables        map[accessKey]*tableVersions
-	invalidations []uint64
-	changed       chan struct{}
-	allocator     *tableIDAllocator
+	mu                sync.RWMutex
+	tables            map[accessKey]*tableVersions
+	invalidations     []uint64
+	changed           chan struct{}
+	releasedWatermark atomic.Uint64
+	allocator         *tableIDAllocator
 }
 
 // NewTableInfoProvider creates an empty versioned provider.
@@ -43,22 +45,43 @@ func NewTableInfoProvider() *TableInfoProvider {
 	}
 }
 
+// ReleasedWatermark returns the highest watermark passed to ReleaseBefore.
+func (c *TableInfoProvider) ReleasedWatermark() uint64 {
+	return c.releasedWatermark.Load()
+}
+
 // WriteTableInfo stores the table info under its own version.
 func (c *TableInfoProvider) WriteTableInfo(info *common.TableInfo) {
 	if info == nil {
 		return
 	}
-	c.Write(info.TableName.Schema, info.TableName.Table, info.GetUpdateTS(), info)
+	c.WriteTableInfoAt(info, info.GetUpdateTS())
+}
+
+// WriteTableInfoAt stores the table info under its own version while ordering
+// version retention by effectiveTs.
+func (c *TableInfoProvider) WriteTableInfoAt(info *common.TableInfo, effectiveTs uint64) {
+	if info == nil {
+		return
+	}
+	if effectiveTs == 0 {
+		effectiveTs = info.GetUpdateTS()
+	}
+	c.writeVersion(info.TableName.Schema, info.TableName.Table, info.GetUpdateTS(), effectiveTs, info)
 }
 
 // Write stores the table info under the version the message belongs to.
 func (c *TableInfoProvider) Write(schema, table string, version uint64, info *common.TableInfo) {
+	c.writeVersion(schema, table, version, version, info)
+}
+
+func (c *TableInfoProvider) writeVersion(schema, table string, version, effectiveTs uint64, info *common.TableInfo) {
 	if schema == "" || table == "" || info == nil {
 		return
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	c.table(schema, table).set(version, info)
+	c.table(schema, table).set(version, effectiveTs, info)
 	c.notify()
 }
 
@@ -103,7 +126,7 @@ func (c *TableInfoProvider) AddDDL(schema, table string, ts uint64) {
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	c.table(schema, table).set(ts, nil)
+	c.table(schema, table).set(ts, ts, nil)
 }
 
 // InvalidateAll records a DDL after which every cached table info is rebuilt:
@@ -147,6 +170,9 @@ func (c *TableInfoProvider) ReleaseBefore(watermark uint64) {
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	if watermark > c.releasedWatermark.Load() {
+		c.releasedWatermark.Store(watermark)
+	}
 	for key, table := range c.tables {
 		table.releaseBefore(watermark)
 		if len(table.entries) == 0 {
@@ -210,8 +236,9 @@ type tableVersions struct {
 }
 
 type entry struct {
-	version uint64
-	info    *common.TableInfo
+	version     uint64
+	effectiveTs uint64
+	info        *common.TableInfo
 }
 
 // at returns the version in effect at the commit ts: the newest one below it.
@@ -243,26 +270,39 @@ func (t *tableVersions) get(version uint64) *common.TableInfo {
 	return t.entries[i].info
 }
 
-func (t *tableVersions) set(version uint64, info *common.TableInfo) {
+func (t *tableVersions) set(version, effectiveTs uint64, info *common.TableInfo) {
 	i := sort.Search(len(t.entries), func(i int) bool {
 		return t.entries[i].version >= version
 	})
 	if i < len(t.entries) && t.entries[i].version == version {
+		t.entries[i].effectiveTs = max(t.entries[i].effectiveTs, effectiveTs)
 		if info != nil {
 			t.entries[i].info = info
 		}
 		return
 	}
-	t.entries = slices.Insert(t.entries, i, entry{version: version, info: info})
+	t.entries = slices.Insert(t.entries, i, entry{version: version, effectiveTs: effectiveTs, info: info})
 }
 
 func (t *tableVersions) releaseBefore(watermark uint64) {
-	i := sort.Search(len(t.entries), func(i int) bool {
-		return t.entries[i].version > watermark
-	})
-	if i <= 1 {
+	var covered int
+	var floorEffectiveTs uint64
+	for _, item := range t.entries {
+		if item.effectiveTs <= watermark {
+			covered++
+			floorEffectiveTs = max(floorEffectiveTs, item.effectiveTs)
+		}
+	}
+	if covered <= 1 {
 		return
 	}
-	clear(t.entries[:i-1])
-	t.entries = t.entries[i-1:]
+	kept := 0
+	for _, item := range t.entries {
+		if item.effectiveTs >= floorEffectiveTs {
+			t.entries[kept] = item
+			kept++
+		}
+	}
+	clear(t.entries[kept:])
+	t.entries = t.entries[:kept]
 }

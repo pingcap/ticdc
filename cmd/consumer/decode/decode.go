@@ -23,9 +23,11 @@ import (
 	"database/sql"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/pingcap/log"
+	"github.com/pingcap/ticdc/cmd/consumer/ddl"
 	"github.com/pingcap/ticdc/cmd/consumer/source"
 	"github.com/pingcap/ticdc/downstreamadapter/sink/columnselector"
 	commonType "github.com/pingcap/ticdc/pkg/common"
@@ -52,6 +54,7 @@ const decoderQueueSize = 128
 type Future struct {
 	Payload *source.Payload
 	Events  []event.Event
+	Marker  uint64
 	done    chan struct{}
 }
 
@@ -71,6 +74,8 @@ type Group struct {
 	selectors   *columnselector.ColumnSelectors
 	decoders    []decoder
 	schemas     *common.TableInfoProvider
+	ddlMu       sync.Mutex
+	seenDDLs    map[ddl.Key]struct{}
 	// inputs dispatches an undecoded input to the decoder owning its partition.
 	queues []chan *Future
 	// output queues inputs for the conductor in submission order. A Future may
@@ -117,6 +122,7 @@ func NewGroup(ctx context.Context, opts Options) *Group {
 		codecConfig: codecConfig,
 		upstreamDB:  upstreamDB,
 		schemas:     common.NewTableInfoProvider(),
+		seenDDLs:    make(map[ddl.Key]struct{}),
 		decoders:    make([]decoder, partitions),
 		queues:      make([]chan *Future, partitions),
 		output:      make(chan *Future, decoderQueueSize),
@@ -299,28 +305,52 @@ func (d *Group) decodeInput(ctx context.Context, decoder decoder, future *Future
 		}
 		switch kind {
 		case common.MessageTypeRow:
+			before := 0
+			if decoder.schema != nil {
+				before = decoder.schema.CachedCount()
+			}
 			dml := decoder.NextDMLEvent()
 			if dml == nil {
-				// Simple has one message per input; the decoder keeps it cached
-				// until the table info arrives.
-				return true, nil
+				if decoder.schema != nil && decoder.schema.CachedCount() > before {
+					// Simple has one message per input; the decoder keeps it cached
+					// until the table info arrives.
+					return true, nil
+				}
+				// Stale replay skipped before table lookup.
+				continue
 			}
 			d.addRow(future, dml)
 		case common.MessageTypeDDL:
-			ddl := decoder.NextDDLEvent()
-			if payload.Partition != 0 {
-				// Every partition receives the broadcast DDL and decodes it to
-				// update its own state, but only partition 0 delivers it downstream.
+			ddlEvent := decoder.NextDDLEvent()
+			if ddlEvent.IsBootstrap || ddlEvent.Query == "" {
 				continue
 			}
-			if d.schemas != nil && ddl.Query == "" {
+			if !d.claimDDL(ddlEvent) {
+				future.Marker = max(future.Marker, ddlEvent.GetCommitTs())
 				continue
 			}
-			future.appendEvent(ddl)
+			future.appendEvent(ddlEvent)
 		case common.MessageTypeResolved:
 			future.appendEvent(&event.ResolvedEvent{ResolvedTs: decoder.NextResolvedEvent()})
 		}
 	}
+}
+
+func (d *Group) claimDDL(ddlEvent *event.DDLEvent) bool {
+	if ddlEvent == nil {
+		return false
+	}
+	key := ddl.KeyOf(ddlEvent)
+	d.ddlMu.Lock()
+	defer d.ddlMu.Unlock()
+	if d.seenDDLs == nil {
+		d.seenDDLs = make(map[ddl.Key]struct{})
+	}
+	if _, ok := d.seenDDLs[key]; ok {
+		return false
+	}
+	d.seenDDLs[key] = struct{}{}
+	return true
 }
 
 func (d *Group) decodeStorage(ctx context.Context, future *Future) error {

@@ -158,8 +158,15 @@ func (d *Decoder) NextDMLEvent() *commonEvent.DMLEvent {
 	msg := d.msg
 	d.msg = nil
 
+	if released := d.memo.ReleasedWatermark(); released != 0 && msg.CommitTs <= released {
+		return nil
+	}
+
 	tableInfo := d.memo.Read(msg.Schema, msg.Table, msg.SchemaVersion)
 	if tableInfo == nil {
+		if released := d.memo.ReleasedWatermark(); released != 0 && msg.CommitTs <= released {
+			return nil
+		}
 		log.Debug("table info not found for the message, "+
 			"the consumer should cache this message temporarily, and update the tableInfo after it's received",
 			zap.String("schema", msg.Schema),
@@ -283,7 +290,11 @@ func (d *Decoder) NextDDLEvent() *commonEvent.DDLEvent {
 	ddl := d.buildDDLEvent(d.msg)
 	d.msg = nil
 
-	d.memo.WriteTableInfo(ddl.TableInfo)
+	if !ddl.IsBootstrap && ddl.FinishedTs != 0 {
+		d.memo.WriteTableInfoAt(ddl.TableInfo, ddl.FinishedTs)
+	} else {
+		d.memo.WriteTableInfo(ddl.TableInfo)
+	}
 	d.memo.WriteTableInfo(ddl.MultipleTableInfos[1])
 
 	for ele := d.cachedMessages.Front(); ele != nil; {
@@ -305,6 +316,11 @@ func (d *Decoder) GetCachedEvents() []*commonEvent.DMLEvent {
 	result := d.CachedRowChangedEvents
 	d.CachedRowChangedEvents = nil
 	return result
+}
+
+// CachedCount returns the number of DML messages waiting for table info.
+func (d *Decoder) CachedCount() int {
+	return d.cachedMessages.Len()
 }
 
 // GetTableIDs identifies every table and partition whose events belong to the logical table.
@@ -447,6 +463,7 @@ func (d *Decoder) buildDDLEvent(msg *message) *commonEvent.DDLEvent {
 	result := new(commonEvent.DDLEvent)
 	result.Query = msg.SQL
 	result.TableInfo = tableInfo
+	result.IsBootstrap = msg.Type == MessageTypeBootstrap
 
 	result.FinishedTs = msg.CommitTs
 	result.SchemaName = tableInfo.TableName.Schema

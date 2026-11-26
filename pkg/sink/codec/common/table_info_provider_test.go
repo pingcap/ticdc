@@ -100,3 +100,17 @@ func TestTableInfoProviderAllocatorIsolationAndConcurrency(t *testing.T) {
 	require.Len(t, p1.GetBlockedTables("test", "concurrent"), 1)
 	require.Empty(t, p2.GetBlockedTables("test", "concurrent"))
 }
+
+func TestTableInfoProviderReleaseBeforeWithEffectiveTs(t *testing.T) {
+	provider := NewTableInfoProvider()
+	oldT1 := commonType.WrapTableInfo("test", &timodel.TableInfo{ID: 1, Name: ast.NewCIStr("t1"), UpdateTS: 100})
+	newT1 := commonType.WrapTableInfo("test", &timodel.TableInfo{ID: 2, Name: ast.NewCIStr("t1"), UpdateTS: 50})
+
+	provider.WriteTableInfoAt(oldT1, 100)
+	provider.WriteTableInfoAt(newT1, 300)
+
+	provider.ReleaseBefore(350)
+	require.Equal(t, uint64(350), provider.ReleasedWatermark())
+	require.Same(t, newT1, provider.Read("test", "t1", 50))
+	require.Nil(t, provider.Read("test", "t1", 100))
+}

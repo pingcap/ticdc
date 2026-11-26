@@ -81,6 +81,7 @@ func (c *Conductor) run(ctx context.Context, tasks <-chan *decode.Future, w *wri
 			if err := future.Ready(ctx); err != nil {
 				return err
 			}
+			c.marker = max(c.marker, future.Marker)
 			if err := c.acceptBatch(future.Events, future.Payload); err != nil {
 				if ctx.Err() == nil {
 					log.Error("consumer task handling failed", zap.Error(err))
