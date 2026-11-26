@@ -362,14 +362,21 @@ func NewDispatcherManager(
 		make(chan error, 1),
 	)
 	if serverCfg := config.GetGlobalServerConfig(); serverCfg != nil && serverCfg.Metering != nil && serverCfg.Metering.Type != "" {
-		var meteringSelectors *columnselector.ColumnSelectors
+		var meteringSelectorFn func(*common.TableInfo) commonEvent.Selector
 		if isColumnSelectorMeteredSink(sinkType) && manager.config.SinkConfig != nil && len(manager.config.SinkConfig.ColumnSelectors) > 0 {
-			meteringSelectors, err = columnselector.New(manager.config.SinkConfig, manager.config.CaseSensitive)
+			meteringSelectors, err := columnselector.New(manager.config.SinkConfig, manager.config.CaseSensitive)
 			if err != nil {
 				return nil, errors.Trace(err)
 			}
+			meteringSelectorFn = func(tableInfo *common.TableInfo) commonEvent.Selector {
+				s := meteringSelectors.GetForTableInfo(tableInfo)
+				if s == nil {
+					return nil
+				}
+				return s
+			}
 		}
-		sharedInfo.SetTrafficMetering(meteringSelectors, manager.metering.Counter())
+		sharedInfo.SetTrafficMetering(meteringSelectorFn, manager.metering.Counter())
 	}
 	manager.writePathMu.Lock()
 	if manager.writePathClosed.Load() {
@@ -1011,10 +1018,15 @@ func (e *DispatcherManager) aggregateDispatcherHeartbeats(needCompleteStatus boo
 	e.metricCheckpointTsLag.Set(float64(oracle.GetPhysical(pdTime)-phyCheckpointTs) / 1e3)
 	e.metricResolvedTsLag.Set(float64(oracle.GetPhysical(pdTime)-phyResolvedTs) / 1e3)
 
-	message.MeteringSupported = true
+	message.MeteringSupported = e.IsTrafficMeteringEnabled()
 	message.MeteringEpoch, message.MeteringSeq, message.MeteringBytes = e.metering.Report()
 
 	return &message
+}
+
+// IsTrafficMeteringEnabled reports whether local traffic metering collection is attached.
+func (e *DispatcherManager) IsTrafficMeteringEnabled() bool {
+	return e.sharedInfo != nil && e.sharedInfo.IsTrafficMeteringEnabled()
 }
 
 func (e *DispatcherManager) MergeDispatcher(dispatcherIDs []common.DispatcherID, mergedDispatcherID common.DispatcherID, mode int64) *MergeCheckTask {

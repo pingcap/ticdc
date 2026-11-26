@@ -36,6 +36,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/ticdc/utils/chann"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/require"
 )
 
@@ -157,9 +158,8 @@ func TestMeteringCoordinatorTerm(t *testing.T) {
 	}
 }
 
-func TestMeteringAccumulatorConcurrencyAndEviction(t *testing.T) {
+func TestMeteringAccumulatorConcurrencyAndDeletion(t *testing.T) {
 	acc := newMeteringAccumulator()
-	acc.maxPendingFinal = 2
 
 	cf1 := common.NewChangeFeedIDWithName("cf-1", "ks-1")
 	// Out-of-order seq must be rejected.
@@ -193,21 +193,13 @@ func TestMeteringAccumulatorConcurrencyAndEviction(t *testing.T) {
 	acc.Commit(snap)
 	require.Equal(t, uint64(25), acc.PendingBytesTotal())
 
-	// Add 2 more removed records -> exceeds maxPendingFinal=2, evicting cf1's 25-byte record.
-	cf2 := common.NewChangeFeedIDWithName("cf-2", "ks-1")
-	cf3 := common.NewChangeFeedIDWithName("cf-3", "ks-1")
-	_, ok = acc.Accept(cf2, 1, 200)
-	require.True(t, ok)
-	acc.OnChangefeedRemoved(cf2)
-	_, ok = acc.Accept(cf3, 1, 300)
-	require.True(t, ok)
-	acc.OnChangefeedRemoved(cf3)
-
-	require.Equal(t, uint64(500), acc.PendingBytesTotal())
+	// Next upload commits the remaining 25 bytes and cleans up the pending entry.
 	snap = acc.Snapshot()
-	require.Len(t, snap, 2)
+	require.Len(t, snap, 1)
+	require.Equal(t, uint64(25), snap[0].EffectiveBytes)
 	acc.Commit(snap)
 	require.Zero(t, acc.PendingBytesTotal())
+	require.Empty(t, acc.Snapshot())
 }
 
 func TestCoordinatorMeteringReportingAndShutdownFlush(t *testing.T) {
@@ -353,4 +345,18 @@ func TestControllerMeteringAckAndAddMaintainerRecovery(t *testing.T) {
 		MeteringBytes:   999,
 	}, cfID)
 	require.Equal(t, uint64(640), ctrl.metering.PendingBytesTotal())
+
+	// Out-of-order seq must be dropped cleanly and increment meteringRejectedStatusCounter.
+	rejectedBefore := testutil.ToFloat64(meteringRejectedStatusCounter)
+	_ = ctrl.handleSingleMaintainerStatus(owner, &heartbeatpb.MaintainerStatus{
+		ChangefeedID:    cfID.ToPB(),
+		MaintainerEpoch: 7,
+		CheckpointTs:    120,
+		State:           heartbeatpb.ComponentState_Working,
+		MeteringEpoch:   42,
+		MeteringSeq:     3,
+		MeteringBytes:   500,
+	}, cfID)
+	require.Equal(t, uint64(640), ctrl.metering.PendingBytesTotal())
+	require.Equal(t, rejectedBefore+1, testutil.ToFloat64(meteringRejectedStatusCounter))
 }

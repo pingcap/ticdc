@@ -102,6 +102,14 @@ var (
 			Name:      "pending_bytes",
 			Help:      "Total unreported traffic bytes currently buffered in coordinator memory.",
 		})
+
+	meteringRejectedStatusCounter = prometheus.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: "ticdc",
+			Subsystem: "metering",
+			Name:      "rejected_status_total",
+			Help:      "Total number of maintainer traffic metering reports rejected due to non-contiguous sequence numbers.",
+		})
 )
 
 // RegisterMetrics registers the metrics owned by this package.
@@ -116,4 +124,5 @@ func RegisterMetrics(registry *prometheus.Registry) {
 	registry.MustRegister(meteringLastSuccessTimestampGauge)
 	registry.MustRegister(meteringReportDuration)
 	registry.MustRegister(meteringPendingBytesGauge)
+	registry.MustRegister(meteringRejectedStatusCounter)
 }

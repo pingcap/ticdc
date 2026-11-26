@@ -27,6 +27,7 @@ import (
 	"github.com/pingcap/tidb/pkg/parser/mysql"
 	"github.com/pingcap/tidb/pkg/types"
 	"github.com/pingcap/tidb/pkg/util/chunk"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/require"
 )
 
@@ -135,9 +136,16 @@ func TestDispatcherTrafficMeteringAndColumnSelectors(t *testing.T) {
 		{name: "redo excluded", mode: common.RedoMode, selectors: nil, expected: 0},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			var selectorFn func(*common.TableInfo) commonEvent.Selector
+			if tc.selectors != nil {
+				selectors := tc.selectors
+				selectorFn = func(info *common.TableInfo) commonEvent.Selector {
+					return selectors.GetForTableInfo(info)
+				}
+			}
 			var counter atomic.Uint64
 			sharedInfo := newTestSharedInfo(false, false, nil)
-			sharedInfo.SetTrafficMetering(tc.selectors, &counter)
+			sharedInfo.SetTrafficMetering(selectorFn, &counter)
 
 			testSink := newDispatcherTestSink(t, common.MysqlSinkType)
 			d := &BasicDispatcher{
@@ -195,8 +203,12 @@ func TestDispatcherTrafficMeteringFailOpenOnUnknownType(t *testing.T) {
 		tableProgress: NewTableProgress(),
 	}
 
+	beforeUnsupported := testutil.ToFloat64(meteringMeasureErrorCounter.WithLabelValues("unsupported_type"))
+	beforeValueErr := testutil.ToFloat64(meteringMeasureErrorCounter.WithLabelValues("value_error"))
 	ok := d.AddDMLEventsToSink([]*commonEvent.DMLEvent{dml}, func() {})
 	require.True(t, ok)
 	testSink.dmls[0].PostFlush()
 	require.Equal(t, uint64(6), counter.Load())
+	require.Equal(t, beforeUnsupported+1, testutil.ToFloat64(meteringMeasureErrorCounter.WithLabelValues("unsupported_type")))
+	require.Equal(t, beforeValueErr, testutil.ToFloat64(meteringMeasureErrorCounter.WithLabelValues("value_error")))
 }

@@ -32,27 +32,21 @@ import (
 const (
 	meteringReportInterval       = time.Minute
 	meteringShutdownFlushTimeout = 10 * time.Second
-	maxPendingFinalRecords       = 10000
 )
 
 // meteringAccumulator buffers unreported per-changefeed traffic deltas in memory.
 // Sequence deduplication is tracked per ChangeFeedID, while unreported byte
 // balances are keyed by DisplayName so concurrent deletions and uploads stay decoupled.
 type meteringAccumulator struct {
-	mu              sync.Mutex
-	lastSeq         map[common.ChangeFeedID]uint64
-	pending         map[common.ChangeFeedDisplayName]uint64
-	removed         map[common.ChangeFeedDisplayName]struct{}
-	removedOrder    []common.ChangeFeedDisplayName
-	maxPendingFinal int
+	mu      sync.Mutex
+	lastSeq map[common.ChangeFeedID]uint64
+	pending map[common.ChangeFeedDisplayName]uint64
 }
 
 func newMeteringAccumulator() *meteringAccumulator {
 	return &meteringAccumulator{
-		lastSeq:         make(map[common.ChangeFeedID]uint64),
-		pending:         make(map[common.ChangeFeedDisplayName]uint64),
-		removed:         make(map[common.ChangeFeedDisplayName]struct{}),
-		maxPendingFinal: maxPendingFinalRecords,
+		lastSeq: make(map[common.ChangeFeedID]uint64),
+		pending: make(map[common.ChangeFeedDisplayName]uint64),
 	}
 }
 
@@ -71,38 +65,21 @@ func (m *meteringAccumulator) Accept(cfID common.ChangeFeedID, seq, delta uint64
 		m.lastSeq[cfID] = seq
 		if delta > 0 {
 			m.pending[cfID.DisplayName] += delta
-			delete(m.removed, cfID.DisplayName)
 		}
 		return seq, true
 	}
 	if seq <= prev {
 		return prev, true
 	}
-	return 0, false
+	return prev, false
 }
 
-// OnChangefeedRemoved forgets sequence tracking for cfID and marks any remaining
-// pending balance as bounded final traffic so delete operations stay non-blocking.
+// OnChangefeedRemoved forgets sequence tracking for cfID while preserving any
+// unreported pending bytes in memory until uploaded.
 func (m *meteringAccumulator) OnChangefeedRemoved(cfID common.ChangeFeedID) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-
 	delete(m.lastSeq, cfID)
-	if m.pending[cfID.DisplayName] == 0 {
-		return
-	}
-	if _, ok := m.removed[cfID.DisplayName]; !ok {
-		m.removed[cfID.DisplayName] = struct{}{}
-		m.removedOrder = append(m.removedOrder, cfID.DisplayName)
-	}
-	for m.maxPendingFinal > 0 && len(m.removed) > m.maxPendingFinal && len(m.removedOrder) > 0 {
-		oldest := m.removedOrder[0]
-		m.removedOrder = m.removedOrder[1:]
-		if _, ok := m.removed[oldest]; ok {
-			delete(m.removed, oldest)
-			delete(m.pending, oldest)
-		}
-	}
 }
 
 // Snapshot returns a deterministic batch of all positive pending balances
@@ -145,13 +122,9 @@ func (m *meteringAccumulator) Commit(records []metering.Record) {
 		cur := m.pending[key]
 		if cur <= r.EffectiveBytes {
 			delete(m.pending, key)
-			delete(m.removed, key)
 		} else {
 			m.pending[key] = cur - r.EffectiveBytes
 		}
-	}
-	if len(m.removed) == 0 {
-		m.removedOrder = nil
 	}
 }
 

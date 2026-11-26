@@ -33,7 +33,7 @@ func TestValidateConfig(t *testing.T) {
 		{"valid s3", config.NewMeteringConfig().WithS3("us-west-2", "bucket").WithEndpoint("https://s3.us-west-2.amazonaws.com").WithSharedPoolID("pool1"), true},
 		{"valid oss", config.NewMeteringConfig().WithOSS("oss-cn-beijing", "bucket"), true},
 		{"valid cos", config.NewMeteringConfig().WithCOS("ap-beijing", "bucket-123"), true},
-		{"valid gcs", &config.MeteringConfig{Type: storage.ProviderTypeGCS, Bucket: "bucket"}, true},
+		{"unsupported gcs", &config.MeteringConfig{Type: storage.ProviderTypeGCS, Bucket: "bucket"}, false},
 		{"valid azure", config.NewMeteringConfig().WithAzure("acct", "container").WithEndpoint("https://acct.blob.core.windows.net"), true},
 		{"valid localfs", config.NewMeteringConfig().WithLocalFS("/tmp/metering"), true},
 		{"unsupported type", &config.MeteringConfig{Type: "unknown"}, false},

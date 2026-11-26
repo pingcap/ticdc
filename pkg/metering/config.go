@@ -45,10 +45,6 @@ func ValidateConfig(c *config.MeteringConfig) error {
 		if strings.TrimSpace(c.Region) == "" {
 			return errors.ErrInvalidServerOption.GenWithStack(fmt.Sprintf("metering: region is required for %s storage", c.Type))
 		}
-	case storage.ProviderTypeGCS:
-		if strings.TrimSpace(c.Bucket) == "" {
-			return errors.ErrInvalidServerOption.GenWithStack("metering: bucket is required for gcs storage")
-		}
 	case storage.ProviderTypeAzure:
 		if strings.TrimSpace(c.Bucket) == "" {
 			return errors.ErrInvalidServerOption.GenWithStack("metering: bucket is required for azure storage")

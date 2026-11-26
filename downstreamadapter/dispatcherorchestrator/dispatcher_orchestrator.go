@@ -805,7 +805,7 @@ func createBootstrapResponse(
 		ChangefeedID:      changefeedID,
 		Spans:             make([]*heartbeatpb.BootstrapTableSpan, 0, manager.GetDispatcherMap().Len()),
 		MaintainerEpoch:   manager.GetMaintainerEpoch(),
-		MeteringSupported: true,
+		MeteringSupported: manager.IsTrafficMeteringEnabled(),
 	}
 
 	// table trigger event dispatcher startTs

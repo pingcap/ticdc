@@ -18,11 +18,11 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/pingcap/ticdc/downstreamadapter/sink/columnselector"
 	"github.com/pingcap/ticdc/downstreamadapter/syncpoint"
 	"github.com/pingcap/ticdc/eventpb"
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/pkg/common"
+	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/routing"
 	"github.com/prometheus/client_golang/prometheus"
@@ -83,17 +83,22 @@ type SharedInfo struct {
 	// which includes the time of executing the DDL and waiting for the DDL to be resolved.
 	metricHandleDDLHis prometheus.Observer
 
-	meteringColumnSelectors *columnselector.ColumnSelectors
-	meteringCounter         *atomic.Uint64
+	meteringColumnSelector func(*common.TableInfo) commonEvent.Selector
+	meteringCounter        *atomic.Uint64
 }
 
 // SetTrafficMetering configures DML traffic metering collection on SharedInfo.
 func (s *SharedInfo) SetTrafficMetering(
-	selectors *columnselector.ColumnSelectors,
+	selectorFn func(*common.TableInfo) commonEvent.Selector,
 	counter *atomic.Uint64,
 ) {
-	s.meteringColumnSelectors = selectors
+	s.meteringColumnSelector = selectorFn
 	s.meteringCounter = counter
+}
+
+// IsTrafficMeteringEnabled reports whether traffic metering collection is attached.
+func (s *SharedInfo) IsTrafficMeteringEnabled() bool {
+	return s != nil && s.meteringCounter != nil
 }
 
 // NewSharedInfo creates a new SharedInfo with the given parameters

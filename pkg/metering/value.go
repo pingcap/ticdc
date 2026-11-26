@@ -15,12 +15,16 @@
 package metering
 
 import (
+	stderrors "errors"
 	"fmt"
 
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/tidb/pkg/parser/mysql"
 	"github.com/pingcap/tidb/pkg/util/chunk"
 )
+
+// ErrUnsupportedSQLType indicates a column uses a SQL type without a canonical v1 size rule.
+var ErrUnsupportedSQLType = stderrors.New("unsupported traffic metering SQL type")
 
 // MeasureValueV1 returns the canonical byte count for a decoded SQL column value
 // at row[offset]. Existing v1 rules must remain stable across TiDB upgrades.
@@ -63,6 +67,6 @@ func MeasureValueV1(row chunk.Row, offset int, typeCode byte) (uint64, error) {
 	case mysql.TypeTiDBVectorFloat32:
 		return 4 * uint64(row.GetVectorFloat32(offset).Len()), nil
 	default:
-		return 0, errors.ErrEncodeFailed.GenWithStackByArgs(fmt.Sprintf("unsupported traffic metering SQL type %d", typeCode))
+		return 0, errors.WrapError(errors.ErrEncodeFailed, fmt.Errorf("%w: %d", ErrUnsupportedSQLType, typeCode))
 	}
 }

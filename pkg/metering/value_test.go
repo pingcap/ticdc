@@ -79,7 +79,7 @@ func TestMeasureValueV1(t *testing.T) {
 		})
 	}
 	_, err = MeasureValueV1(chunk.MutRowFromValues(1).ToRow(), 0, mysql.TypeGeometry)
-	require.Error(t, err)
+	require.ErrorIs(t, err, ErrUnsupportedSQLType)
 }
 
 func TestMeasureDecimalV1(t *testing.T) {

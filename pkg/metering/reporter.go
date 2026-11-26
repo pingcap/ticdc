@@ -41,7 +41,6 @@ const (
 	BytesUnit = "Bytes"
 
 	reportCategory = "ticdc"
-	defaultSelfID  = "default"
 	writeTimeout   = 10 * time.Second
 	writeAttempts  = 3
 )
@@ -87,24 +86,24 @@ func NewReporter(c *config.MeteringConfig, clusterID string) (*Reporter, error) 
 	if err := ValidateConfig(c); err != nil {
 		return nil, err
 	}
+	selfID := normalizeSelfID(clusterID)
+	if selfID == "" {
+		return nil, errors.ErrInvalidServerOption.GenWithStack("metering: cluster-id must not be empty")
+	}
 	provider, err := storage.NewObjectStorageProvider(c.ToProviderConfig())
 	if err != nil {
 		return nil, errors.WrapError(errors.ErrExternalStorageAPI, util.MaskSensitiveDataInURLError(err))
 	}
 	return &Reporter{
 		inner:  meteringwriter.NewMeteringWriterFromConfig(provider, config.DefaultConfig().WithOverwriteExisting(false), c),
-		selfID: normalizeSelfID(clusterID),
+		selfID: selfID,
 	}, nil
 }
 
 // normalizeSelfID derives the SDK self_id from clusterID by replacing '-' with '_'
 // because the SDK forbids dashes in self_id path segments.
 func normalizeSelfID(clusterID string) string {
-	trimmed := strings.TrimSpace(clusterID)
-	if trimmed == "" {
-		return defaultSelfID
-	}
-	return strings.ReplaceAll(trimmed, "-", "_")
+	return strings.ReplaceAll(strings.TrimSpace(clusterID), "-", "_")
 }
 
 // SelfID returns the normalized cluster identifier used in uploaded object names.

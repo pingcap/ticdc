@@ -282,7 +282,10 @@ func TestReporterUploadFailuresAndExists(t *testing.T) {
 func TestReporterCancellationAndValidation(t *testing.T) {
 	defer goleak.VerifyNone(t, goleak.IgnoreCurrent())
 	dir := t.TempDir()
-	r, err := metering.NewReporter(config.NewMeteringConfig().WithLocalFS(dir), "")
+	_, err := metering.NewReporter(config.NewMeteringConfig().WithLocalFS(dir), "   ")
+	require.ErrorIs(t, err, errors.ErrInvalidServerOption)
+
+	r, err := metering.NewReporter(config.NewMeteringConfig().WithLocalFS(dir), "default")
 	require.NoError(t, err)
 	defer r.Close()
 	require.Equal(t, "default", r.SelfID())

@@ -768,6 +768,8 @@ func (c *Controller) handleSingleMaintainerStatus(
 		if ackedSeq, ok := c.metering.Accept(cfID, status.MeteringSeq, status.MeteringBytes); ok {
 			cf.SetMeteringLastSeq(ackedSeq)
 			if c.messageCenter != nil {
+				// Reuse CheckpointTsMessage with CheckpointTs=0 as a metering-only ACK
+				// carrier so Maintainer drops it before forwarding downstream.
 				_ = c.messageCenter.SendCommand(messaging.NewSingleTargetMessage(
 					from,
 					messaging.MaintainerManagerTopic,
@@ -779,6 +781,15 @@ func (c *Controller) handleSingleMaintainerStatus(
 					},
 				))
 			}
+		} else {
+			meteringRejectedStatusCounter.Inc()
+			log.Warn("drop out-of-order traffic metering status",
+				zap.Stringer("changefeedID", cfID),
+				zap.Stringer("from", from),
+				zap.Uint64("meteringEpoch", status.MeteringEpoch),
+				zap.Uint64("reportedSeq", status.MeteringSeq),
+				zap.Uint64("lastAcceptedSeq", ackedSeq),
+				zap.Uint64("meteringBytes", status.MeteringBytes))
 		}
 	}
 

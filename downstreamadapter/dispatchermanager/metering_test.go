@@ -75,8 +75,13 @@ func TestDispatcherManagerMeteringStateMachine(t *testing.T) {
 	require.Equal(t, uint64(1), seq)
 	require.Equal(t, uint64(80), bytes)
 
-	// aggregateDispatcherHeartbeats includes capability and sealed values.
+	// Without traffic metering attached on SharedInfo, heartbeats do not advertise support.
 	req := dm.aggregateDispatcherHeartbeats(false)
+	require.False(t, req.MeteringSupported)
+
+	// Once attached on SharedInfo, aggregateDispatcherHeartbeats advertises capability and sealed values.
+	dm.sharedInfo.SetTrafficMetering(nil, dm.metering.Counter())
+	req = dm.aggregateDispatcherHeartbeats(false)
 	require.True(t, req.MeteringSupported)
 	require.Equal(t, uint64(11), req.MeteringEpoch)
 	require.Equal(t, uint64(1), req.MeteringSeq)

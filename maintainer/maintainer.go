@@ -408,7 +408,11 @@ func (m *Maintainer) GetMaintainerStatus() *heartbeatpb.MaintainerStatus {
 		MaintainerEpoch: m.currentMaintainerEpoch(),
 	}
 	if m.metering != nil {
-		status.MeteringEpoch, status.MeteringSeq, status.MeteringBytes = m.metering.GetStatusReport()
+		if report, ok := m.metering.GetStatusReport(); ok {
+			status.MeteringEpoch = report.epoch
+			status.MeteringSeq = report.seq
+			status.MeteringBytes = report.bytes
+		}
 	}
 	drainTarget, drainEpoch := m.controller.getDispatcherDrainTarget()
 	if !drainTarget.IsEmpty() && drainEpoch > 0 {
@@ -638,6 +642,8 @@ func (m *Maintainer) onCheckpointTsPersisted(msg *heartbeatpb.CheckpointTsMessag
 	if msg.MeteringEpoch > 0 && m.metering != nil {
 		m.metering.OnAck(msg.MeteringEpoch, msg.MeteringAckedSeq, time.Now())
 	}
+	// CheckpointTs == 0 denotes a metering-only ACK from Coordinator and must not
+	// be forwarded downstream to the table trigger dispatcher.
 	if msg.CheckpointTs == 0 {
 		return
 	}
@@ -1030,16 +1036,24 @@ func (m *Maintainer) onHeartbeatRequest(msg *messaging.TargetMessage) {
 		m.notifyCheckpointUpdate()
 	}
 	if m.metering != nil {
-		sendCmd, cmdEpoch, cmdSeq, roundCompleted := m.metering.OnHeartbeat(
+		res := m.metering.OnHeartbeat(
 			msg.From,
 			req.MeteringSupported,
 			req.MeteringEpoch,
 			req.MeteringSeq,
 			req.MeteringBytes,
-			m.activeMeteringNodes(),
+			m.activeMeteringNodes,
 			time.Now(),
 		)
-		if sendCmd {
+		if res.stall != nil {
+			maintainerMeteringRoundStalledCounter.Inc()
+			log.Warn("traffic metering round stalled waiting for dispatcher managers",
+				zap.Stringer("changefeedID", m.changefeedID),
+				zap.Uint64("targetSeq", res.stall.targetSeq),
+				zap.Duration("stalledFor", res.stall.stalledFor),
+				zap.Any("missingNodes", res.stall.missingNodes))
+		}
+		if res.cmd != nil {
 			m.sendMessages([]*messaging.TargetMessage{
 				messaging.NewSingleTargetMessage(
 					msg.From,
@@ -1048,13 +1062,13 @@ func (m *Maintainer) onHeartbeatRequest(msg *messaging.TargetMessage) {
 						ChangefeedID:    m.changefeedID.ToPB(),
 						Mode:            common.DefaultMode,
 						MaintainerEpoch: m.currentMaintainerEpoch(),
-						MeteringEpoch:   cmdEpoch,
-						MeteringSeq:     cmdSeq,
+						MeteringEpoch:   res.cmd.epoch,
+						MeteringSeq:     res.cmd.seq,
 					},
 				),
 			})
 		}
-		if roundCompleted {
+		if res.roundCompleted {
 			m.markStatusChanged()
 		}
 	}

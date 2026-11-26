@@ -249,6 +249,14 @@ var (
 			Name:      "exec_blocking",
 			Help:      "Total count of blocking ddl.",
 		}, []string{metrics.GetKeyspaceLabel(), "changefeed", "mode"})
+
+	maintainerMeteringRoundStalledCounter = prometheus.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: "ticdc",
+			Subsystem: "metering",
+			Name:      "round_stalled_total",
+			Help:      "Total number of stalled traffic metering rounds detected by maintainers.",
+		})
 )
 
 // RegisterMetrics registers the metrics owned by this package.
@@ -281,4 +289,5 @@ func RegisterMetrics(registry *prometheus.Registry) {
 	registry.MustRegister(slowestTableRegionGaugeVec)
 	registry.MustRegister(slowestTablePullerResolvedTs)
 	registry.MustRegister(slowestTablePullerResolvedTsLag)
+	registry.MustRegister(maintainerMeteringRoundStalledCounter)
 }

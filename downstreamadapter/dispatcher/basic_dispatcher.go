@@ -339,11 +339,11 @@ func (d *BasicDispatcher) attachTrafficMeteringCallbacks(events []*commonEvent.D
 		return
 	}
 	counter := d.sharedInfo.meteringCounter
-	selectors := d.sharedInfo.meteringColumnSelectors
+	selectorFn := d.sharedInfo.meteringColumnSelector
 	for _, event := range events {
 		var selector commonEvent.Selector
-		if selectors != nil {
-			selector = selectors.GetForTableInfo(event.TableInfo)
+		if selectorFn != nil {
+			selector = selectorFn(event.TableInfo)
 		}
 		bytes, err := measureDMLEventV1(event, selector)
 		if err != nil {

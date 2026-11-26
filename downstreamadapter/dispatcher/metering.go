@@ -15,6 +15,7 @@
 package dispatcher
 
 import (
+	stderrors "errors"
 	"sync/atomic"
 	"time"
 
@@ -102,12 +103,17 @@ func recordMeteringMeasureError(changefeedID common.ChangeFeedID, err error) {
 	if err == nil {
 		return
 	}
-	meteringUnknownSQLTypeCounter.Inc()
+	reason := "value_error"
+	if stderrors.Is(err, metering.ErrUnsupportedSQLType) {
+		reason = "unsupported_type"
+	}
+	meteringMeasureErrorCounter.WithLabelValues(reason).Inc()
 	now := time.Now().Unix()
 	prev := lastUnknownSQLTypeLogUnix.Load()
 	if now-prev >= unknownSQLTypeLogIntervalSeconds && lastUnknownSQLTypeLogUnix.CompareAndSwap(prev, now) {
-		log.Warn("unknown SQL column type during traffic metering, treating column as 0 bytes",
+		log.Warn("traffic metering column measurement error, treating column as 0 bytes",
 			zap.Stringer("changefeedID", changefeedID),
+			zap.String("reason", reason),
 			zap.Error(err))
 	}
 }
