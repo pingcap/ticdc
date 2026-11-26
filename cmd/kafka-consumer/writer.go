@@ -332,7 +332,8 @@ func (w *writer) getBlockTableIDs(ddl *event.DDLEvent) map[int64]struct{} {
 	default:
 		log.Panic("unsupported influence type", zap.Any("influenceType", ddl.GetBlockedTables().InfluenceType))
 	}
-	if w.partitionTableAccessor != nil &&
+	if w.tableInfoProvider != nil &&
+		w.partitionTableAccessor != nil &&
 		w.partitionTableAccessor.IsPartitionTable(ddl.GetSchemaName(), ddl.GetTableName()) {
 		for _, tableID := range w.tableInfoProvider.GetBlockedTables(ddl.GetSchemaName(), ddl.GetTableName()) {
 			tableIDs[tableID] = struct{}{}

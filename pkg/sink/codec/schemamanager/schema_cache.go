@@ -15,13 +15,19 @@
 package schemamanager
 
 import (
+	"hash/maphash"
 	"strconv"
 	"sync"
 
 	lru "github.com/hashicorp/golang-lru"
 )
 
-const defaultDecodeSchemaCacheSize = 1024
+const (
+	defaultDecodeSchemaCacheSize = 1024
+	lockStripeCount              = 64
+)
+
+var lockSeed = maphash.MakeSeed()
 
 type schemaCacheEntry struct {
 	schemaVersion    uint64
@@ -40,7 +46,7 @@ type schemaCache struct {
 	entries       map[schemaCacheKey]*schemaCacheEntry
 	decodeEntries *lru.Cache
 
-	subjectLocks sync.Map
+	locks [lockStripeCount]sync.Mutex
 }
 
 func newSchemaCache() *schemaCache {
@@ -100,7 +106,7 @@ func (c *schemaCache) getOrCreate(
 		return entry, true, nil
 	}
 
-	unlock := c.lockSubject(schemaName)
+	unlock := c.lock(schemaName)
 	defer unlock()
 
 	if entry, ok := c.loadByVersion(key, schemaVersion); ok {
@@ -123,7 +129,7 @@ func (c *schemaCache) getOrLoadDecode(
 		return cached.(*schemaCacheEntry), nil
 	}
 
-	unlock := c.lockSubject(key.schemaIdentity)
+	unlock := c.lock(key.schemaIdentity)
 	defer unlock()
 
 	if cached, ok := c.decodeEntries.Get(key); ok {
@@ -138,9 +144,11 @@ func (c *schemaCache) getOrLoadDecode(
 	return entry, nil
 }
 
-func (c *schemaCache) lockSubject(schemaName string) func() {
-	value, _ := c.subjectLocks.LoadOrStore(schemaName, &sync.Mutex{})
-	registerLock := value.(*sync.Mutex)
-	registerLock.Lock()
-	return registerLock.Unlock
+// lock serializes cache misses on the same key. Keys are hashed onto a fixed
+// set of mutexes, so unrelated keys rarely wait for each other and the lock
+// table does not grow with the number of seen schemas.
+func (c *schemaCache) lock(key string) func() {
+	m := &c.locks[maphash.String(lockSeed, key)%lockStripeCount]
+	m.Lock()
+	return m.Unlock
 }

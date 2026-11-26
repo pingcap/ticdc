@@ -262,6 +262,8 @@ func (m *confluentSchemaManager) Lookup(
 
 		if resp.StatusCode != 200 && resp.StatusCode != 404 {
 			log.Error("query schema from the registry failed",
+				zap.String("key", schemaName),
+				zap.Int("schemaID", schemaID.confluentSchemaID),
 				zap.Int("status", resp.StatusCode))
 			return nil, errors.ErrAvroSchemaAPIError.GenWithStack(
 				"query schema from the registry failed",
