@@ -42,6 +42,24 @@ func (s *stubReader) Read(context.Context) ([]*source.Payload, error) { return n
 func (s *stubReader) Partitions() int32                               { return s.partitions }
 func (s *stubReader) Close()                                          {}
 
+type stubSchemaNotifierReader struct {
+	stubReader
+	processed []struct {
+		tables    []commonEvent.SchemaTableName
+		timestamp uint64
+	}
+}
+
+func (s *stubSchemaNotifierReader) MarkProcessed(tables []commonEvent.SchemaTableName, timestamp uint64) {
+	s.processed = append(s.processed, struct {
+		tables    []commonEvent.SchemaTableName
+		timestamp uint64
+	}{
+		tables:    tables,
+		timestamp: timestamp,
+	})
+}
+
 func TestConductorFlushDDLWithoutDML(t *testing.T) {
 	c := New(&stubReader{partitions: 0}, codecCommon.NewTableInfoProvider())
 	w := writer.New(t.Context(), writer.Options{
@@ -65,6 +83,10 @@ func TestConductorFlushDDLWithoutDML(t *testing.T) {
 		require.NoError(t, c.accept(ddl, &source.Payload{Partition: 0}))
 	}
 
+	require.NoError(t, c.flush(t.Context(), w))
+	require.Empty(t, flushed)
+
+	c.advanceWatermark(101, 0)
 	require.NoError(t, c.flush(t.Context(), w))
 	require.Equal(t, []string{
 		"CREATE TABLE test.t1 (id INT PRIMARY KEY)",
@@ -425,4 +447,65 @@ func TestConductorBlockedTableReentersReadyHeapAndCreateTableLike(t *testing.T) 
 	c.advanceWatermark(200, 0)
 	require.NoError(t, c.flush(t.Context(), w))
 	require.Equal(t, []string{"t1:dml@140", "t1:ddl@150", "t1:dml@160", "t2:create_like@200"}, flushed)
+}
+
+func TestConductorCreateTableLikeMarksOnlyCreatedTableProcessed(t *testing.T) {
+	reader := &stubSchemaNotifierReader{}
+	c := New(reader, codecCommon.NewTableInfoProvider())
+
+	createLike := &commonEvent.DDLEvent{
+		FinishedTs: 200,
+		Type:       byte(timodel.ActionCreateTable),
+		SchemaName: "test",
+		TableName:  "t2",
+		Query:      "CREATE TABLE test.t2 LIKE test.t1",
+	}
+	require.NoError(t, c.accept(createLike, &source.Payload{}))
+	require.Len(t, reader.processed, 1)
+	require.Equal(t, uint64(200), reader.processed[0].timestamp)
+	require.Equal(t, []commonEvent.SchemaTableName{{SchemaName: "test", TableName: "t2"}}, reader.processed[0].tables)
+	require.Equal(t, []commonEvent.SchemaTableName{
+		{SchemaName: "test", TableName: "t2"},
+		{SchemaName: "test", TableName: "t1"},
+	}, createLike.BlockedTableNames)
+}
+
+func TestConductorWaitsWatermarkForOutOfOrderCreateDDLs(t *testing.T) {
+	c := New(&stubReader{partitions: 2}, codecCommon.NewTableInfoProvider())
+	w := writer.New(t.Context(), writer.Options{
+		DownstreamURI: "blackhole://",
+		ReplicaConfig: config.GetDefaultReplicaConfig(),
+	})
+
+	var flushed []string
+	createTable := &commonEvent.DDLEvent{
+		FinishedTs: 120,
+		Type:       byte(timodel.ActionCreateTable),
+		SchemaName: "test",
+		TableName:  "t",
+		Query:      "CREATE TABLE test.t (id INT PRIMARY KEY)",
+	}
+	createTable.AddPostFlushFunc(func() {
+		flushed = append(flushed, "create_table@120")
+	})
+	createDB := &commonEvent.DDLEvent{
+		FinishedTs: 100,
+		Type:       byte(timodel.ActionCreateSchema),
+		SchemaName: "test",
+		Query:      "CREATE DATABASE test",
+	}
+	createDB.AddPostFlushFunc(func() {
+		flushed = append(flushed, "create_db@100")
+	})
+
+	// Partition 0 delivers CREATE TABLE@120 before partition 1 delivers CREATE DATABASE@100.
+	require.NoError(t, c.accept(createTable, &source.Payload{Partition: 0}))
+	c.advanceWatermark(120, 0)
+	require.NoError(t, c.flush(t.Context(), w))
+	require.Empty(t, flushed)
+
+	require.NoError(t, c.accept(createDB, &source.Payload{Partition: 1}))
+	c.advanceWatermark(120, 1)
+	require.NoError(t, c.flush(t.Context(), w))
+	require.Equal(t, []string{"create_db@100", "create_table@120"}, flushed)
 }

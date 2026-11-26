@@ -368,26 +368,11 @@ func (c *Conductor) queueDDL(ddlEvent *event.DDLEvent) {
 func (c *Conductor) nextReady() (*event.DDLEvent, *dmlTask) {
 	if len(c.pendingDDL) != 0 {
 		head := c.pendingDDL[0]
-		if c.ddlReady(head) && !c.hasRowBefore(0, min(c.effectiveWatermark(), head.GetCommitTs()), head) {
+		if head.GetCommitTs() <= c.effectiveWatermark() && !c.hasRowBefore(0, head.GetCommitTs(), head) {
 			return head, nil
 		}
 	}
 	return nil, c.nextDML()
-}
-
-// ddlReady reports whether every row before the DDL has been read.
-func (c *Conductor) ddlReady(ddl *event.DDLEvent) bool {
-	if ddl.GetCommitTs() <= c.effectiveWatermark() {
-		return true
-	}
-	// Creating a schema or standalone table cannot depend on earlier rows.
-	switch model.ActionType(ddl.Type) {
-	case model.ActionCreateSchema:
-		return true
-	case model.ActionCreateTable:
-		return len(ddl.BlockedTableNames) == 0
-	}
-	return false
 }
 
 func (c *Conductor) hasRowBefore(index int, limit uint64, block *event.DDLEvent) bool {
@@ -711,8 +696,12 @@ func ddlProcessedTables(ddlEvent *event.DDLEvent) []event.SchemaTableName {
 	}
 	add(ddlEvent.SchemaName, ddlEvent.TableName)
 	add(ddlEvent.ExtraSchemaName, ddlEvent.ExtraTableName)
-	for _, name := range ddlEvent.BlockedTableNames {
-		add(name.SchemaName, name.TableName)
+	// CREATE TABLE ... LIKE ... only fences the referenced table at the DDL
+	// barrier; it does not bump the source table's Storage TableVersion.
+	if model.ActionType(ddlEvent.Type) != model.ActionCreateTable {
+		for _, name := range ddlEvent.BlockedTableNames {
+			add(name.SchemaName, name.TableName)
+		}
 	}
 	for _, info := range ddlEvent.MultipleTableInfos {
 		if info != nil {
