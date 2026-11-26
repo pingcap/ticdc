@@ -131,11 +131,6 @@ func (c *kafkaReader) Partitions() int32 {
 }
 
 func (c *kafkaReader) Read(ctx context.Context) ([]*Payload, error) {
-	select {
-	case <-ctx.Done():
-		return nil, context.Cause(ctx)
-	default:
-	}
 	fetches := c.client.PollRecords(ctx, readBatchRows)
 	if err := fetches.Err(); err != nil {
 		log.Error("read fetches failed", zap.Error(err))

@@ -33,7 +33,7 @@ func init() {
 }
 
 func TestModifyTableComment(t *testing.T) {
-	allocator := newTableIDAllocator()
+	allocator := NewTableInfoProvider()
 	allocator.AddBlockTableID("test", "t", 1)
 	ddl := &commonEvent.DDLEvent{
 		Type:       byte(timodel.ActionModifyTableComment),
@@ -48,7 +48,7 @@ func TestModifyTableComment(t *testing.T) {
 }
 
 func TestGetBlockedTablesForRecoverSchema(t *testing.T) {
-	allocator := newTableIDAllocator()
+	allocator := NewTableInfoProvider()
 	ddl := &commonEvent.DDLEvent{
 		Type:       byte(timodel.ActionRecoverSchema),
 		SchemaName: "test",
@@ -256,7 +256,7 @@ func TestGetDDLActionType(t *testing.T) {
 }
 
 func TestGetBlockedTablesForRenameVariants(t *testing.T) {
-	allocator := newTableIDAllocator()
+	allocator := NewTableInfoProvider()
 	allocator.AddBlockTableID("test", "t1", 1)
 	allocator.AddBlockTableID("test", "t2", 2)
 	allocator.AddBlockTableID("test", "t3", 3)

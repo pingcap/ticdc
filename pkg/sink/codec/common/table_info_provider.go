@@ -19,9 +19,11 @@ import (
 	"sync"
 	"sync/atomic"
 
+	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	timodel "github.com/pingcap/tidb/pkg/meta/model"
+	"go.uber.org/zap"
 )
 
 // TableInfoProvider keeps the TableInfo of every table version. Decoders may
@@ -32,16 +34,20 @@ type TableInfoProvider struct {
 	mu                sync.RWMutex
 	tables            map[accessKey]*tableVersions
 	invalidations     []uint64
-	changed           chan struct{}
 	releasedWatermark atomic.Uint64
-	allocator         *tableIDAllocator
+
+	idMu            sync.RWMutex
+	tableIDs        map[accessKey]int64
+	currentTableID  int64
+	blockedTableIDs map[accessKey]map[int64]struct{}
 }
 
 // NewTableInfoProvider creates an empty versioned provider.
 func NewTableInfoProvider() *TableInfoProvider {
 	return &TableInfoProvider{
-		tables:    make(map[accessKey]*tableVersions),
-		allocator: newTableIDAllocator(),
+		tables:          make(map[accessKey]*tableVersions),
+		tableIDs:        make(map[accessKey]int64),
+		blockedTableIDs: make(map[accessKey]map[int64]struct{}),
 	}
 }
 
@@ -82,7 +88,6 @@ func (c *TableInfoProvider) writeVersion(schema, table string, version, effectiv
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.table(schema, table).set(version, effectiveTs, info)
-	c.notify()
 }
 
 // Read returns the table info of exactly the requested version.
@@ -187,23 +192,6 @@ func (c *TableInfoProvider) ReleaseBefore(watermark uint64) {
 	}
 }
 
-// Changes returns a channel closed on the next write.
-func (c *TableInfoProvider) Changes() <-chan struct{} {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if c.changed == nil {
-		c.changed = make(chan struct{})
-	}
-	return c.changed
-}
-
-func (c *TableInfoProvider) notify() {
-	if c.changed != nil {
-		close(c.changed)
-		c.changed = nil
-	}
-}
-
 func (c *TableInfoProvider) table(schema, table string) *tableVersions {
 	key := accessKey{schema, table}
 	versions := c.tables[key]
@@ -216,17 +204,46 @@ func (c *TableInfoProvider) table(schema, table string) *tableVersions {
 
 // AllocateTableID allocates a physical table ID scoped to this provider.
 func (c *TableInfoProvider) AllocateTableID(schema, table string) int64 {
-	return c.allocator.Allocate(schema, table)
+	c.idMu.Lock()
+	defer c.idMu.Unlock()
+
+	key := accessKey{schema, table}
+	if tableID, ok := c.tableIDs[key]; ok {
+		return tableID
+	}
+	c.currentTableID++
+	c.tableIDs[key] = c.currentTableID
+	return c.currentTableID
 }
 
 // AddBlockTableID registers a physical table ID as blocked by DDLs on the table.
 func (c *TableInfoProvider) AddBlockTableID(schema, table string, physicalTableID int64) {
-	c.allocator.AddBlockTableID(schema, table, physicalTableID)
+	c.idMu.Lock()
+	defer c.idMu.Unlock()
+
+	key := accessKey{schema, table}
+	if _, ok := c.blockedTableIDs[key]; !ok {
+		c.blockedTableIDs[key] = make(map[int64]struct{})
+	}
+
+	if _, exists := c.blockedTableIDs[key][physicalTableID]; !exists {
+		c.blockedTableIDs[key][physicalTableID] = struct{}{}
+		log.Info("add table id to blocked list",
+			zap.String("schema", schema), zap.String("table", table), zap.Int64("tableID", physicalTableID))
+	}
 }
 
 // GetBlockedTables returns the physical table IDs blocked by DDLs on the table.
 func (c *TableInfoProvider) GetBlockedTables(schema, table string) []int64 {
-	return c.allocator.GetBlockedTables(schema, table)
+	c.idMu.RLock()
+	defer c.idMu.RUnlock()
+
+	blocked := c.blockedTableIDs[accessKey{schema, table}]
+	result := make([]int64, 0, len(blocked))
+	for item := range blocked {
+		result = append(result, item)
+	}
+	return result
 }
 
 // tableVersions keeps the versions of one table in ascending order. A table has

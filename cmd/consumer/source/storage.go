@@ -522,7 +522,6 @@ func (c *storageReader) readDMLFile(ctx context.Context, item storageRange, sche
 	c.fileIndices[item.key][item.index.FileIndexKey] = item.index.Idx
 	return &Payload{
 		Value: data,
-		Bytes: int64(len(data)),
 		File:  &File{Schema: schema, TableID: tableID},
 	}, nil
 }

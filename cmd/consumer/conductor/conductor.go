@@ -341,12 +341,18 @@ func (c *Conductor) queueDDL(ddlEvent *event.DDLEvent) {
 		return
 	}
 	c.queuedDDLs[key] = struct{}{}
-	c.pendingDDL = insertSorted(c.pendingDDL, ddlEvent.GetCommitTs(), ddlEvent, func(block *event.DDLEvent) uint64 {
-		return block.GetCommitTs()
-	})
+	ts := ddlEvent.GetCommitTs()
+	if len(c.pendingDDL) == 0 || ts >= c.pendingDDL[len(c.pendingDDL)-1].GetCommitTs() {
+		c.pendingDDL = append(c.pendingDDL, ddlEvent)
+	} else {
+		index := sort.Search(len(c.pendingDDL), func(i int) bool {
+			return c.pendingDDL[i].GetCommitTs() > ts
+		})
+		c.pendingDDL = slices.Insert(c.pendingDDL, index, ddlEvent)
+	}
 	var blocked []*tableQueue
 	for _, q := range c.readyHeap {
-		if q.rows[0].dml.CommitTs > ddlEvent.GetCommitTs() && ddl.BlocksTable(ddlEvent, q.rows[0].dml) {
+		if q.rows[0].dml.CommitTs > ts && ddl.BlocksTable(ddlEvent, q.rows[0].dml) {
 			blocked = append(blocked, q)
 		}
 	}
@@ -357,24 +363,12 @@ func (c *Conductor) queueDDL(ddlEvent *event.DDLEvent) {
 	}
 }
 
-// insertSorted appends item unless it precedes the last element, in which case
-// it is inserted after every element with an earlier timestamp.
-func insertSorted[T any](items []T, ts uint64, item T, timestamp func(T) uint64) []T {
-	if len(items) == 0 || ts >= timestamp(items[len(items)-1]) {
-		return append(items, item)
-	}
-	index := sort.Search(len(items), func(i int) bool {
-		return timestamp(items[i]) > ts
-	})
-	return slices.Insert(items, index, item)
-}
-
 // nextReady returns the DDL at the head of the pending order and the next row
 // that can be written. The DDL wins whenever it is not blocked by rows.
 func (c *Conductor) nextReady() (*event.DDLEvent, *dmlTask) {
 	if len(c.pendingDDL) != 0 {
 		head := c.pendingDDL[0]
-		if c.ddlReady(head) && !c.rowsBefore(head) {
+		if c.ddlReady(head) && !c.hasRowBefore(0, min(c.effectiveWatermark(), head.GetCommitTs()), head) {
 			return head, nil
 		}
 	}
@@ -394,11 +388,6 @@ func (c *Conductor) ddlReady(ddl *event.DDLEvent) bool {
 		return len(ddl.BlockedTableNames) == 0
 	}
 	return false
-}
-
-// rowsBefore reports whether a ready row must be written before the DDL.
-func (c *Conductor) rowsBefore(block *event.DDLEvent) bool {
-	return c.hasRowBefore(0, min(c.effectiveWatermark(), block.GetCommitTs()), block)
 }
 
 func (c *Conductor) hasRowBefore(index int, limit uint64, block *event.DDLEvent) bool {
@@ -468,9 +457,6 @@ func (c *Conductor) flush(ctx context.Context, w *writer.Writer) error {
 		c.advanceWriter(w)
 		if err := w.Flush(ctx); err != nil {
 			return err
-		}
-		if w.HasPendingDML() {
-			return nil
 		}
 		var (
 			rows     int
@@ -637,7 +623,9 @@ func (c *Conductor) confirmPositions(ctx context.Context, checkpoint uint64) {
 	positions := maps.Clone(c.positions)
 	c.positionsMu.Unlock()
 	for partition, pending := range positions {
-		count := confirmablePrefix(pending, checkpoint)
+		count := sort.Search(len(pending), func(i int) bool {
+			return pending[i].through > checkpoint
+		})
 		if count == 0 {
 			continue
 		}
@@ -646,12 +634,6 @@ func (c *Conductor) confirmPositions(ctx context.Context, checkpoint uint64) {
 		}
 		c.dropPositions(partition, count)
 	}
-}
-
-func confirmablePrefix(pending []sourcePosition, checkpoint uint64) int {
-	return sort.Search(len(pending), func(i int) bool {
-		return pending[i].through > checkpoint
-	})
 }
 
 func (c *Conductor) dropPositions(partition int32, count int) {

@@ -33,7 +33,6 @@ import (
 type pulsarReader struct {
 	client     pulsar.Client
 	consumer   pulsar.Consumer
-	topic      string
 	partitions map[string]int32
 }
 
@@ -150,7 +149,6 @@ func newPulsarReader(opts Options) *pulsarReader {
 	return &pulsarReader{
 		client:     client,
 		consumer:   consumer,
-		topic:      topic,
 		partitions: partitions,
 	}
 }
@@ -187,7 +185,6 @@ func (c *pulsarReader) toPayload(message pulsar.ConsumerMessage) *Payload {
 		Partition: c.partitions[message.Topic()],
 		Key:       key,
 		Value:     value,
-		Bytes:     int64(len(key) + len(value)),
 		Ack: func(ctx context.Context) error {
 			return c.confirmPosition(ctx, id)
 		},

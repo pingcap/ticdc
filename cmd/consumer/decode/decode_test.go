@@ -164,7 +164,11 @@ func TestDecodeGroupConcurrentPoolPreservesOrderAndDynamicPartitions(t *testing.
 	// 1. MQ group decoupled from partitions handles partition counts > decodeConcurrency and preserves submission order.
 	upstreamURI, err := url.Parse("kafka://127.0.0.1:9092/test-topic")
 	require.NoError(t, err)
-	opts := NewOptions(cfg, config.GetDefaultReplicaConfig(), upstreamURI)
+	opts := Options{
+		CodecConfig:   cfg,
+		ReplicaConfig: config.GetDefaultReplicaConfig(),
+		UpstreamURI:   upstreamURI,
+	}
 
 	group := NewGroup(t.Context(), opts)
 	require.Len(t, group.decoders, decodeConcurrency)
@@ -206,7 +210,11 @@ func TestDecodeGroupConcurrentPoolPreservesOrderAndDynamicPartitions(t *testing.
 	// 2. Storage group decodes across multiple concurrent decoders while preserving submission order.
 	storageURI, err := url.Parse("file://" + t.TempDir())
 	require.NoError(t, err)
-	storageOpts := NewOptions(cfg, config.GetDefaultReplicaConfig(), storageURI)
+	storageOpts := Options{
+		CodecConfig:   cfg,
+		ReplicaConfig: config.GetDefaultReplicaConfig(),
+		UpstreamURI:   storageURI,
+	}
 
 	storageGroup := NewGroup(t.Context(), storageOpts)
 	storageCtx, storageCancel := context.WithCancel(t.Context())
@@ -309,7 +317,11 @@ func TestDecodeGroupDebeziumAvroSharesSchemaManagerAndCloses(t *testing.T) {
 
 	upstreamURI, err := url.Parse("kafka://127.0.0.1:9092/test-topic")
 	require.NoError(t, err)
-	opts := NewOptions(cfg, config.GetDefaultReplicaConfig(), upstreamURI)
+	opts := Options{
+		CodecConfig:   cfg,
+		ReplicaConfig: config.GetDefaultReplicaConfig(),
+		UpstreamURI:   upstreamURI,
+	}
 
 	group := NewGroup(t.Context(), opts)
 	require.NotNil(t, group.schemaManager)
@@ -392,7 +404,11 @@ func TestDecodeGroupSimpleCrossPartitionWakeupOutOfOrderAndOver128(t *testing.T)
 
 	upstreamURI, err := url.Parse("kafka://127.0.0.1:9092/topic")
 	require.NoError(t, err)
-	group := NewGroup(t.Context(), NewOptions(cfg, config.GetDefaultReplicaConfig(), upstreamURI))
+	group := NewGroup(t.Context(), Options{
+		CodecConfig:   cfg,
+		ReplicaConfig: config.GetDefaultReplicaConfig(),
+		UpstreamURI:   upstreamURI,
+	})
 
 	runCtx, cancel := context.WithCancel(t.Context())
 	runDone := make(chan error, 1)
@@ -535,7 +551,11 @@ func TestDecodeGroupSimpleDDLWakesPreAndPostSchemaWaiters(t *testing.T) {
 
 	upstreamURI, err := url.Parse("kafka://127.0.0.1:9092/topic")
 	require.NoError(t, err)
-	group := NewGroup(t.Context(), NewOptions(cfg, config.GetDefaultReplicaConfig(), upstreamURI))
+	group := NewGroup(t.Context(), Options{
+		CodecConfig:   cfg,
+		ReplicaConfig: config.GetDefaultReplicaConfig(),
+		UpstreamURI:   upstreamURI,
+	})
 
 	runCtx, cancel := context.WithCancel(t.Context())
 	runDone := make(chan error, 1)

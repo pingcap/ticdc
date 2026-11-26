@@ -44,14 +44,6 @@ type Options struct {
 	ReplicaConfig *config.ReplicaConfig
 }
 
-// NewOptions builds writer options for the downstream URI.
-func NewOptions(downstreamURI string, replicaConfig *config.ReplicaConfig) Options {
-	return Options{
-		DownstreamURI: downstreamURI,
-		ReplicaConfig: replicaConfig,
-	}
-}
-
 // New creates a writer targeting the configured downstream sink.
 func New(ctx context.Context, opts Options) *Writer {
 	changefeedID := common.NewChangeFeedIDWithName("consumer", common.DefaultKeyspaceName)
@@ -96,7 +88,7 @@ func (w *Writer) Start(ctx context.Context) error {
 // Writer owns the downstream sink, batching and checkpoint bookkeeping.
 type Writer struct {
 	target     sink.Sink
-	pendingDML []*dmlWrite
+	pendingDML []*event.DMLEvent
 	pendingDDL []*event.DDLEvent
 	mutations  map[mutationKey]bool
 	ddlWrites  map[ddl.Key]bool
@@ -111,11 +103,6 @@ type mutationKey struct {
 	commitTs uint64
 	rowType  common.RowType
 	handle   string
-}
-
-type dmlWrite struct {
-	dml   *event.DMLEvent
-	bytes int64
 }
 
 // Progress reports the input watermark and the earliest decoded event the
@@ -136,17 +123,9 @@ func (w *Writer) Checkpoint() uint64 {
 	return w.checkpoint
 }
 
-// HasPendingDML reports whether decoded rows are still waiting for the sink.
-func (w *Writer) HasPendingDML() bool {
-	return len(w.pendingDML) != 0
-}
-
 // AddDML queues one decoded row.
 func (w *Writer) AddDML(dml *event.DMLEvent) {
-	w.pendingDML = append(w.pendingDML, &dmlWrite{
-		dml:   dml,
-		bytes: dml.Rows.MemoryUsage(),
-	})
+	w.pendingDML = append(w.pendingDML, dml)
 }
 
 // AddDDL queues a block event.
@@ -202,9 +181,6 @@ func (w *Writer) Flush(ctx context.Context) error {
 			return err
 		}
 		items := w.selectBatch()
-		if len(items) == 0 {
-			break
-		}
 		if err := w.writeBatch(ctx, items); err != nil {
 			return err
 		}
@@ -218,27 +194,27 @@ func (w *Writer) Flush(ctx context.Context) error {
 }
 
 // selectBatch takes rows whose table schema consistency allows batching.
-func (w *Writer) selectBatch() []*dmlWrite {
+func (w *Writer) selectBatch() []*event.DMLEvent {
 	blocked := make(map[int64]bool)
-	tables := make(map[int64]*dmlWrite)
-	items := make([]*dmlWrite, 0, min(batchRows, len(w.pendingDML)))
+	tables := make(map[int64]*event.DMLEvent)
+	items := make([]*event.DMLEvent, 0, min(batchRows, len(w.pendingDML)))
 	var (
 		rows  int
 		bytes int64
 	)
-	for _, item := range w.pendingDML {
-		id := item.dml.PhysicalTableID
+	for _, dml := range w.pendingDML {
+		id := dml.PhysicalTableID
 		if blocked[id] {
 			continue
 		}
-		if previous := tables[id]; previous != nil && !sameTableSchema(previous.dml.TableInfo, item.dml.TableInfo) {
+		if previous := tables[id]; previous != nil && !sameTableSchema(previous.TableInfo, dml.TableInfo) {
 			blocked[id] = true
 			continue
 		}
-		tables[id] = item
-		rows += int(item.dml.Len())
-		bytes += item.bytes
-		items = append(items, item)
+		tables[id] = dml
+		rows += int(dml.Len())
+		bytes += dml.Rows.MemoryUsage()
+		items = append(items, dml)
 		if rows >= batchRows || bytes >= batchBytes {
 			break
 		}
@@ -246,15 +222,15 @@ func (w *Writer) selectBatch() []*dmlWrite {
 	return items
 }
 
-func (w *Writer) removeDML(items []*dmlWrite) {
+func (w *Writer) removeDML(items []*event.DMLEvent) {
 	remaining := w.pendingDML[:0]
 	dropped := 0
-	for _, item := range w.pendingDML {
-		if dropped < len(items) && item == items[dropped] {
+	for _, dml := range w.pendingDML {
+		if dropped < len(items) && dml == items[dropped] {
 			dropped++
 			continue
 		}
-		remaining = append(remaining, item)
+		remaining = append(remaining, dml)
 	}
 	clear(w.pendingDML[len(remaining):])
 	w.pendingDML = remaining
@@ -267,13 +243,13 @@ func sameTableSchema(a, b *common.TableInfo) bool {
 }
 
 // writeBatch submits the batch and waits until the sink has flushed every event.
-func (w *Writer) writeBatch(ctx context.Context, items []*dmlWrite) error {
+func (w *Writer) writeBatch(ctx context.Context, items []*event.DMLEvent) error {
 	var events []*event.DMLEvent
 	var dropped []*event.DMLEvent
-	for _, item := range items {
-		filtered := w.filterRows(item.dml)
+	for _, dml := range items {
+		filtered := w.filterRows(dml)
 		if filtered == nil {
-			dropped = append(dropped, item.dml)
+			dropped = append(dropped, dml)
 			continue
 		}
 		events = append(events, filtered)
@@ -319,8 +295,8 @@ func (w *Writer) advanceCheckpoint() {
 			through = min(through, ts-1)
 		}
 	}
-	for _, item := range w.pendingDML {
-		lower(item.dml.CommitTs)
+	for _, dml := range w.pendingDML {
+		lower(dml.CommitTs)
 	}
 	for _, block := range w.pendingDDL {
 		lower(block.GetCommitTs())

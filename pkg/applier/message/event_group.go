@@ -1138,11 +1138,6 @@ func (g *EventsGroup) ack(batch *ResolveBatch) error {
 	return nil
 }
 
-// GetAllMessages gets all messages.
-func (g *EventsGroup) GetAllMessages() ([]*DMLMessage, error) {
-	return g.ResolveInto(math.MaxUint64, nil)
-}
-
 // Cleanup removes pending spill records when the consumer is stopping.
 func (g *EventsGroup) Cleanup() error {
 	if g.batchPending {
@@ -1222,20 +1217,13 @@ func appendOptionalDMLValues[T any](last, row []T, lastRowTypeCount, rowRowTypeC
 	return append(last, row...)
 }
 
-// NewDMLMessageData preserves one original codec input. The decoder is used
-// only during ResolveInto, after the DDL or watermark barrier selects schema.
-func NewDMLMessageData(decoder codeccommon.Decoder, key, value []byte) *DMLMessageData {
-	return NewDMLMessageDataWithDecoderFactory(key, value,
-		func([]byte, []byte) (codeccommon.Decoder, error) { return decoder, nil })
-}
-
 // NewDMLMessageDataWithDecoderFactory is for decoders such as CSV whose
 // input is supplied during construction rather than through AddKeyValue.
 func NewDMLMessageDataWithDecoderFactory(
 	key, value []byte,
 	decoderFactory func([]byte, []byte) (codeccommon.Decoder, error),
 ) *DMLMessageData {
-	return newDMLMessageData(key, value,
+	return NewDMLMessageDataWithRestorer(key, value, NewDMLMessageRestorer(
 		func(data []byte) ([]*DMLMessage, error) {
 			key, value, err := UnmarshalDMLMessageData(data)
 			if err != nil {
@@ -1246,7 +1234,7 @@ func NewDMLMessageDataWithDecoderFactory(
 				return nil, errors.WrapError(errors.ErrSpillFileOp, err, "create DML spill decoder")
 			}
 			return restoreDMLMessages(decoder, key, value)
-		})
+		}))
 }
 
 func restoreDMLMessages(

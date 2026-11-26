@@ -16,9 +16,12 @@ package main
 
 import (
 	"context"
+	"net/http"
+	_ "net/http/pprof" //nolint:gosec // pprof is served on 127.0.0.1 only and gated by --enable-profiling.
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/errors"
@@ -65,7 +68,15 @@ func newCommand() *cobra.Command {
 		RunE: func(command *cobra.Command, _ []string) error {
 			ctx := command.Context()
 			if options.enableProfiling {
-				startProfileServer()
+				server := &http.Server{
+					Addr:              profileAddress,
+					ReadHeaderTimeout: 5 * time.Second,
+				}
+				go func() {
+					if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+						log.Warn("consumer profiling server failed", zap.Error(err))
+					}
+				}()
 			}
 			return newConsumer(ctx, options).start(ctx)
 		},

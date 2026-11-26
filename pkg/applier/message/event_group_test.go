@@ -64,11 +64,11 @@ func newTestDMLMessage(commitTs uint64) *DMLMessage {
 }
 
 func attachTestDMLMessageData(message *DMLMessage) *DMLMessage {
-	messageData := newDMLMessageData(nil, nil,
+	messageData := NewDMLMessageDataWithRestorer(nil, nil, NewDMLMessageRestorer(
 		func([]byte) ([]*DMLMessage, error) {
 			return []*DMLMessage{message}, nil
 		},
-	)
+	))
 	messageData.AttachDMLMessage(message)
 	return message
 }
@@ -76,11 +76,11 @@ func attachTestDMLMessageData(message *DMLMessage) *DMLMessage {
 func attachTestDMLMessageDataWithPayload(
 	message *DMLMessage, key, value []byte,
 ) *DMLMessage {
-	messageData := newDMLMessageData(key, value,
+	messageData := NewDMLMessageDataWithRestorer(key, value, NewDMLMessageRestorer(
 		func([]byte) ([]*DMLMessage, error) {
 			return []*DMLMessage{message}, nil
 		},
-	)
+	))
 	messageData.AttachDMLMessage(message)
 	return message
 }
@@ -186,7 +186,7 @@ func TestEventsGroupRestoresLateEventBehindAppliedCursor(t *testing.T) {
 	require.NoError(t, group.AppendMessage(
 		attachTestDMLMessageData(newTestDMLMessage(15))))
 	require.Equal(t, int64(1), store.indexDeleteRangeCount)
-	resolved, err = group.GetAllMessages()
+	resolved, err = group.ResolveInto(math.MaxUint64, nil)
 	require.NoError(t, err)
 	require.Equal(t, []uint64{15, 30}, []uint64{
 		resolved[0].GetCommitTs(), resolved[1].GetCommitTs(),
@@ -295,7 +295,7 @@ func TestAppendOrMergeDMLEvent(t *testing.T) {
 		require.NoError(t, group.AppendMessage(attachTestDMLMessageData(firstMessage)))
 		require.NoError(t, group.AppendMessage(attachTestDMLMessageData(secondMessage)))
 
-		messages, err := group.GetAllMessages()
+		messages, err := group.ResolveInto(math.MaxUint64, nil)
 		require.NoError(t, err)
 		require.Len(t, messages, 2)
 		events := DMLMessagesToEvents(messages)
@@ -369,11 +369,11 @@ func TestAppendOrMergeDMLEventSparseChecksums(t *testing.T) {
 func TestEventsGroupSharesRawMessageData(t *testing.T) {
 	first := newTestDMLMessage(10)
 	second := newTestDMLMessage(10)
-	messageData := newDMLMessageData(nil, []byte("raw message"),
+	messageData := NewDMLMessageDataWithRestorer(nil, []byte("raw message"), NewDMLMessageRestorer(
 		func([]byte) ([]*DMLMessage, error) {
 			return []*DMLMessage{first, second}, nil
 		},
-	)
+	))
 
 	group := NewEventsGroup(0, 1)
 	messageData.AttachDMLMessage(first)
@@ -386,7 +386,7 @@ func TestEventsGroupSharesRawMessageData(t *testing.T) {
 	require.Equal(t, uint64(0), entries[0].dmlIndex)
 	require.Equal(t, uint64(1), entries[1].dmlIndex)
 
-	messages, err := group.GetAllMessages()
+	messages, err := group.ResolveInto(math.MaxUint64, nil)
 	require.NoError(t, err)
 	require.Same(t, first, messages[0])
 	require.Same(t, second, messages[1])
@@ -421,7 +421,7 @@ func TestEventsGroupRestoresSharedSpillInputOnce(t *testing.T) {
 		require.NoError(t, group.AppendMessage(message))
 	}
 
-	messages, err := group.GetAllMessages()
+	messages, err := group.ResolveInto(math.MaxUint64, nil)
 	require.NoError(t, err)
 	require.Equal(t, 1, decoderCount)
 	require.Equal(t, []uint64{10, 20, 30}, []uint64{
@@ -445,11 +445,11 @@ func TestEventsGroupReadsLargeSharedPayloadOnceAcrossBatches(t *testing.T) {
 		restoredMessages[i] = newTestDMLMessage(commitTs)
 	}
 	decodeCount := 0
-	messageData := newDMLMessageData(nil, []byte("one large object payload"),
+	messageData := NewDMLMessageDataWithRestorer(nil, []byte("one large object payload"), NewDMLMessageRestorer(
 		func([]byte) ([]*DMLMessage, error) {
 			decodeCount++
 			return restoredMessages, nil
-		})
+		}))
 	for _, message := range originalMessages {
 		messageData.AttachDMLMessage(message)
 		require.NoError(t, group.AppendMessage(message))
@@ -502,11 +502,11 @@ func TestEventsGroupsSharePayloadUntilEveryGroupAcks(t *testing.T) {
 	first := newTestDMLMessage(1)
 	second := newTestDMLMessage(2)
 	decodeCount := 0
-	messageData := newDMLMessageData(nil, []byte("shared across groups"),
+	messageData := NewDMLMessageDataWithRestorer(nil, []byte("shared across groups"), NewDMLMessageRestorer(
 		func([]byte) ([]*DMLMessage, error) {
 			decodeCount++
 			return []*DMLMessage{first, second}, nil
-		})
+		}))
 	messageData.AttachDMLMessage(first)
 	require.NoError(t, firstGroup.AppendMessage(first))
 	messageData.AttachDMLMessage(second)
@@ -612,10 +612,10 @@ func TestEventsGroupKeepsSharedPayloadInOneSegment(t *testing.T) {
 	group := NewEventsGroup(0, 1, store)
 	first := newTestDMLMessage(1)
 	second := newTestDMLMessage(2)
-	messageData := newDMLMessageData(nil, []byte("shared payload"),
+	messageData := NewDMLMessageDataWithRestorer(nil, []byte("shared payload"), NewDMLMessageRestorer(
 		func([]byte) ([]*DMLMessage, error) {
 			return []*DMLMessage{first, second}, nil
-		})
+		}))
 
 	messageData.AttachDMLMessage(first)
 	require.NoError(t, group.AppendMessage(first))
@@ -656,10 +656,10 @@ func TestEventsGroupRestoreErrorDoesNotReleasePendingData(t *testing.T) {
 	t.Cleanup(func() { require.NoError(t, store.Cleanup()) })
 	group := NewEventsGroup(0, 1, store)
 	wantErr := errors.New("restore failed")
-	messageData := newDMLMessageData([]byte("key"), []byte("value"),
+	messageData := NewDMLMessageDataWithRestorer([]byte("key"), []byte("value"), NewDMLMessageRestorer(
 		func([]byte) ([]*DMLMessage, error) {
 			return nil, wantErr
-		})
+		}))
 	message := newTestDMLMessage(1)
 	messageData.AttachDMLMessage(message)
 	require.NoError(t, group.AppendMessage(message))
@@ -769,10 +769,10 @@ func TestEventsGroupTracksResolvedAndAppliedFrontiers(t *testing.T) {
 func TestEventsGroupRestoresPersistedSourcePosition(t *testing.T) {
 	group := NewEventsGroup(3, 1)
 	message := newTestDMLMessage(10)
-	messageData := newDMLMessageData(nil, nil,
+	messageData := NewDMLMessageDataWithRestorer(nil, nil, NewDMLMessageRestorer(
 		func([]byte) ([]*DMLMessage, error) {
 			return []*DMLMessage{message}, nil
-		})
+		}))
 	messageData.SourcePosition = 42
 	messageData.AttachDMLMessage(message)
 	var restoredPosition int64
@@ -782,7 +782,7 @@ func TestEventsGroupRestoresPersistedSourcePosition(t *testing.T) {
 	})
 
 	require.NoError(t, group.AppendMessage(message))
-	messages, err := group.GetAllMessages()
+	messages, err := group.ResolveInto(math.MaxUint64, nil)
 	require.NoError(t, err)
 	require.Len(t, messages, 1)
 	require.Equal(t, int64(42), restoredPosition)
@@ -824,8 +824,8 @@ func TestEventsGroupKeepsPerEventMetadataOnDisk(t *testing.T) {
 	for i := 1; i <= messageCount; i++ {
 		messages = append(messages, newTestDMLMessage(uint64(i)))
 	}
-	messageData := newDMLMessageData(nil, nil,
-		func([]byte) ([]*DMLMessage, error) { return messages, nil })
+	messageData := NewDMLMessageDataWithRestorer(nil, nil, NewDMLMessageRestorer(
+		func([]byte) ([]*DMLMessage, error) { return messages, nil }))
 	for _, message := range messages {
 		messageData.AttachDMLMessage(message)
 		require.NoError(t, group.AppendMessage(message))
@@ -877,7 +877,7 @@ func TestEventsGroupResolveIntoAppendsAndCleansResolvedSpillRecords(t *testing.T
 	require.Equal(t, m3.GetCommitTs(), entries[0].commitTs)
 	require.FileExists(t, spillPath)
 
-	_, err = group.GetAllMessages()
+	_, err = group.ResolveInto(math.MaxUint64, nil)
 	require.NoError(t, err)
 	require.Nil(t, group.store.activeSegment)
 	require.Empty(t, group.store.segments)
@@ -981,7 +981,7 @@ func TestEventsGroupGetAllMessagesSortsOutOfOrderMessages(t *testing.T) {
 	require.NoError(t, group.AppendMessage(attachTestDMLMessageData(m2)))
 	require.NoError(t, group.AppendMessage(attachTestDMLMessageData(m3)))
 
-	messages, err := group.GetAllMessages()
+	messages, err := group.ResolveInto(math.MaxUint64, nil)
 	require.NoError(t, err)
 
 	require.Len(t, messages, 3)
@@ -1017,7 +1017,7 @@ func TestEventsGroupRestoresSpilledEventRowsAndTableInfo(t *testing.T) {
 	message := NewDMLMessageFromEvent(event)
 	require.NoError(t, group.AppendMessage(attachTestDMLMessageData(message)))
 
-	messages, err := group.GetAllMessages()
+	messages, err := group.ResolveInto(math.MaxUint64, nil)
 	require.NoError(t, err)
 	require.Len(t, messages, 1)
 	restored := messages[0].ToDMLEvent()
@@ -1056,7 +1056,7 @@ func TestEventsGroupRestoresRowsFromSharedChunk(t *testing.T) {
 		require.NoError(t, group.AppendMessage(attachTestDMLMessageData(message)))
 	}
 
-	messages, err := group.GetAllMessages()
+	messages, err := group.ResolveInto(math.MaxUint64, nil)
 	require.NoError(t, err)
 	require.Len(t, messages, 2)
 	require.Zero(t, messages[0].ToDMLEvent().PreviousTotalOffset)
@@ -1096,7 +1096,7 @@ func TestEventsGroupRestoresCompactUpdateRows(t *testing.T) {
 	group := NewEventsGroup(0, 1)
 	message := NewDMLMessageFromEvent(event)
 	require.NoError(t, group.AppendMessage(attachTestDMLMessageData(message)))
-	messages, err := group.GetAllMessages()
+	messages, err := group.ResolveInto(math.MaxUint64, nil)
 	require.NoError(t, err)
 	require.Len(t, messages, 1)
 

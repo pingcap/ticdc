@@ -89,21 +89,18 @@ type decoder struct {
 	cache        *common.TableInfoProvider
 }
 
-// NewDecoder return a decoder for canal-json
+// NewDecoder returns a canal-json decoder, reusing externalStorage when provided.
 func NewDecoder(
-	ctx context.Context, codecConfig *common.Config, db *sql.DB,
+	ctx context.Context, codecConfig *common.Config, db *sql.DB, externalStorage ...storeapi.Storage,
 ) (common.Decoder, error) {
-	return NewDecoderWithStorage(ctx, codecConfig, db, nil)
-}
-
-// NewDecoderWithStorage returns a canal-json decoder reusing externalStorage when provided.
-func NewDecoderWithStorage(
-	ctx context.Context, codecConfig *common.Config, db *sql.DB, externalStorage storeapi.Storage,
-) (common.Decoder, error) {
+	var storage storeapi.Storage
+	if len(externalStorage) > 0 {
+		storage = externalStorage[0]
+	}
 	var err error
-	if externalStorage == nil && codecConfig.LargeMessageHandle.EnableClaimCheck() {
+	if storage == nil && codecConfig.LargeMessageHandle.EnableClaimCheck() {
 		storageURI := codecConfig.LargeMessageHandle.ClaimCheckStorageURI
-		externalStorage, err = util.GetExternalStorageWithDefaultTimeout(ctx, storageURI)
+		storage, err = util.GetExternalStorageWithDefaultTimeout(ctx, storageURI)
 		if err != nil {
 			return nil, errors.WrapError(errors.ErrKafkaInvalidConfig, err)
 		}
@@ -118,7 +115,7 @@ func NewDecoderWithStorage(
 	return &decoder{
 		config:       codecConfig,
 		decoder:      newBufferedJSONDecoder(),
-		storage:      externalStorage,
+		storage:      storage,
 		upstreamTiDB: db,
 		cache:        common.NewTableInfoProvider(),
 	}, nil

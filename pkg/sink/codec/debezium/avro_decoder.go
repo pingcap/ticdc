@@ -24,7 +24,6 @@ import (
 	lru "github.com/hashicorp/golang-lru"
 	"github.com/linkedin/goavro/v2"
 	"github.com/pingcap/log"
-	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/errors"
 	codecavro "github.com/pingcap/ticdc/pkg/sink/codec/avro"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
@@ -38,9 +37,9 @@ const (
 )
 
 type avroDecoder struct {
+	*decoder
 	ctx     context.Context
 	schemaM schemamanager.SchemaManager
-	inner   *decoder
 
 	schemas *lru.Cache
 }
@@ -79,9 +78,9 @@ func NewAvroDecoderWithSchemaManager(
 ) common.Decoder {
 	schemas, _ := lru.New(debeziumAvroDecoderSchemaCacheSize)
 	return &avroDecoder{
+		decoder: NewDecoder(config, db).(*decoder),
 		ctx:     ctx,
 		schemaM: schemaM,
-		inner:   NewDecoder(config, db).(*decoder),
 		schemas: schemas,
 	}
 }
@@ -95,27 +94,7 @@ func (d *avroDecoder) AddKeyValue(key, value []byte) {
 	if err != nil {
 		log.Panic("decode Debezium Avro value failed", zap.Error(err), zap.Int("valueSize", len(value)))
 	}
-	d.inner.AddKeyValue(keyJSON, valueJSON)
-}
-
-func (d *avroDecoder) HasNext() (common.MessageType, bool) {
-	return d.inner.HasNext()
-}
-
-func (d *avroDecoder) ShareTableInfo(cache *common.TableInfoProvider) {
-	d.inner.ShareTableInfo(cache)
-}
-
-func (d *avroDecoder) NextResolvedEvent() uint64 {
-	return d.inner.NextResolvedEvent()
-}
-
-func (d *avroDecoder) NextDMLEvent() *commonEvent.DMLEvent {
-	return d.inner.NextDMLEvent()
-}
-
-func (d *avroDecoder) NextDDLEvent() *commonEvent.DDLEvent {
-	return d.inner.NextDDLEvent()
+	d.decoder.AddKeyValue(keyJSON, valueJSON)
 }
 
 func (d *avroDecoder) toDebeziumJSON(data []byte) ([]byte, error) {

@@ -59,21 +59,18 @@ type Decoder struct {
 	CachedRowChangedEvents []*commonEvent.DMLEvent
 }
 
-// NewDecoder returns a new Decoder
+// NewDecoder returns a simple decoder, reusing externalStorage when provided.
 func NewDecoder(
-	ctx context.Context, config *common.Config, db *sql.DB,
+	ctx context.Context, config *common.Config, db *sql.DB, externalStorage ...storeapi.Storage,
 ) (common.Decoder, error) {
-	return NewDecoderWithStorage(ctx, config, db, nil)
-}
-
-// NewDecoderWithStorage returns a simple decoder reusing externalStorage when provided.
-func NewDecoderWithStorage(
-	ctx context.Context, config *common.Config, db *sql.DB, externalStorage storeapi.Storage,
-) (common.Decoder, error) {
+	var storage storeapi.Storage
+	if len(externalStorage) > 0 {
+		storage = externalStorage[0]
+	}
 	var err error
-	if externalStorage == nil && config.LargeMessageHandle.EnableClaimCheck() {
+	if storage == nil && config.LargeMessageHandle.EnableClaimCheck() {
 		storageURI := config.LargeMessageHandle.ClaimCheckStorageURI
-		externalStorage, err = util.GetExternalStorageWithDefaultTimeout(ctx, storageURI)
+		storage, err = util.GetExternalStorageWithDefaultTimeout(ctx, storageURI)
 		if err != nil {
 			return nil, errors.WrapError(errors.ErrKafkaInvalidConfig, err)
 		}
@@ -89,7 +86,7 @@ func NewDecoderWithStorage(
 		config:     config,
 		marshaller: m,
 
-		storage:      externalStorage,
+		storage:      storage,
 		upstreamTiDB: db,
 
 		memo:           common.NewTableInfoProvider(),
@@ -322,32 +319,14 @@ func (d *Decoder) GetCachedEvents() []*commonEvent.DMLEvent {
 	return result
 }
 
-// CachedCount returns the number of DML messages waiting for table info.
-func (d *Decoder) CachedCount() int {
-	return d.cachedMessages.Len()
-}
-
-// GetTableIDs identifies every table and partition whose events belong to the logical table.
-func (d *Decoder) GetTableIDs(schema, table string) []int64 {
-	return d.memo.GetBlockedTables(schema, table)
-}
-
 // PendingMessage holds a parsed Simple DML message awaiting its table schema.
 type PendingMessage struct {
-	msg *message
+	Schema        string
+	Table         string
+	SchemaVersion uint64
+	CommitTs      uint64
+	msg           *message
 }
-
-// Schema returns the target schema name of the pending DML.
-func (p *PendingMessage) Schema() string { return p.msg.Schema }
-
-// Table returns the target table name of the pending DML.
-func (p *PendingMessage) Table() string { return p.msg.Table }
-
-// SchemaVersion returns the table schema version required by the pending DML.
-func (p *PendingMessage) SchemaVersion() uint64 { return p.msg.SchemaVersion }
-
-// CommitTs returns the commit timestamp of the pending DML.
-func (p *PendingMessage) CommitTs() uint64 { return p.msg.CommitTs }
 
 // TakePendingDML detaches the current DML message so the caller can decode it
 // once the matching TableInfo becomes available.
@@ -357,7 +336,13 @@ func (d *Decoder) TakePendingDML() *PendingMessage {
 	}
 	msg := d.msg
 	d.msg = nil
-	return &PendingMessage{msg: msg}
+	return &PendingMessage{
+		Schema:        msg.Schema,
+		Table:         msg.Table,
+		SchemaVersion: msg.SchemaVersion,
+		CommitTs:      msg.CommitTs,
+		msg:           msg,
+	}
 }
 
 // DecodeDMLWithInfo assembles a pending DML message directly from tableInfo.

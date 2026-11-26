@@ -42,7 +42,6 @@ type Payload struct {
 	Partition int32
 	Key       []byte
 	Value     []byte
-	Bytes     int64
 	Offset    int64
 	// File is set for storage inputs that decode one file with its schema.
 	File *File
@@ -115,16 +114,6 @@ type Options struct {
 	ConsumerID    string
 	ReplicaConfig *config.ReplicaConfig
 	CodecConfig   *common.Config
-}
-
-// NewOptions builds source options for the upstream URI.
-func NewOptions(upstreamURI *url.URL, consumerID string, replicaConfig *config.ReplicaConfig, codecConfig *common.Config) Options {
-	return Options{
-		UpstreamURI:   upstreamURI,
-		ConsumerID:    consumerID,
-		ReplicaConfig: replicaConfig,
-		CodecConfig:   codecConfig,
-	}
 }
 
 // Open builds the reader for the upstream URI.

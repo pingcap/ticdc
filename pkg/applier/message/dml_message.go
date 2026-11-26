@@ -62,14 +62,6 @@ func NewDMLMessageRestorer(decode func([]byte) ([]*DMLMessage, error)) *DMLMessa
 	}
 }
 
-// NewDMLMessageData creates data shared by DMLMessages decoded from one input.
-func newDMLMessageData(
-	key, value []byte,
-	decode func([]byte) ([]*DMLMessage, error),
-) *DMLMessageData {
-	return NewDMLMessageDataWithRestorer(key, value, NewDMLMessageRestorer(decode))
-}
-
 // NewDMLMessageDataWithRestorer creates input data using a reusable decoder
 // context.
 func NewDMLMessageDataWithRestorer(

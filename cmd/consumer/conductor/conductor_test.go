@@ -44,10 +44,10 @@ func (s *stubReader) Close()                                          {}
 
 func TestConductorFlushDDLWithoutDML(t *testing.T) {
 	c := New(&stubReader{partitions: 0}, codecCommon.NewTableInfoProvider())
-	w := writer.New(t.Context(), writer.NewOptions(
-		"blackhole://",
-		config.GetDefaultReplicaConfig(),
-	))
+	w := writer.New(t.Context(), writer.Options{
+		DownstreamURI: "blackhole://",
+		ReplicaConfig: config.GetDefaultReplicaConfig(),
+	})
 
 	var flushed []string
 	for i, q := range []string{"CREATE TABLE test.t1 (id INT PRIMARY KEY)", "CREATE TABLE test.t2 (id INT PRIMARY KEY)"} {
@@ -174,7 +174,7 @@ func TestDDLBarrierScopeRenameExchangeAndCaseInsensitive(t *testing.T) {
 
 func TestConductorUnifiedWatermarkGateRowOrderAndHeapBlocking(t *testing.T) {
 	c := New(&stubReader{partitions: 0}, codecCommon.NewTableInfoProvider())
-	w := writer.New(t.Context(), writer.NewOptions("blackhole://", config.GetDefaultReplicaConfig()))
+	w := writer.New(t.Context(), writer.Options{DownstreamURI: "blackhole://", ReplicaConfig: config.GetDefaultReplicaConfig()})
 
 	writerCtx, cancel := context.WithCancel(t.Context())
 	writerDone := make(chan error, 1)
@@ -251,7 +251,7 @@ func TestConductorUnifiedWatermarkGateRowOrderAndHeapBlocking(t *testing.T) {
 func TestConductorEffectiveWatermarkPendingDecodeAndInvertedOrder(t *testing.T) {
 	schemas := codecCommon.NewTableInfoProvider()
 	c := New(&stubReader{partitions: 2}, schemas)
-	w := writer.New(t.Context(), writer.NewOptions("blackhole://", config.GetDefaultReplicaConfig()))
+	w := writer.New(t.Context(), writer.Options{DownstreamURI: "blackhole://", ReplicaConfig: config.GetDefaultReplicaConfig()})
 
 	writerCtx, cancel := context.WithCancel(t.Context())
 	writerDone := make(chan error, 1)
@@ -352,7 +352,7 @@ func TestConductorEffectiveWatermarkPendingDecodeAndInvertedOrder(t *testing.T) 
 
 func TestConductorBlockedTableReentersReadyHeapAndCreateTableLike(t *testing.T) {
 	c := New(&stubReader{partitions: 0}, codecCommon.NewTableInfoProvider())
-	w := writer.New(t.Context(), writer.NewOptions("blackhole://", config.GetDefaultReplicaConfig()))
+	w := writer.New(t.Context(), writer.Options{DownstreamURI: "blackhole://", ReplicaConfig: config.GetDefaultReplicaConfig()})
 
 	writerCtx, cancel := context.WithCancel(t.Context())
 	writerDone := make(chan error, 1)

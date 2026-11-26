@@ -34,7 +34,7 @@ func TestDecoderReusesTableInfo(t *testing.T) {
 	key := &messageKey{Schema: "test", Table: "t", Ts: 100}
 	cols := map[string]column{"id": {Type: mysql.TypeLong, Flag: primaryKeyFlag, Value: json.Number("1")}}
 	first := d.queryTableInfo(key, &messageRow{Update: cols})
-	_, cached := d.cachedTable(key)
+	_, cached := d.cache.ReadAt(key.Schema, key.Table, key.Ts)
 	require.Equal(t, mysql.TypeLong, cached.GetColumns()[0].GetType())
 	cols["id"] = column{Type: mysql.TypeLong, Flag: primaryKeyFlag, Value: json.Number("2")}
 	require.Same(t, first, d.queryTableInfo(key, &messageRow{Update: cols}))
@@ -73,7 +73,7 @@ func TestDeleteReusesCompleteTableInfo(t *testing.T) {
 	// A cold key-only delete does not seed the full-table cache.
 	cold := d.queryTableInfo(key, &messageRow{Delete: handle})
 	require.Len(t, cold.GetColumns(), 1)
-	_, cached := d.cachedTable(key)
+	_, cached := d.cache.ReadAt(key.Schema, key.Table, key.Ts)
 	require.Nil(t, cached)
 	cols := map[string]column{
 		"id": handle["id"],

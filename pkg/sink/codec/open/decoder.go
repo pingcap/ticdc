@@ -56,21 +56,18 @@ type decoder struct {
 	upstreamTiDB *sql.DB
 }
 
-// NewDecoder creates a new decoder.
+// NewDecoder creates a new decoder, reusing externalStorage when provided.
 func NewDecoder(
-	ctx context.Context, config *common.Config, db *sql.DB,
+	ctx context.Context, config *common.Config, db *sql.DB, externalStorage ...storeapi.Storage,
 ) (common.Decoder, error) {
-	return NewDecoderWithStorage(ctx, config, db, nil)
-}
-
-// NewDecoderWithStorage creates a new decoder reusing externalStorage when provided.
-func NewDecoderWithStorage(
-	ctx context.Context, config *common.Config, db *sql.DB, externalStorage storeapi.Storage,
-) (common.Decoder, error) {
+	var storage storeapi.Storage
+	if len(externalStorage) > 0 {
+		storage = externalStorage[0]
+	}
 	var err error
-	if externalStorage == nil && config.LargeMessageHandle.EnableClaimCheck() {
+	if storage == nil && config.LargeMessageHandle.EnableClaimCheck() {
 		storageURI := config.LargeMessageHandle.ClaimCheckStorageURI
-		externalStorage, err = util.GetExternalStorageWithDefaultTimeout(ctx, storageURI)
+		storage, err = util.GetExternalStorageWithDefaultTimeout(ctx, storageURI)
 		if err != nil {
 			return nil, err
 		}
@@ -84,7 +81,7 @@ func NewDecoderWithStorage(
 
 	return &decoder{
 		config:       config,
-		storage:      externalStorage,
+		storage:      storage,
 		upstreamTiDB: db,
 		cache:        common.NewTableInfoProvider(),
 	}, nil
@@ -293,7 +290,7 @@ func buildColumns(
 // layout as ordinary messages. Cached columns never retain row values.
 func (b *decoder) snapshotColumns(ctx context.Context, key *messageKey, ts uint64, conditions map[string]any, columns map[string]column) map[string]column {
 	schema, table := key.Schema, key.Table
-	_, info := b.cachedTable(key)
+	_, info := b.cache.ReadAt(key.Schema, key.Table, key.Ts)
 	if info == nil {
 		holder := common.MustSnapshotQuery(ctx, b.upstreamTiDB, ts, schema, table, conditions)
 		columns = buildColumns(holder, columns)
@@ -407,12 +404,8 @@ func (b *decoder) ShareTableInfo(cache *common.TableInfoProvider) {
 	b.cache = cache
 }
 
-func (b *decoder) cachedTable(key *messageKey) (uint64, *commonType.TableInfo) {
-	return b.cache.ReadAt(key.Schema, key.Table, key.Ts)
-}
-
 func (b *decoder) queryTableInfo(key *messageKey, value *messageRow) *commonType.TableInfo {
-	version, info := b.cachedTable(key)
+	version, info := b.cache.ReadAt(key.Schema, key.Table, key.Ts)
 	if info != nil {
 		id := info.TableName.TableID
 		key.Partition = &id

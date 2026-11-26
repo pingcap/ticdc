@@ -67,9 +67,9 @@ func NewEventDecoder(
 ) (common.Decoder, error) {
 	switch codecConfig.Protocol {
 	case config.ProtocolOpen, config.ProtocolDefault:
-		return open.NewDecoderWithStorage(ctx, codecConfig, upstreamTiDB, externalStorage)
+		return open.NewDecoder(ctx, codecConfig, upstreamTiDB, externalStorage)
 	case config.ProtocolCanalJSON:
-		return canal.NewDecoderWithStorage(ctx, codecConfig, upstreamTiDB, externalStorage)
+		return canal.NewDecoder(ctx, codecConfig, upstreamTiDB, externalStorage)
 	case config.ProtocolAvro:
 		if schemaM == nil {
 			var err error
@@ -80,7 +80,7 @@ func NewEventDecoder(
 		}
 		return avro.NewDecoder(codecConfig, schemaM, topic, upstreamTiDB), nil
 	case config.ProtocolSimple:
-		return simple.NewDecoderWithStorage(ctx, codecConfig, upstreamTiDB, externalStorage)
+		return simple.NewDecoder(ctx, codecConfig, upstreamTiDB, externalStorage)
 	case config.ProtocolDebezium:
 		return debezium.NewDecoder(codecConfig, upstreamTiDB), nil
 	case config.ProtocolDebeziumAvro:

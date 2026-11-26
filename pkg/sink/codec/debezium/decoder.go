@@ -125,7 +125,7 @@ func (d *decoder) NextResolvedEvent() uint64 {
 	if len(d.valuePayload) == 0 {
 		log.Panic("next resolved event failed, since value payload is empty")
 	}
-	commitTs := d.getCommitTs()
+	commitTs := getCommitTsFromPayload(d.valuePayload)
 	d.clear()
 	return commitTs
 }
@@ -137,11 +137,11 @@ func (d *decoder) NextDDLEvent() *commonEvent.DDLEvent {
 	}
 	defer d.clear()
 
-	schemaName := d.getSchemaName()
-	tableName := d.getTableName()
+	schemaName := getSchemaNameFromPayload(d.valuePayload)
+	tableName := getTableNameFromPayload(d.valuePayload)
 
 	event := new(commonEvent.DDLEvent)
-	event.FinishedTs = d.getCommitTs()
+	event.FinishedTs = getCommitTsFromPayload(d.valuePayload)
 	event.SchemaName = schemaName
 	event.TableName = tableName
 	event.Query = d.valuePayload["ddl"].(string)
@@ -250,10 +250,6 @@ func (d *decoder) assembleDMLEventFromPayload(
 	return event
 }
 
-func (d *decoder) getCommitTs() uint64 {
-	return getCommitTsFromPayload(d.valuePayload)
-}
-
 func getCommitTsFromPayload(valuePayload map[string]any) uint64 {
 	source := valuePayload["source"].(map[string]any)
 	commitTs, err := source["commit_ts"].(json.Number).Int64()
@@ -290,17 +286,9 @@ func getStartTsFromPayload(valuePayload map[string]any) (uint64, bool) {
 	return uint64(ts), true
 }
 
-func (d *decoder) getSchemaName() string {
-	return getSchemaNameFromPayload(d.valuePayload)
-}
-
 func getSchemaNameFromPayload(valuePayload map[string]any) string {
 	source := valuePayload["source"].(map[string]any)
 	return source["db"].(string)
-}
-
-func (d *decoder) getTableName() string {
-	return getTableNameFromPayload(d.valuePayload)
 }
 
 func getTableNameFromPayload(valuePayload map[string]any) string {

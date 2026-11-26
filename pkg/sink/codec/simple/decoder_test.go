@@ -177,7 +177,7 @@ func TestCachedDMLReturnsMessage(t *testing.T) {
 	require.Equal(t, table, dmlEvent.TableInfo.GetTableName())
 	require.Equal(t, commitTs, dmlEvent.CommitTs)
 	require.Equal(t, []commonType.RowType{commonType.RowTypeInsert}, dmlEvent.RowTypes)
-	require.ElementsMatch(t, []int64{logicalTableID, physicalTableID}, decoder.GetTableIDs(schema, table))
+	require.ElementsMatch(t, []int64{logicalTableID, physicalTableID}, decoder.memo.GetBlockedTables(schema, table))
 
 	require.Equal(t, physicalTableID, dmlEvent.GetTableID())
 	require.Equal(t, schema, dmlEvent.TableInfo.GetSchemaName())
