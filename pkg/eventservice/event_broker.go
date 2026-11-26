@@ -1376,10 +1376,6 @@ func (c *eventBroker) addDispatcher(info DispatcherInfo) error {
 	}
 
 	if existing := c.getDispatcher(id); existing != nil {
-		if !sameDispatcherOwner(existing.Load().info, info) {
-			return errors.ErrDispatcherFailed.GenWithStack(
-				"dispatcher registration does not match the existing owner")
-		}
 		// REGISTER may be a retry or a recreated collector starting at epoch zero.
 		// Release the old store registrations before replacing their ID mappings,
 		// then let the new dispatcher follow the normal Ready/RESET handshake.
@@ -1496,13 +1492,6 @@ func (c *eventBroker) removeDispatcher(dispatcherInfo DispatcherInfo) {
 	}
 
 	stat := statPtr.(*atomic.Pointer[dispatcherStat]).Load()
-	if !sameDispatcherOwner(stat.info, dispatcherInfo) {
-		log.Warn("ignore dispatcher removal from a different owner",
-			zap.Stringer("dispatcherID", id),
-			zap.String("requestServerID", dispatcherInfo.GetServerID()),
-			zap.String("ownerServerID", stat.info.GetServerID()))
-		return
-	}
 	stat.markRemoved()
 	c.removeSchemaBlockedDispatcher(stat)
 	if err := c.cleanupLargeTxnState(stat); err != nil {
@@ -1581,10 +1570,6 @@ func (c *eventBroker) resetDispatcher(dispatcherInfo DispatcherInfo) error {
 	eventServiceResetDispatcherCount.Inc()
 
 	oldStat := statPtr.Load()
-	if !sameDispatcherOwner(oldStat.info, dispatcherInfo) {
-		return errors.ErrDispatcherFailed.GenWithStack(
-			"dispatcher reset does not match the existing owner")
-	}
 	// stale reset request, ignore it.
 	if oldStat.epoch >= dispatcherInfo.GetEpoch() {
 		return nil
@@ -1645,10 +1630,6 @@ func (c *eventBroker) resetDispatcher(dispatcherInfo DispatcherInfo) error {
 			zap.Uint64("newEpoch", newStat.epoch))
 		// The dispatcher is changed concurrently, retry it.
 		oldStat = statPtr.Load()
-		if !sameDispatcherOwner(oldStat.info, dispatcherInfo) {
-			return errors.ErrDispatcherFailed.GenWithStack(
-				"dispatcher reset does not match the existing owner")
-		}
 		// stale reset request, ignore it.
 		if oldStat.epoch >= dispatcherInfo.GetEpoch() {
 			return nil
@@ -1674,12 +1655,6 @@ func (c *eventBroker) resetDispatcher(dispatcherInfo DispatcherInfo) error {
 	c.requestScan(newStat)
 
 	return nil
-}
-
-func sameDispatcherOwner(existing, request DispatcherInfo) bool {
-	return existing.GetClusterID() == request.GetClusterID() &&
-		existing.GetServerID() == request.GetServerID() &&
-		existing.GetTableSpan().GetKeyspaceID() == request.GetTableSpan().GetKeyspaceID()
 }
 
 func (c *eventBroker) cleanupLargeTxnState(stat *dispatcherStat) error {
