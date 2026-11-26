@@ -16,6 +16,7 @@ package conductor
 
 import (
 	"context"
+	"sync"
 	"sync/atomic"
 	"testing"
 
@@ -28,6 +29,7 @@ import (
 	codecCommon "github.com/pingcap/ticdc/pkg/sink/codec/common"
 	timodel "github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/tidb/pkg/parser/ast"
+	"github.com/pingcap/tidb/pkg/util/chunk"
 	"github.com/stretchr/testify/require"
 )
 
@@ -167,4 +169,80 @@ func TestDDLBarrierScopeRenameExchangeAndCaseInsensitive(t *testing.T) {
 	}
 	require.True(t, ddl.BlocksTable(alterRename, dml))
 	require.True(t, ddl.BlocksTable(renameTables, dml))
+}
+
+func TestConductorUnifiedWatermarkGateRowOrderAndHeapBlocking(t *testing.T) {
+	c := New(&stubReader{partitions: 0}, codecCommon.NewTableInfoProvider())
+	w := writer.New(t.Context(), writer.NewOptions("blackhole://", config.GetDefaultReplicaConfig()))
+
+	writerCtx, cancel := context.WithCancel(t.Context())
+	writerDone := make(chan error, 1)
+	go func() {
+		writerDone <- w.Start(writerCtx)
+	}()
+	defer func() {
+		cancel()
+		<-writerDone
+	}()
+
+	t1Info := commonType.WrapTableInfo("test", &timodel.TableInfo{ID: 1, Name: ast.NewCIStr("t1")})
+	t2Info := commonType.WrapTableInfo("test", &timodel.TableInfo{ID: 2, Name: ast.NewCIStr("t2")})
+
+	var mu sync.Mutex
+	var flushed []string
+	record := func(label string) func() {
+		return func() {
+			mu.Lock()
+			flushed = append(flushed, label)
+			mu.Unlock()
+		}
+	}
+	newDML := func(tableID int64, info *commonType.TableInfo, commitTs uint64, rt commonType.RowType, label string) *commonEvent.DMLEvent {
+		dml := &commonEvent.DMLEvent{
+			PhysicalTableID: tableID,
+			CommitTs:        commitTs,
+			TableInfo:       info,
+			Rows:            chunk.NewChunkWithCapacity(nil, 0),
+			RowTypes:        []commonType.RowType{rt},
+			Length:          1,
+		}
+		dml.AddPostFlushFunc(record(label))
+		return dml
+	}
+
+	require.NoError(t, c.accept(newDML(1, t1Info, 150, commonType.RowTypeInsert, "t1:insert@150"), &source.Payload{}))
+	require.NoError(t, c.accept(newDML(1, t1Info, 150, commonType.RowTypeDelete, "t1:delete@150"), &source.Payload{}))
+	ddl150 := &commonEvent.DDLEvent{
+		FinishedTs: 150,
+		Type:       byte(timodel.ActionAddColumn),
+		SchemaName: "test",
+		TableName:  "t1",
+		Query:      "ALTER TABLE test.t1 ADD COLUMN c INT",
+	}
+	ddl150.AddPostFlushFunc(record("t1:ddl@150"))
+	require.NoError(t, c.accept(ddl150, &source.Payload{}))
+	require.NoError(t, c.accept(newDML(1, t1Info, 160, commonType.RowTypeInsert, "t1:insert@160"), &source.Payload{}))
+	require.NoError(t, c.accept(newDML(2, t2Info, 130, commonType.RowTypeInsert, "t2:insert@130"), &source.Payload{}))
+
+	c.advanceWatermark(140, 0)
+	require.NoError(t, c.flush(t.Context(), w))
+	require.Equal(t, []string{"t2:insert@130"}, flushed)
+	require.Equal(t, uint64(140), w.Checkpoint())
+	require.Len(t, c.readyHeap, 1)
+	require.Empty(t, c.blockedHeap)
+
+	c.advanceWatermark(150, 0)
+	require.NoError(t, c.flush(t.Context(), w))
+	require.Equal(t, []string{"t2:insert@130", "t1:delete@150", "t1:insert@150", "t1:ddl@150"}, flushed)
+	require.Equal(t, uint64(150), w.Checkpoint())
+	require.Len(t, c.readyHeap, 1)
+	require.Empty(t, c.blockedHeap)
+
+	c.advanceWatermark(160, 0)
+	require.NoError(t, c.flush(t.Context(), w))
+	require.Equal(t, []string{"t2:insert@130", "t1:delete@150", "t1:insert@150", "t1:ddl@150", "t1:insert@160"}, flushed)
+	require.Equal(t, uint64(160), w.Checkpoint())
+	require.Empty(t, c.readyHeap)
+	require.Empty(t, c.blockedHeap)
+	require.Empty(t, c.pendingDML)
 }

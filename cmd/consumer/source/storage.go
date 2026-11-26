@@ -86,7 +86,6 @@ type storageReader struct {
 	pathTableKeys    map[string]string
 	fileIndices      map[cloudstorage.DMLPathKey]map[cloudstorage.FileIndexKey]uint64
 	ddlWatermarks    map[string]uint64
-	pendingSchema    chan struct{} // Header decoding determines the next file groups.
 	mu               sync.Mutex
 	ranges           []storageRange
 	scanned          bool
@@ -405,21 +404,6 @@ func (c *storageReader) Read(ctx context.Context) ([]*Payload, error) {
 	if err := context.Cause(ctx); err != nil {
 		return nil, err
 	}
-	c.mu.Lock()
-	pendingSchema := c.pendingSchema
-	c.mu.Unlock()
-	if pendingSchema != nil {
-		select {
-		case <-ctx.Done():
-			return nil, context.Cause(ctx)
-		case <-pendingSchema:
-			c.mu.Lock()
-			if c.pendingSchema == pendingSchema {
-				c.pendingSchema = nil
-			}
-			c.mu.Unlock()
-		}
-	}
 	if len(c.ranges) == 0 {
 		if c.scanned && c.sourceCheckpoint > c.watermark {
 			c.watermark = c.sourceCheckpoint
@@ -457,10 +441,6 @@ func (c *storageReader) Read(ctx context.Context) ([]*Payload, error) {
 		return nil, nil
 	}
 	if key.IsSchemaFileDMLPathKey() {
-		pendingSchema = make(chan struct{})
-		c.mu.Lock()
-		c.pendingSchema = pendingSchema
-		c.mu.Unlock()
 		return []*Payload{{File: &File{Schema: schema}}}, nil
 	}
 	schemaName, tableName := key.Schema, key.Table
@@ -558,11 +538,6 @@ func (c *storageReader) MarkProcessed(tables []event.SchemaTableName, timestamp 
 	for _, table := range tables {
 		key := common.QuoteSchema(table.SchemaName, table.TableName)
 		c.ddlWatermarks[key] = max(c.ddlWatermarks[key], timestamp)
-	}
-	// The schema DDL is delivered, so the rows that depend on it can be read.
-	if c.pendingSchema != nil {
-		close(c.pendingSchema)
-		c.pendingSchema = nil
 	}
 }
 

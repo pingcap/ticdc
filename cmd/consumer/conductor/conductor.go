@@ -17,6 +17,7 @@ package conductor
 
 import (
 	"cmp"
+	"container/heap"
 	"context"
 	"maps"
 	"math"
@@ -29,6 +30,7 @@ import (
 	"github.com/pingcap/ticdc/cmd/consumer/decode"
 	"github.com/pingcap/ticdc/cmd/consumer/source"
 	"github.com/pingcap/ticdc/cmd/consumer/writer"
+	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/errors"
 	codecCommon "github.com/pingcap/ticdc/pkg/sink/codec/common"
@@ -144,11 +146,145 @@ func (c *Conductor) accept(e event.Event, payload *source.Payload) error {
 	return nil
 }
 
+// tableQueue holds one table's pending DMLs ordered by (CommitTs, dmlRowOrder).
+type tableQueue struct {
+	tableID   int64
+	rows      []*dmlTask
+	blocked   bool
+	heapIndex int
+}
+
+type tableHeap []*tableQueue
+
+func (h tableHeap) Len() int { return len(h) }
+
+func (h tableHeap) Less(i, j int) bool {
+	a, b := h[i], h[j]
+	if a.rows[0].dml.CommitTs != b.rows[0].dml.CommitTs {
+		return a.rows[0].dml.CommitTs < b.rows[0].dml.CommitTs
+	}
+	if oa, ob := dmlRowOrder(a.rows[0].dml), dmlRowOrder(b.rows[0].dml); oa != ob {
+		return oa < ob
+	}
+	return a.tableID < b.tableID
+}
+
+func (h tableHeap) Swap(i, j int) {
+	h[i], h[j] = h[j], h[i]
+	h[i].heapIndex = i
+	h[j].heapIndex = j
+}
+
+func (h *tableHeap) Push(x any) {
+	q := x.(*tableQueue)
+	q.heapIndex = len(*h)
+	*h = append(*h, q)
+}
+
+func (h *tableHeap) Pop() any {
+	old := *h
+	n := len(old)
+	q := old[n-1]
+	old[n-1] = nil
+	q.heapIndex = -1
+	*h = old[:n-1]
+	return q
+}
+
+// dmlRowOrder orders same-table, same-CommitTs events when a split UPDATE
+// (DELETE + INSERT) or same-transaction DELETE/UPDATE/INSERT pair arrives out of
+// order across partitions or storage files.
+func dmlRowOrder(dml *event.DMLEvent) int {
+	if len(dml.RowTypes) == 0 {
+		return 1
+	}
+	first := dml.RowTypes[0]
+	for _, rt := range dml.RowTypes[1:] {
+		if rt != first {
+			return 1
+		}
+	}
+	switch first {
+	case common.RowTypeDelete:
+		return 0
+	case common.RowTypeInsert:
+		return 2
+	default:
+		return 1
+	}
+}
+
+func dmlBefore(a, b *dmlTask) bool {
+	if a.dml.CommitTs != b.dml.CommitTs {
+		return a.dml.CommitTs < b.dml.CommitTs
+	}
+	return dmlRowOrder(a.dml) < dmlRowOrder(b.dml)
+}
+
+func insertDML(rows []*dmlTask, item *dmlTask) ([]*dmlTask, bool) {
+	if len(rows) == 0 || !dmlBefore(item, rows[len(rows)-1]) {
+		return append(rows, item), len(rows) == 0
+	}
+	index := sort.Search(len(rows), func(i int) bool {
+		return dmlBefore(item, rows[i])
+	})
+	return slices.Insert(rows, index, item), index == 0
+}
+
+func (c *Conductor) rowBlockedByDDL(item *dmlTask) bool {
+	for _, block := range c.pendingDDL {
+		if item.dml.CommitTs > block.GetCommitTs() && ddl.BlocksTable(block, item.dml) {
+			return true
+		}
+	}
+	return false
+}
+
+func (c *Conductor) syncTable(q *tableQueue) {
+	blocked := c.rowBlockedByDDL(q.rows[0])
+	if blocked == q.blocked {
+		if blocked {
+			heap.Fix(&c.blockedHeap, q.heapIndex)
+		} else {
+			heap.Fix(&c.readyHeap, q.heapIndex)
+		}
+		return
+	}
+	if q.blocked {
+		heap.Remove(&c.blockedHeap, q.heapIndex)
+		q.blocked = false
+		heap.Push(&c.readyHeap, q)
+		return
+	}
+	heap.Remove(&c.readyHeap, q.heapIndex)
+	q.blocked = true
+	heap.Push(&c.blockedHeap, q)
+}
+
 // queueDML records a decoded row until the writer can accept it.
 func (c *Conductor) queueDML(item *dmlTask) {
-	rows := c.pendingDML[item.dml.PhysicalTableID]
-	// A source may deliver an earlier timestamp before resolution.
-	c.pendingDML[item.dml.PhysicalTableID] = insertSorted(rows, item.dml.CommitTs, item, commitTsOfDML)
+	tableID := item.dml.PhysicalTableID
+	q := c.pendingDML[tableID]
+	if q == nil {
+		q = &tableQueue{
+			tableID: tableID,
+			rows:    []*dmlTask{item},
+			blocked: c.rowBlockedByDDL(item),
+		}
+		c.pendingDML[tableID] = q
+		if q.blocked {
+			heap.Push(&c.blockedHeap, q)
+		} else {
+			heap.Push(&c.readyHeap, q)
+		}
+		return
+	}
+	var headChanged bool
+	// A source may deliver an earlier timestamp or split DELETE before resolution.
+	q.rows, headChanged = insertDML(q.rows, item)
+	if headChanged {
+		c.syncTable(q)
+	}
 }
 
 // queueDDL records a DDL once. Replicas of the same DDL are dropped.
@@ -161,10 +297,17 @@ func (c *Conductor) queueDDL(ddlEvent *event.DDLEvent) {
 	c.pendingDDL = insertSorted(c.pendingDDL, ddlEvent.GetCommitTs(), ddlEvent, func(block *event.DDLEvent) uint64 {
 		return block.GetCommitTs()
 	})
-}
-
-func commitTsOfDML(item *dmlTask) uint64 {
-	return item.dml.CommitTs
+	var blocked []*tableQueue
+	for _, q := range c.readyHeap {
+		if q.rows[0].dml.CommitTs > ddlEvent.GetCommitTs() && ddl.BlocksTable(ddlEvent, q.rows[0].dml) {
+			blocked = append(blocked, q)
+		}
+	}
+	for _, q := range blocked {
+		heap.Remove(&c.readyHeap, q.heapIndex)
+		q.blocked = true
+		heap.Push(&c.blockedHeap, q)
+	}
 }
 
 // insertSorted appends item unless it precedes the last element, in which case
@@ -193,7 +336,7 @@ func (c *Conductor) nextReady() (*event.DDLEvent, *dmlTask) {
 
 // ddlReady reports whether every row before the DDL has been read.
 func (c *Conductor) ddlReady(ddl *event.DDLEvent) bool {
-	if len(c.partitionWatermarks) == 0 || ddl.GetCommitTs() <= c.watermark {
+	if ddl.GetCommitTs() <= c.watermark {
 		return true
 	}
 	// Creating a schema or standalone table cannot depend on earlier rows.
@@ -208,63 +351,49 @@ func (c *Conductor) ddlReady(ddl *event.DDLEvent) bool {
 
 // rowsBefore reports whether a ready row must be written before the DDL.
 func (c *Conductor) rowsBefore(block *event.DDLEvent) bool {
-	for _, rows := range c.pendingDML {
-		if len(rows) == 0 {
-			continue
-		}
-		row := rows[0]
-		if row.dml.CommitTs > block.GetCommitTs() || !ddl.BlocksTable(block, row.dml) {
-			continue
-		}
-		if c.rowReady(row) {
-			return true
-		}
-	}
-	return false
+	return c.hasRowBefore(0, min(c.watermark, block.GetCommitTs()), block)
 }
 
-// rowReady reports whether the watermark covers the row and no pending DDL
-// changes its table. A source without partitions orders its inputs itself.
-func (c *Conductor) rowReady(item *dmlTask) bool {
-	if len(c.partitionWatermarks) != 0 && item.dml.CommitTs > c.watermark {
+func (c *Conductor) hasRowBefore(index int, limit uint64, block *event.DDLEvent) bool {
+	if index >= len(c.readyHeap) {
 		return false
 	}
-	for _, block := range c.pendingDDL {
-		if item.dml.CommitTs > block.GetCommitTs() && ddl.BlocksTable(block, item.dml) {
-			return false
-		}
+	row := c.readyHeap[index].rows[0]
+	if row.dml.CommitTs > limit {
+		return false
 	}
-	return true
+	if ddl.BlocksTable(block, row.dml) {
+		return true
+	}
+	return c.hasRowBefore(2*index+1, limit, block) || c.hasRowBefore(2*index+2, limit, block)
 }
 
 // nextDML returns the earliest row that can be written.
 func (c *Conductor) nextDML() *dmlTask {
-	var first *dmlTask
-	for _, rows := range c.pendingDML {
-		if len(rows) == 0 {
-			continue
-		}
-		row := rows[0]
-		if !c.rowReady(row) {
-			continue
-		}
-		if first == nil || row.dml.CommitTs < first.dml.CommitTs ||
-			(row.dml.CommitTs == first.dml.CommitTs && row.dml.PhysicalTableID < first.dml.PhysicalTableID) {
-			first = row
-		}
+	if len(c.readyHeap) == 0 {
+		return nil
 	}
-	return first
+	head := c.readyHeap[0].rows[0]
+	if head.dml.CommitTs > c.watermark {
+		return nil
+	}
+	return head
 }
 
 func (c *Conductor) popDML(row *dmlTask) {
-	table := row.dml.PhysicalTableID
-	rows := c.pendingDML[table]
-	rows[0] = nil
-	if len(rows) > 1 {
-		c.pendingDML[table] = rows[1:]
+	q := c.pendingDML[row.dml.PhysicalTableID]
+	q.rows[0] = nil
+	q.rows = q.rows[1:]
+	if len(q.rows) == 0 {
+		if q.blocked {
+			heap.Remove(&c.blockedHeap, q.heapIndex)
+		} else {
+			heap.Remove(&c.readyHeap, q.heapIndex)
+		}
+		delete(c.pendingDML, q.tableID)
 		return
 	}
-	delete(c.pendingDML, table)
+	c.syncTable(q)
 }
 
 func (c *Conductor) popDDL() *event.DDLEvent {
@@ -272,6 +401,17 @@ func (c *Conductor) popDDL() *event.DDLEvent {
 	delete(c.queuedDDLs, ddl.KeyOf(head))
 	c.pendingDDL[0] = nil
 	c.pendingDDL = c.pendingDDL[1:]
+	var unblocked []*tableQueue
+	for _, q := range c.blockedHeap {
+		if !c.rowBlockedByDDL(q.rows[0]) {
+			unblocked = append(unblocked, q)
+		}
+	}
+	for _, q := range unblocked {
+		heap.Remove(&c.blockedHeap, q.heapIndex)
+		q.blocked = false
+		heap.Push(&c.readyHeap, q)
+	}
 	return head
 }
 
@@ -333,9 +473,11 @@ type Conductor struct {
 	partitionWatermarks []uint64
 	watermark           uint64
 
-	pendingDML map[int64][]*dmlTask
-	pendingDDL []*event.DDLEvent
-	queuedDDLs map[ddl.Key]struct{}
+	pendingDML  map[int64]*tableQueue
+	readyHeap   tableHeap
+	blockedHeap tableHeap
+	pendingDDL  []*event.DDLEvent
+	queuedDDLs  map[ddl.Key]struct{}
 }
 
 func New(reader source.Reader, schemas *codecCommon.TableInfoProvider) *Conductor {
@@ -346,7 +488,7 @@ func New(reader source.Reader, schemas *codecCommon.TableInfoProvider) *Conducto
 		checkpoint:          new(atomic.Uint64),
 		positions:           make(map[int32][]sourcePosition),
 		partitionWatermarks: make([]uint64, reader.Partitions()),
-		pendingDML:          make(map[int64][]*dmlTask),
+		pendingDML:          make(map[int64]*tableQueue),
 		queuedDDLs:          make(map[ddl.Key]struct{}),
 	}
 	if validator, ok := reader.(source.Validator); ok {
@@ -386,13 +528,14 @@ func (c *Conductor) advanceWatermark(ts uint64, partition int32) {
 // the earliest pending timestamp so the writer never checkpoints past it.
 func (c *Conductor) advanceWriter(w *writer.Writer) {
 	var pending uint64
-	for _, rows := range c.pendingDML {
-		if len(rows) != 0 {
-			pending = earliest(pending, rows[0].dml.CommitTs)
-		}
+	if len(c.readyHeap) != 0 {
+		pending = earliest(pending, c.readyHeap[0].rows[0].dml.CommitTs)
 	}
-	for _, block := range c.pendingDDL {
-		pending = earliest(pending, block.GetCommitTs())
+	if len(c.blockedHeap) != 0 {
+		pending = earliest(pending, c.blockedHeap[0].rows[0].dml.CommitTs)
+	}
+	if len(c.pendingDDL) != 0 {
+		pending = earliest(pending, c.pendingDDL[0].GetCommitTs())
 	}
 	w.Advance(writer.Progress{Watermark: c.watermark, Pending: pending})
 }
