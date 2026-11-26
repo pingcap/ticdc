@@ -16,6 +16,7 @@ package util
 import (
 	"net"
 	"net/url"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -97,6 +98,9 @@ var sensitiveQueryParameterNames = []string{
 
 func isSensitiveQueryParameter(name string) bool {
 	name = strings.ToLower(name)
+	if name == "sig" {
+		return true
+	}
 	if name == "kafka-client" {
 		return false // Selects the Kafka client implementation, not a credential.
 	}
@@ -106,6 +110,16 @@ func isSensitiveQueryParameter(name string) bool {
 		}
 	}
 	return false
+}
+
+// endpointContainsSensitiveData treats nested endpoint URL parameters as
+// credentials because storage providers can use arbitrary authentication keys.
+func endpointContainsSensitiveData(endpoint string) bool {
+	parsed, err := url.Parse(endpoint)
+	if err != nil {
+		return true
+	}
+	return parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != ""
 }
 
 // maskSensitiveDataInQueryLikeText handles fragment-like request target text
@@ -122,13 +136,22 @@ func maskSensitiveDataInQueryLikeText(text string) (string, bool) {
 	parts := strings.Split(queryText, "&")
 	masked := false
 	for i, part := range parts {
-		name, _, hasValue := strings.Cut(part, "=")
+		name, value, hasValue := strings.Cut(part, "=")
 		if !hasValue {
 			continue
 		}
 		decodedName, err := url.QueryUnescape(name)
-		if err != nil || !isSensitiveQueryParameter(decodedName) {
+		if err != nil {
 			continue
+		}
+		if !isSensitiveQueryParameter(decodedName) {
+			if !strings.EqualFold(decodedName, "endpoint") {
+				continue
+			}
+			endpoint, err := url.QueryUnescape(value)
+			if err == nil && !endpointContainsSensitiveData(endpoint) {
+				continue
+			}
 		}
 		parts[i] = name + "=xxxxx"
 		masked = true
@@ -161,8 +184,11 @@ func ContainsSensitiveDataInURI(uri string) bool {
 	if err != nil {
 		return true
 	}
-	for name := range query {
+	for name, values := range query {
 		if isSensitiveQueryParameter(name) {
+			return true
+		}
+		if strings.EqualFold(name, "endpoint") && slices.ContainsFunc(values, endpointContainsSensitiveData) {
 			return true
 		}
 	}
@@ -179,8 +205,12 @@ func MaskSensitiveDataInURI(uri string) string {
 		return ""
 	}
 	queries := uriParsed.Query()
-	for key := range queries {
+	for key, values := range queries {
 		if isSensitiveQueryParameter(key) {
+			queries.Set(key, "xxxxx")
+			continue
+		}
+		if strings.EqualFold(key, "endpoint") && slices.ContainsFunc(values, endpointContainsSensitiveData) {
 			queries.Set(key, "xxxxx")
 		}
 	}

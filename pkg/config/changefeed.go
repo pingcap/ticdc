@@ -213,6 +213,7 @@ type ChangefeedConfig struct {
 	// Epoch is the epoch of a changefeed, changes on every restart.
 	Epoch                         uint64        `json:"epoch"`
 	BDRMode                       bool          `json:"bdr_mode" default:"false"`
+	AllowSameCluster              bool          `json:"allow_same_cluster" default:"false"`
 	EnableActiveActive            bool          `json:"enable_active_active" default:"false"`
 	ActiveActiveProgressInterval  time.Duration `json:"active_active_progress_interval" default:"30m"`
 	ActiveActiveSyncStatsInterval time.Duration `json:"active_active_sync_stats_interval" default:"1m"`
@@ -238,7 +239,13 @@ func (cfg *ChangefeedConfig) String() string {
 		log.Error("failed to unmarshal changefeed config", zap.Error(err))
 		return ""
 	}
-	cloned.SinkConfig.MaskSensitiveData()
+	cloned.SinkURI = util.MaskSensitiveDataInURI(cloned.SinkURI)
+	if cloned.SinkConfig != nil {
+		cloned.SinkConfig.MaskSensitiveData()
+	}
+	if cloned.Consistent != nil {
+		cloned.Consistent.MaskSensitiveData()
+	}
 	res, err := json.Marshal(cloned)
 	if err != nil {
 		log.Error("failed to marshal changefeed config", zap.Error(err))
@@ -309,6 +316,7 @@ func (info *ChangeFeedInfo) ToChangefeedConfig() *ChangefeedConfig {
 		EventCollectorBatchBytes:      info.Config.EventCollectorBatchBytes,
 		Epoch:                         info.Epoch,
 		BDRMode:                       util.GetOrZero(info.Config.BDRMode),
+		AllowSameCluster:              util.GetOrZero(info.Config.AllowSameCluster),
 		EnableActiveActive:            util.GetOrZero(info.Config.EnableActiveActive),
 		ActiveActiveProgressInterval:  util.GetOrZero(info.Config.ActiveActiveProgressInterval),
 		ActiveActiveSyncStatsInterval: util.GetOrZero(info.Config.ActiveActiveSyncStatsInterval),
