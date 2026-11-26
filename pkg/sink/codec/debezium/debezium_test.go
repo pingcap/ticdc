@@ -120,7 +120,7 @@ func TestEncodeRoutedDMLEventUsesTargetNames(t *testing.T) {
 	messages := encoder.Build()
 	require.Len(t, messages, 1)
 
-	decoder := NewDecoder(cfg, 0, nil)
+	decoder := NewDecoder(cfg, nil)
 	decoder.AddKeyValue(messages[0].Key, messages[0].Value)
 
 	messageType, hasNext := decoder.HasNext()
@@ -214,7 +214,7 @@ func TestDebeziumNumericStringHandling(t *testing.T) {
 			require.Equal(t, "int64", signedField["type"])
 			require.Equal(t, json.Number("9223372036854775807"), signedField["default"])
 
-			decoder := NewDecoder(cfg, 0, nil)
+			decoder := NewDecoder(cfg, nil)
 			decoder.AddKeyValue(messages[0].Key, messages[0].Value)
 			decoded := decoder.NextDMLMessage().ToDMLEvent()
 			change, ok := decoded.GetNextRow()
@@ -236,7 +236,7 @@ func TestEncodeRoutedDDLEventUsesTargetNames(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, message)
 
-	decoder := NewDecoder(cfg, 0, nil)
+	decoder := NewDecoder(cfg, nil)
 	decoder.AddKeyValue(message.Key, message.Value)
 
 	messageType, hasNext := decoder.HasNext()
@@ -248,47 +248,6 @@ func TestEncodeRoutedDDLEventUsesTargetNames(t *testing.T) {
 	require.Equal(t, "target_table", decoded.TableName)
 	require.Equal(t, routedDDL.Query, decoded.Query)
 }
-
-func TestDebeziumNextDDLEventInvalidatesSharedCache(t *testing.T) {
-	cfg := common.NewConfig(config.ProtocolDebezium)
-	cfg.EnableTiDBExtension = true
-	cfg.TimeZone = time.UTC
-
-	encoder := NewBatchEncoder(cfg, "dbserver1")
-	provider := common.NewTableInfoProvider()
-	dec := NewDecoder(cfg, 0, nil).(*decoder)
-	dec.ShareTableInfo(provider)
-
-	t1 := commonType.WrapTableInfo("test", &model.TableInfo{ID: 1, Name: ast.NewCIStr("t1"), UpdateTS: 100})
-	t2 := commonType.WrapTableInfo("other", &model.TableInfo{ID: 2, Name: ast.NewCIStr("t2"), UpdateTS: 100})
-	provider.WriteTableInfo(t1)
-	provider.WriteTableInfo(t2)
-
-	msg, err := encoder.EncodeDDLEvent(&commonEvent.DDLEvent{
-		FinishedTs:      120,
-		Type:            byte(model.ActionExchangeTablePartition),
-		SchemaName:      "test",
-		TableName:       "t1",
-		ExtraSchemaName: "test",
-		ExtraTableName:  "t_normal",
-		TableInfo:       t1,
-		Query:           "ALTER TABLE test.t1 EXCHANGE PARTITION p0 WITH TABLE test.t_normal",
-	})
-	require.NoError(t, err)
-	dec.AddKeyValue(msg.Key, msg.Value)
-	tp, hasNext := dec.HasNext()
-	require.True(t, hasNext)
-	require.Equal(t, common.MessageTypeDDL, tp)
-	_ = dec.NextDDLEvent()
-
-	_, before := provider.ReadAt("other", "t2", 120)
-	require.Same(t, t2, before)
-	_, afterT1 := provider.ReadAt("test", "t1", 121)
-	require.Nil(t, afterT1)
-	_, afterT2 := provider.ReadAt("other", "t2", 121)
-	require.Nil(t, afterT2)
-}
-
 func TestDebeziumSuiteEnableSchema(t *testing.T) {
 	suite.Run(t, &debeziumSuite{
 		disableSchema: false,
@@ -390,7 +349,7 @@ func TestEncodeStartTsInSource(t *testing.T) {
 	messages2 := encoder2.Build()
 	require.Len(t, messages2, 1)
 
-	decoder := NewDecoder(cfg2, 0, nil)
+	decoder := NewDecoder(cfg2, nil)
 	decoder.AddKeyValue(messages2[0].Key, messages2[0].Value)
 	messageType, hasNext := decoder.HasNext()
 	require.True(t, hasNext)
@@ -427,7 +386,7 @@ func TestDecodeStartTsFallbackToCommitTs(t *testing.T) {
 	require.NotNil(t, sourceSchema)
 	require.Nil(t, schemaFieldsByName(t, sourceSchema, "start_ts"))
 
-	decoder := NewDecoder(cfg, 0, nil)
+	decoder := NewDecoder(cfg, nil)
 	decoder.AddKeyValue(messages[0].Key, messages[0].Value)
 	messageType, hasNext := decoder.HasNext()
 	require.True(t, hasNext)
@@ -469,7 +428,7 @@ func TestDecodeNonPositiveStartTsFallbackToCommitTs(t *testing.T) {
 			valueBytes, err := json.Marshal(value)
 			require.NoError(t, err)
 
-			decoder := NewDecoder(cfg, 0, nil)
+			decoder := NewDecoder(cfg, nil)
 			decoder.AddKeyValue(messages[0].Key, valueBytes)
 			messageType, hasNext := decoder.HasNext()
 			require.True(t, hasNext)
@@ -507,7 +466,7 @@ func TestDecodedTableInfoLocatesRowByPrimaryKey(t *testing.T) {
 	messages := encoder.Build()
 	require.Len(t, messages, 1)
 
-	decoder := NewDecoder(cfg, 0, nil)
+	decoder := NewDecoder(cfg, nil)
 	decoder.AddKeyValue(messages[0].Key, messages[0].Value)
 	messageType, hasNext := decoder.HasNext()
 	require.True(t, hasNext)

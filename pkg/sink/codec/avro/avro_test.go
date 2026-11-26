@@ -354,7 +354,7 @@ func TestAvroEncodeIncludeBeforeValue(t *testing.T) {
 			require.NoError(t, err)
 			decoderConfig := *codecConfig
 			decoderConfig.AvroIncludeBeforeValue = false
-			decoder := NewDecoder(&decoderConfig, 0, encoder.schemaM, topic, nil)
+			decoder := NewDecoder(&decoderConfig, encoder.schemaM, topic, nil)
 			decoder.AddKeyValue(key, bin)
 
 			messageType, exist := decoder.HasNext()
@@ -506,7 +506,7 @@ func TestAvroEncodeDeleteEventWithWatermarkCarriesCommitTs(t *testing.T) {
 	require.NotEmpty(t, messages[0].Value)
 	require.Equal(t, deleteByte, messages[0].Value[0])
 
-	decoder := NewDecoder(codecConfig, 0, encoder.schemaM, topic, nil)
+	decoder := NewDecoder(codecConfig, encoder.schemaM, topic, nil)
 	decoder.AddKeyValue(messages[0].Key, messages[0].Value)
 
 	messageType, exists := decoder.HasNext()
@@ -544,7 +544,7 @@ func TestAvroLegacyDeleteUsesCachedValueSchema(t *testing.T) {
 
 	for _, withWatermark := range []bool{false, true} {
 		t.Run("watermark="+strconv.FormatBool(withWatermark), func(t *testing.T) {
-			decoder := NewDecoder(codecConfig, 0, encoder.schemaM, topic, nil)
+			decoder := NewDecoder(codecConfig, encoder.schemaM, topic, nil)
 			decoder.AddKeyValue(insert.Key, insert.Value)
 			// The consumer may defer materialization until after receiving the delete.
 			insertMessage := decoder.NextDMLMessage()
@@ -593,8 +593,8 @@ func TestAvroLegacyDeleteSharesTableInfoAcrossDecoders(t *testing.T) {
 	for _, withWatermark := range []bool{false, true} {
 		t.Run("watermark="+strconv.FormatBool(withWatermark), func(t *testing.T) {
 			provider := common.NewTableInfoProvider()
-			d1 := NewDecoder(codecConfig, 0, encoder.schemaM, topic, nil).(*decoder)
-			d2 := NewDecoder(codecConfig, 0, encoder.schemaM, topic, nil).(*decoder)
+			d1 := NewDecoder(codecConfig, encoder.schemaM, topic, nil).(*decoder)
+			d2 := NewDecoder(codecConfig, encoder.schemaM, topic, nil).(*decoder)
 			d1.ShareTableInfo(provider)
 			d2.ShareTableInfo(provider)
 
@@ -661,8 +661,8 @@ func TestAvroLegacyDeleteRespectsDDLInvalidation(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			provider := common.NewTableInfoProvider()
-			d1 := NewDecoder(codecConfig, 0, encoder.schemaM, topic, nil).(*decoder)
-			d2 := NewDecoder(codecConfig, 0, encoder.schemaM, topic, nil).(*decoder)
+			d1 := NewDecoder(codecConfig, encoder.schemaM, topic, nil).(*decoder)
+			d2 := NewDecoder(codecConfig, encoder.schemaM, topic, nil).(*decoder)
 			d1.ShareTableInfo(provider)
 			d2.ShareTableInfo(provider)
 

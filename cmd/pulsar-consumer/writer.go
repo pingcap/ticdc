@@ -110,7 +110,7 @@ func newWriter(ctx context.Context, o *option) *writer {
 
 	tableInfoProvider := common.NewTableInfoProvider()
 	for i := 0; i < int(o.partitionNum); i++ {
-		decoder, err := codec.NewEventDecoder(ctx, i, codecConfig, o.topic, db)
+		decoder, err := codec.NewEventDecoder(ctx, codecConfig, o.topic, db)
 		if err != nil {
 			log.Panic("cannot create the decoder", zap.Error(err))
 		}

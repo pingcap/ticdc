@@ -66,7 +66,6 @@ type decoder struct {
 // NewDecoder return an avro decoder
 func NewDecoder(
 	config *common.Config,
-	_ int,
 	schemaM schemamanager.SchemaManager,
 	topic string,
 	db *sql.DB,

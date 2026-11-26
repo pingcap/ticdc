@@ -57,7 +57,6 @@ type decoder struct {
 // NewDecoder return an debezium decoder
 func NewDecoder(
 	config *common.Config,
-	_ int,
 	db *sql.DB,
 ) common.Decoder {
 	return &decoder{

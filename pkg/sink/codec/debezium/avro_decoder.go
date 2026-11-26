@@ -56,7 +56,6 @@ type registeredDebeziumAvroSchema struct {
 func NewAvroDecoder(
 	ctx context.Context,
 	config *common.Config,
-	idx int,
 	db *sql.DB,
 ) (common.Decoder, error) {
 	registryURL := strings.TrimRight(config.AvroConfluentSchemaRegistry, "/")
@@ -67,20 +66,19 @@ func NewAvroDecoder(
 	if err != nil {
 		return nil, err
 	}
-	return NewAvroDecoderWithSchemaManager(ctx, config, idx, schemaM, db), nil
+	return NewAvroDecoderWithSchemaManager(ctx, config, schemaM, db), nil
 }
 
 // NewAvroDecoderWithSchemaManager returns a Debezium Avro decoder sharing schemaM.
 func NewAvroDecoderWithSchemaManager(
 	ctx context.Context,
 	config *common.Config,
-	idx int,
 	schemaM schemamanager.SchemaManager,
 	db *sql.DB,
 ) common.Decoder {
 	schemas, _ := lru.New(debeziumAvroDecoderSchemaCacheSize)
 	return &avroDecoder{
-		decoder: NewDecoder(config, idx, db).(*decoder),
+		decoder: NewDecoder(config, db).(*decoder),
 		ctx:     ctx,
 		schemaM: schemaM,
 		schemas: schemas,

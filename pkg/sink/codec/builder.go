@@ -57,11 +57,11 @@ func NewEventEncoder(
 
 // NewEventDecoder will create a new event decoder
 func NewEventDecoder(
-	ctx context.Context, idx int, codecConfig *common.Config, topic string, upstreamTiDB *sql.DB,
+	ctx context.Context, codecConfig *common.Config, topic string, upstreamTiDB *sql.DB,
 ) (common.Decoder, error) {
 	switch codecConfig.Protocol {
 	case config.ProtocolOpen, config.ProtocolDefault:
-		return open.NewDecoder(ctx, idx, codecConfig, upstreamTiDB)
+		return open.NewDecoder(ctx, codecConfig, upstreamTiDB)
 	case config.ProtocolCanalJSON:
 		return canal.NewDecoder(ctx, codecConfig, upstreamTiDB)
 	case config.ProtocolAvro:
@@ -69,13 +69,13 @@ func NewEventDecoder(
 		if err != nil {
 			return nil, errors.Trace(err)
 		}
-		return avro.NewDecoder(codecConfig, idx, schemaM, topic, upstreamTiDB), nil
+		return avro.NewDecoder(codecConfig, schemaM, topic, upstreamTiDB), nil
 	case config.ProtocolSimple:
 		return simple.NewDecoder(ctx, codecConfig, upstreamTiDB)
 	case config.ProtocolDebezium:
-		return debezium.NewDecoder(codecConfig, idx, upstreamTiDB), nil
+		return debezium.NewDecoder(codecConfig, upstreamTiDB), nil
 	case config.ProtocolDebeziumAvro:
-		return debezium.NewAvroDecoder(ctx, codecConfig, idx, upstreamTiDB)
+		return debezium.NewAvroDecoder(ctx, codecConfig, upstreamTiDB)
 	default:
 	}
 	log.Panic("Protocol not supported", zap.Any("Protocol", codecConfig.Protocol))
