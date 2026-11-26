@@ -369,11 +369,7 @@ func NewDispatcherManager(
 				return nil, errors.Trace(err)
 			}
 			meteringSelectorFn = func(tableInfo *common.TableInfo) commonEvent.Selector {
-				s := meteringSelectors.GetForTableInfo(tableInfo)
-				if s == nil {
-					return nil
-				}
-				return s
+				return meteringSelectors.GetForTableInfo(tableInfo)
 			}
 		}
 		sharedInfo.SetTrafficMetering(meteringSelectorFn, manager.metering.Counter())

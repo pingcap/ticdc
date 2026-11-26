@@ -177,9 +177,7 @@ func (c *coordinator) Run(ctx context.Context) error {
 	ctx, cancel := context.WithCancel(ctx)
 	c.cancel = cancel
 	defer cancel()
-	if err := c.initializeMetering(); err != nil {
-		return err
-	}
+	c.initializeMetering()
 	if c.metering != nil {
 		meteringEnabledGauge.Set(1)
 		defer func() {
@@ -215,14 +213,17 @@ func (c *coordinator) Run(ctx context.Context) error {
 	return err
 }
 
-func (c *coordinator) initializeMetering() error {
+func (c *coordinator) initializeMetering() {
 	serverCfg := config.GetGlobalServerConfig()
 	if serverCfg == nil || serverCfg.Metering == nil || serverCfg.Metering.Type == "" {
-		return nil
+		return
 	}
 	reporter, err := metering.NewReporter(serverCfg.Metering, serverCfg.ClusterID)
 	if err != nil {
-		return err
+		meteringEnabledGauge.Set(0)
+		log.Error("failed to initialize traffic metering reporter; disabling metering for this coordinator term",
+			zap.Error(err))
+		return
 	}
 	var acc *meteringAccumulator
 	if c.controller != nil {
@@ -230,7 +231,6 @@ func (c *coordinator) initializeMetering() error {
 		acc = c.controller.metering
 	}
 	c.metering = newMeteringReporter(reporter, acc)
-	return nil
 }
 
 // run handles the following:

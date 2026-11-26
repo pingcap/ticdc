@@ -15,13 +15,13 @@
 package dispatcher
 
 import (
-	stderrors "errors"
 	"sync/atomic"
 	"time"
 
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/metering"
 	"github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/tidb/pkg/util/chunk"
@@ -104,7 +104,7 @@ func recordMeteringMeasureError(changefeedID common.ChangeFeedID, err error) {
 		return
 	}
 	reason := "value_error"
-	if stderrors.Is(err, metering.ErrUnsupportedSQLType) {
+	if errors.Is(err, metering.ErrUnsupportedSQLType) {
 		reason = "unsupported_type"
 	}
 	meteringMeasureErrorCounter.WithLabelValues(reason).Inc()

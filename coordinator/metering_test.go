@@ -32,7 +32,6 @@ import (
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/config"
-	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/ticdc/utils/chann"
@@ -80,20 +79,43 @@ func TestMeteringInitializationFailure(t *testing.T) {
 	for _, tc := range []struct {
 		name string
 		cfg  *meteringconfig.MeteringConfig
-		code string
 	}{
-		{"unsupported provider", &meteringconfig.MeteringConfig{Type: "unknown"}, string(errors.ErrInvalidServerOption.RFCCode())},
-		{"provider initialization", meteringconfig.NewMeteringConfig().WithLocalFS(filepath.Join(base, "child")), string(errors.ErrExternalStorageAPI.RFCCode())},
+		{"unsupported provider", &meteringconfig.MeteringConfig{Type: "unknown"}},
+		{"provider initialization", meteringconfig.NewMeteringConfig().WithLocalFS(filepath.Join(base, "child"))},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			cfg := original.Clone()
 			cfg.Metering = tc.cfg
 			config.StoreGlobalServerConfig(cfg)
-			c := &coordinator{}
-			// Initialization must fail before starting any coordinator loops.
-			err := c.Run(t.Context())
-			require.ErrorContains(t, err, tc.code)
+			meteringEnabledGauge.Set(1)
+			c := &coordinator{
+				gcTickInterval:     time.Hour,
+				controller:         &Controller{},
+				gcCleaner:          gccleaner.New(nil, "test"),
+				eventCh:            chann.NewAutoDrainChann[*Event](),
+				changefeedChangeCh: make(chan []*changefeedChange),
+			}
+			defer c.eventCh.CloseAndDrain()
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			done := make(chan error, 1)
+			go func() { done <- c.Run(ctx) }()
+			select {
+			case c.changefeedChangeCh <- nil:
+			case err := <-done:
+				t.Fatalf("coordinator exited instead of degrading metering: %v", err)
+			case <-time.After(10 * time.Second):
+				t.Fatal("coordinator did not start")
+			}
+			cancel()
+			select {
+			case err := <-done:
+				require.ErrorIs(t, err, context.Canceled)
+			case <-time.After(10 * time.Second):
+				t.Fatal("coordinator did not stop")
+			}
 			require.Nil(t, c.metering)
+			require.Zero(t, testutil.ToFloat64(meteringEnabledGauge))
 		})
 	}
 }

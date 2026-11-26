@@ -17,7 +17,6 @@ package coordinator
 import (
 	"cmp"
 	"context"
-	stderrors "errors"
 	"slices"
 	"sync"
 	"time"
@@ -25,6 +24,7 @@ import (
 	"github.com/pingcap/log"
 	meteringwriterapi "github.com/pingcap/metering_sdk/writer"
 	"github.com/pingcap/ticdc/pkg/common"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/metering"
 	"go.uber.org/zap"
 )
@@ -157,24 +157,32 @@ func (r *meteringReporter) Run(ctx context.Context) error {
 	next := time.Now().Truncate(meteringReportInterval).Add(meteringReportInterval)
 
 	for {
-		wait := time.Until(next)
-		if wait > 0 {
-			timer := time.NewTimer(wait)
-			select {
-			case <-ctx.Done():
-				timer.Stop()
-				return nil
-			case <-timer.C:
-			}
-		} else if ctx.Err() != nil {
+		if !waitUntil(ctx, next) {
 			return nil
 		}
-
-		r.reportAt(ctx, next)
+		// reportAt logs its own failures; the pending bytes stay in the accumulator
+		// and are retried on the next tick.
+		_ = r.reportAt(ctx, next)
 		next = next.Add(meteringReportInterval)
 		if now := time.Now(); !now.Before(next) {
 			next = now.Truncate(meteringReportInterval).Add(meteringReportInterval)
 		}
+	}
+}
+
+// waitUntil blocks until deadline or ctx cancellation and reports whether deadline was reached.
+func waitUntil(ctx context.Context, deadline time.Time) bool {
+	wait := time.Until(deadline)
+	if wait <= 0 {
+		return ctx.Err() == nil
+	}
+	timer := time.NewTimer(wait)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return false
+	case <-timer.C:
+		return true
 	}
 }
 
@@ -196,7 +204,7 @@ func (r *meteringReporter) reportAt(ctx context.Context, reportTime time.Time) e
 	err := r.reporter.Report(ctx, ts, records)
 	meteringReportDuration.Observe(time.Since(start).Seconds())
 	if err != nil {
-		if stderrors.Is(err, meteringwriterapi.ErrFileExists) {
+		if errors.Is(err, meteringwriterapi.ErrFileExists) {
 			meteringReportCounter.WithLabelValues("exists").Inc()
 		} else {
 			meteringReportCounter.WithLabelValues("failure").Inc()

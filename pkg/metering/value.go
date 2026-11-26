@@ -15,7 +15,6 @@
 package metering
 
 import (
-	stderrors "errors"
 	"fmt"
 
 	"github.com/pingcap/ticdc/pkg/errors"
@@ -24,7 +23,7 @@ import (
 )
 
 // ErrUnsupportedSQLType indicates a column uses a SQL type without a canonical v1 size rule.
-var ErrUnsupportedSQLType = stderrors.New("unsupported traffic metering SQL type")
+var ErrUnsupportedSQLType = errors.NewNoStackError("unsupported traffic metering SQL type")
 
 // MeasureValueV1 returns the canonical byte count for a decoded SQL column value
 // at row[offset]. Existing v1 rules must remain stable across TiDB upgrades.

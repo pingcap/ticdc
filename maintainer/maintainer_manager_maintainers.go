@@ -429,7 +429,7 @@ func (p *managerMaintainerSet) applyDispatcherDrainTarget(target node.ID, epoch 
 }
 
 func (p *managerMaintainerSet) applyMeteringEpoch(epoch uint64) {
-	p.registry.Range(func(_, value interface{}) bool {
+	p.registry.Range(func(_, value any) bool {
 		value.(*Maintainer).SetMeteringEpoch(epoch)
 		return true
 	})

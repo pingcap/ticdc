@@ -18,7 +18,6 @@ package metering
 
 import (
 	"context"
-	stderrors "errors"
 	"strings"
 	"sync"
 	"time"
@@ -164,7 +163,7 @@ func (r *Reporter) write(ctx context.Context, data *common.MeteringData) error {
 		if err == nil {
 			return nil
 		}
-		if stderrors.Is(err, meteringwriterapi.ErrFileExists) {
+		if errors.Is(err, meteringwriterapi.ErrFileExists) {
 			break
 		}
 	}
