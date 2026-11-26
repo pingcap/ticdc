@@ -229,12 +229,16 @@ func (m *DispatcherOrchestrator) handleBootstrapRequest(
 		}
 		cfConfig := &config.ChangefeedConfig{}
 		if err := json.Unmarshal(req.Config, cfConfig); err != nil {
-			return errors.WrapError(errors.ErrDecodeFailed, err,
+			err = errors.WrapError(errors.ErrDecodeFailed, err,
 				"invalid bootstrap changefeed config")
+			err = errors.WrapChangefeedUnretryableErr(err)
+			return m.handleDispatcherError(from, req.ChangefeedID, maintainerEpoch, err)
 		}
 		if cfConfig.ChangefeedID != cfId {
-			return errors.ErrDecodeFailed.FastGenByArgs(
+			err := errors.ErrDecodeFailed.FastGenByArgs(
 				"bootstrap config changefeed ID does not match request")
+			err = errors.WrapChangefeedUnretryableErr(err)
+			return m.handleDispatcherError(from, req.ChangefeedID, maintainerEpoch, err)
 		}
 		start := time.Now()
 		var initializingManager *dispatchermanager.DispatcherManager
@@ -884,7 +888,7 @@ func (m *DispatcherOrchestrator) Close() {
 	log.Info("dispatcher orchestrator closed")
 }
 
-// handleDispatcherError creates and sends an error response for create dispatcher-related failures
+// handleDispatcherError sends a bootstrap error response to the maintainer.
 func (m *DispatcherOrchestrator) handleDispatcherError(
 	from node.ID,
 	changefeedID *heartbeatpb.ChangefeedID,

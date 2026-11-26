@@ -1247,19 +1247,29 @@ func TestHandleBootstrapRequestRejectsClosedOlderMaintainerEpoch(t *testing.T) {
 
 func TestHandleBootstrapRequestRejectsMalformedConfig(t *testing.T) {
 	cfID := common.NewChangeFeedIDWithName("cf", "default")
+	mc := messaging.NewMockMessageCenter()
 	orchestrator := &DispatcherOrchestrator{
-		mc:                     messaging.NewMockMessageCenter(),
+		mc:                     mc,
 		dispatcherManagers:     make(map[common.ChangeFeedID]*dispatchermanager.DispatcherManager),
 		closedMaintainerEpochs: make(map[common.ChangeFeedID]uint64),
 	}
 
 	err := orchestrator.handleBootstrapRequest(node.ID("maintainer"), &heartbeatpb.MaintainerBootstrapRequest{
-		ChangefeedID: cfID.ToPB(),
-		Config:       []byte("invalid config"),
+		ChangefeedID:    cfID.ToPB(),
+		Config:          []byte("invalid config"),
+		MaintainerEpoch: 7,
 	})
-	require.Error(t, err)
-	require.ErrorIs(t, err, errors.ErrDecodeFailed)
+	require.NoError(t, err)
 	require.Empty(t, orchestrator.dispatcherManagers)
+
+	msg := requireMessage(t, mc.GetMessageChannel(), "bootstrap error response was not sent")
+	require.Equal(t, messaging.TypeMaintainerBootstrapResponse, msg.Type)
+	response := msg.Message[0].(*heartbeatpb.MaintainerBootstrapResponse)
+	require.Equal(t, cfID.ToPB(), response.ChangefeedID)
+	require.Equal(t, uint64(7), response.MaintainerEpoch)
+	require.NotNil(t, response.Err)
+	require.Equal(t, string(errors.ErrChangefeedUnretryable.RFCCode()), response.Err.Code)
+	require.Contains(t, response.Err.Message, "invalid bootstrap changefeed config")
 }
 
 func TestHandleBootstrapRequestRejectsMismatchedConfigIdentity(t *testing.T) {
@@ -1267,19 +1277,29 @@ func TestHandleBootstrapRequestRejectsMismatchedConfigIdentity(t *testing.T) {
 	otherID := common.NewChangeFeedIDWithName("other", "default")
 	configBytes, err := json.Marshal(newBootstrapResponseTestChangefeedConfig(otherID))
 	require.NoError(t, err)
+	mc := messaging.NewMockMessageCenter()
 	orchestrator := &DispatcherOrchestrator{
-		mc:                     messaging.NewMockMessageCenter(),
+		mc:                     mc,
 		dispatcherManagers:     make(map[common.ChangeFeedID]*dispatchermanager.DispatcherManager),
 		closedMaintainerEpochs: make(map[common.ChangeFeedID]uint64),
 	}
 
 	err = orchestrator.handleBootstrapRequest(node.ID("maintainer"), &heartbeatpb.MaintainerBootstrapRequest{
-		ChangefeedID: cfID.ToPB(),
-		Config:       configBytes,
+		ChangefeedID:    cfID.ToPB(),
+		Config:          configBytes,
+		MaintainerEpoch: 8,
 	})
-	require.Error(t, err)
-	require.ErrorIs(t, err, errors.ErrDecodeFailed)
+	require.NoError(t, err)
 	require.Empty(t, orchestrator.dispatcherManagers)
+
+	msg := requireMessage(t, mc.GetMessageChannel(), "bootstrap error response was not sent")
+	require.Equal(t, messaging.TypeMaintainerBootstrapResponse, msg.Type)
+	response := msg.Message[0].(*heartbeatpb.MaintainerBootstrapResponse)
+	require.Equal(t, cfID.ToPB(), response.ChangefeedID)
+	require.Equal(t, uint64(8), response.MaintainerEpoch)
+	require.NotNil(t, response.Err)
+	require.Equal(t, string(errors.ErrChangefeedUnretryable.RFCCode()), response.Err.Code)
+	require.Contains(t, response.Err.Message, "bootstrap config changefeed ID does not match request")
 }
 
 func TestHandleCloseRequestDoesNotRecordEpochZeroTombstoneForCompatClose(t *testing.T) {

@@ -31,6 +31,7 @@ import (
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/eventservice"
 	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/node"
@@ -296,6 +297,52 @@ func TestMaintainerPostBootstrapResponseRequiresCurrentEpoch(t *testing.T) {
 		},
 	))
 	require.Nil(t, m.postBootstrapMsg)
+}
+
+func TestMaintainerBootstrapErrorStopsResend(t *testing.T) {
+	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
+	remote := &node.Info{ID: node.ID("node-1"), AdvertiseAddr: "127.0.0.1:8300"}
+	bootstrapper := bootstrap.NewBootstrapper[heartbeatpb.MaintainerBootstrapResponse](
+		cfID.Name(),
+		func(id node.ID, _ string) *messaging.TargetMessage {
+			return messaging.NewSingleTargetMessage(
+				id, messaging.DispatcherManagerManagerTopic,
+				&heartbeatpb.MaintainerBootstrapRequest{ChangefeedID: cfID.ToPB(), MaintainerEpoch: 2})
+		},
+	)
+	_, _, requests, _ := bootstrapper.HandleNodesChange(map[node.ID]*node.Info{remote.ID: remote})
+	require.Len(t, requests, 1)
+
+	nodeManager := watcher.NewNodeManager(nil, nil)
+	nodeManager.GetAliveNodes()[remote.ID] = remote
+	m := &Maintainer{
+		changefeedID:  cfID,
+		info:          &config.ChangeFeedInfo{Epoch: 2},
+		bootstrapper:  bootstrapper,
+		nodeManager:   nodeManager,
+		statusChanged: atomic.NewBool(false),
+	}
+	m.runningErrors.m = make(map[node.ID]*heartbeatpb.RunningError)
+
+	runningErr := &heartbeatpb.RunningError{
+		Code:    string(errors.ErrChangefeedUnretryable.RFCCode()),
+		Message: "invalid bootstrap config",
+	}
+	responseMessage := messaging.NewSingleTargetMessage(
+		remote.ID,
+		messaging.MaintainerTopic,
+		&heartbeatpb.MaintainerBootstrapResponse{
+			ChangefeedID:    cfID.ToPB(),
+			MaintainerEpoch: 2,
+			Err:             runningErr,
+		},
+	)
+	responseMessage.From = remote.ID
+	m.onMaintainerBootstrapResponse(responseMessage)
+
+	require.True(t, bootstrapper.NodeInitialized(remote.ID))
+	require.Empty(t, bootstrapper.ResendBootstrapMessage())
+	require.Same(t, runningErr, m.runningErrors.m[remote.ID])
 }
 
 func TestMaintainerEpochRequestRequiresCompatOrCurrentEpoch(t *testing.T) {
