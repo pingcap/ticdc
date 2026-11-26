@@ -121,7 +121,9 @@ func newConfluentSchemaManager(
 			log.Error("Test connection to Schema Registry failed", zap.Error(err))
 			return nil, errors.WrapError(errors.ErrAvroSchemaAPIError, err)
 		}
-		defer resp.Body.Close()
+		defer func() {
+			_ = resp.Body.Close()
+		}()
 		if resp.StatusCode != http.StatusOK {
 			return nil, errors.ErrAvroSchemaAPIError.GenWithStack(
 				"Schema Registry connection check failed with HTTP status %d", resp.StatusCode)
@@ -252,7 +254,9 @@ func (m *confluentSchemaManager) Lookup(
 		if err != nil {
 			return nil, err
 		}
-		defer resp.Body.Close()
+		defer func() {
+			_ = resp.Body.Close()
+		}()
 
 		body, err := io.ReadAll(resp.Body)
 		if err != nil {
