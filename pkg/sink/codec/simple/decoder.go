@@ -63,11 +63,15 @@ type Decoder struct {
 func NewDecoder(
 	ctx context.Context, config *common.Config, db *sql.DB,
 ) (common.Decoder, error) {
-	var (
-		externalStorage storeapi.Storage
-		err             error
-	)
-	if config.LargeMessageHandle.EnableClaimCheck() {
+	return NewDecoderWithStorage(ctx, config, db, nil)
+}
+
+// NewDecoderWithStorage returns a simple decoder reusing externalStorage when provided.
+func NewDecoderWithStorage(
+	ctx context.Context, config *common.Config, db *sql.DB, externalStorage storeapi.Storage,
+) (common.Decoder, error) {
+	var err error
+	if externalStorage == nil && config.LargeMessageHandle.EnableClaimCheck() {
 		storageURI := config.LargeMessageHandle.ClaimCheckStorageURI
 		externalStorage, err = util.GetExternalStorageWithDefaultTimeout(ctx, storageURI)
 		if err != nil {
@@ -326,6 +330,50 @@ func (d *Decoder) CachedCount() int {
 // GetTableIDs identifies every table and partition whose events belong to the logical table.
 func (d *Decoder) GetTableIDs(schema, table string) []int64 {
 	return d.memo.GetBlockedTables(schema, table)
+}
+
+// PendingMessage holds a parsed Simple DML message awaiting its table schema.
+type PendingMessage struct {
+	msg *message
+}
+
+// Schema returns the target schema name of the pending DML.
+func (p *PendingMessage) Schema() string { return p.msg.Schema }
+
+// Table returns the target table name of the pending DML.
+func (p *PendingMessage) Table() string { return p.msg.Table }
+
+// SchemaVersion returns the table schema version required by the pending DML.
+func (p *PendingMessage) SchemaVersion() uint64 { return p.msg.SchemaVersion }
+
+// CommitTs returns the commit timestamp of the pending DML.
+func (p *PendingMessage) CommitTs() uint64 { return p.msg.CommitTs }
+
+// TakePendingDML detaches the current DML message so the caller can decode it
+// once the matching TableInfo becomes available.
+func (d *Decoder) TakePendingDML() *PendingMessage {
+	if d.msg == nil || (d.msg.Data == nil && d.msg.Old == nil) {
+		log.Panic("invalid data for the DML event", zap.String("message", util.RedactAny(d.msg)))
+	}
+	msg := d.msg
+	d.msg = nil
+	return &PendingMessage{msg: msg}
+}
+
+// DecodeDMLWithInfo assembles a pending DML message directly from tableInfo.
+func (d *Decoder) DecodeDMLWithInfo(pending *PendingMessage, tableInfo *commonType.TableInfo) *commonEvent.DMLEvent {
+	d.memo.AddBlockTableID(pending.msg.Schema, pending.msg.Table, pending.msg.TableID)
+	return d.assembleDMLEvent(pending.msg, tableInfo)
+}
+
+// DecodeDDLEvent builds the current DDL or Bootstrap event without mutating memo.
+func (d *Decoder) DecodeDDLEvent() *commonEvent.DDLEvent {
+	if d.msg == nil {
+		log.Panic("msg is not set when parse the DDL event")
+	}
+	ddl := d.buildDDLEvent(d.msg)
+	d.msg = nil
+	return ddl
 }
 
 // newTiColumnInfo uses columnSchema and IndexSchema to construct a tidb column info.

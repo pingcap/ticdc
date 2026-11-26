@@ -48,10 +48,17 @@ const (
 type confluentSchemaManager struct {
 	registryURL string
 
-	credential *security.Credential // placeholder, currently always nil
+	httpCli *httputil.Client
 
 	cache        *schemaCache
 	registryType string
+}
+
+// Close closes idle connections held by the Schema Registry HTTP client.
+func (m *confluentSchemaManager) Close() {
+	if m.httpCli != nil {
+		m.httpCli.CloseIdleConnections()
+	}
 }
 
 type registerRequest struct {
@@ -114,6 +121,7 @@ func NewConfluentSchemaManager(
 
 	return &confluentSchemaManager{
 		registryURL:  registryURL,
+		httpCli:      httpCli,
 		cache:        newSchemaCache(),
 		registryType: common.SchemaRegistryTypeConfluent,
 	}, nil
@@ -149,7 +157,7 @@ func (m *confluentSchemaManager) Register(
 			"application/json",
 	)
 	req.Header.Add("Content-Type", "application/vnd.schemaregistry.v1+json")
-	resp, err := httpRetry(ctx, m.credential, req)
+	resp, err := httpRetry(ctx, m.httpCli, req)
 	if err != nil {
 		return id, err
 	}
@@ -200,9 +208,16 @@ func (m *confluentSchemaManager) Lookup(
 	schemaName string,
 	schemaID SchemaID,
 ) (string, error) {
-	cacheKey := newDecodeCacheKey(schemaName)
+	cacheKey := newDecodeCacheKey(schemaName, schemaID)
 	entry, exists := m.cache.load(cacheKey)
-	if exists && entry.schemaID.confluentSchemaID == schemaID.confluentSchemaID {
+	if exists {
+		return entry.schemaDefinition, nil
+	}
+
+	unlock := m.cache.lockSubject(cacheKey.schemaIdentity)
+	defer unlock()
+
+	if entry, exists := m.cache.load(cacheKey); exists {
 		return entry.schemaDefinition, nil
 	}
 
@@ -220,7 +235,7 @@ func (m *confluentSchemaManager) Lookup(
 			"application/json",
 	)
 
-	resp, err := httpRetry(ctx, m.credential, req)
+	resp, err := httpRetry(ctx, m.httpCli, req)
 	if err != nil {
 		return "", err
 	}
@@ -325,7 +340,7 @@ func (m *confluentSchemaManager) ClearRegistry(ctx context.Context, schemaSubjec
 		"application/vnd.schemaregistry.v1+json, application/vnd.schemaregistry+json, "+
 			"application/json",
 	)
-	resp, err := httpRetry(ctx, m.credential, req)
+	resp, err := httpRetry(ctx, m.httpCli, req)
 	if err != nil {
 		return err
 	}
@@ -371,7 +386,7 @@ func BuildConfluentWireHeader(schemaID int) ([]byte, error) {
 
 func httpRetry(
 	ctx context.Context,
-	credential *security.Credential,
+	httpCli *httputil.Client,
 	r *http.Request,
 ) (*http.Response, error) {
 	var (
@@ -383,11 +398,13 @@ func httpRetry(
 	expBackoff := backoff.NewExponentialBackOff()
 	expBackoff.MaxInterval = time.Second * 30
 	expBackoff.MaxElapsedTime = schemaRegistryRequestTimeout
-	httpCli, err := httputil.NewClient(credential)
-	if err != nil {
-		return nil, errors.WrapError(errors.ErrAvroSchemaAPIError, err)
+	if httpCli == nil {
+		httpCli, err = httputil.NewClient(nil)
+		if err != nil {
+			return nil, errors.WrapError(errors.ErrAvroSchemaAPIError, err)
+		}
+		httpCli.SetTimeout(schemaRegistryRequestTimeout)
 	}
-	httpCli.SetTimeout(schemaRegistryRequestTimeout)
 
 	if r.Body != nil {
 		data, err = io.ReadAll(r.Body)

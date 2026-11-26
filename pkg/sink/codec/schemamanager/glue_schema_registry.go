@@ -125,7 +125,7 @@ func (m *glueSchemaManager) Lookup(
 	schemaName string,
 	schemaID SchemaID,
 ) (string, error) {
-	cacheKey := newDecodeCacheKey(schemaName)
+	cacheKey := newDecodeCacheKey(schemaName, schemaID)
 	entry, exists := m.cache.load(cacheKey)
 	if exists && entry.schemaID.glueSchemaID == schemaID.glueSchemaID {
 		return entry.schemaDefinition, nil
@@ -222,6 +222,9 @@ func (m *glueSchemaManager) ClearRegistry(ctx context.Context, schemaSubject str
 func (m *glueSchemaManager) RegistryType() string {
 	return m.registryType
 }
+
+// Close satisfies SchemaManager. The AWS SDK v2 client needs no explicit close.
+func (m *glueSchemaManager) Close() {}
 
 func (m *glueSchemaManager) createSchema(ctx context.Context, schemaName, schemaDefinition string) (string, error) {
 	createSchemaInput := &glue.CreateSchemaInput{

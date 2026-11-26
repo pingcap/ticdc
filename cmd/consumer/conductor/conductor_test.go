@@ -21,6 +21,7 @@ import (
 	"testing"
 
 	"github.com/pingcap/ticdc/cmd/consumer/ddl"
+	"github.com/pingcap/ticdc/cmd/consumer/decode"
 	"github.com/pingcap/ticdc/cmd/consumer/source"
 	"github.com/pingcap/ticdc/cmd/consumer/writer"
 	commonType "github.com/pingcap/ticdc/pkg/common"
@@ -245,4 +246,106 @@ func TestConductorUnifiedWatermarkGateRowOrderAndHeapBlocking(t *testing.T) {
 	require.Empty(t, c.readyHeap)
 	require.Empty(t, c.blockedHeap)
 	require.Empty(t, c.pendingDML)
+}
+
+func TestConductorEffectiveWatermarkPendingDecodeAndInvertedOrder(t *testing.T) {
+	schemas := codecCommon.NewTableInfoProvider()
+	c := New(&stubReader{partitions: 2}, schemas)
+	w := writer.New(t.Context(), writer.NewOptions("blackhole://", config.GetDefaultReplicaConfig()))
+
+	writerCtx, cancel := context.WithCancel(t.Context())
+	writerDone := make(chan error, 1)
+	go func() {
+		writerDone <- w.Start(writerCtx)
+	}()
+	defer func() {
+		cancel()
+		<-writerDone
+	}()
+
+	t1Info := commonType.WrapTableInfo("test", &timodel.TableInfo{ID: 1, Name: ast.NewCIStr("t1"), UpdateTS: 200})
+	schemas.WriteTableInfo(t1Info)
+
+	var mu sync.Mutex
+	var flushed []string
+	record := func(label string) func() {
+		return func() {
+			mu.Lock()
+			flushed = append(flushed, label)
+			mu.Unlock()
+		}
+	}
+	newDML := func(commitTs uint64, label string) *commonEvent.DMLEvent {
+		dml := &commonEvent.DMLEvent{
+			PhysicalTableID: 1,
+			CommitTs:        commitTs,
+			TableInfo:       t1Info,
+			Rows:            chunk.NewChunkWithCapacity(nil, 0),
+			RowTypes:        []commonType.RowType{commonType.RowTypeInsert},
+			Length:          1,
+		}
+		dml.AddPostFlushFunc(record(label))
+		return dml
+	}
+
+	// Pending placeholder at CommitTs=200 must cap effectiveW at 199 even when W=300.
+	require.NoError(t, c.acceptFuture(&decode.Future{
+		Payload: &source.Payload{Partition: 0, Offset: 1},
+		Pending: []decode.PendingDecode{{ID: 1, CommitTs: 200}},
+		Events:  []commonEvent.Event{nil},
+	}))
+	ddl220 := &commonEvent.DDLEvent{
+		FinishedTs: 220,
+		Type:       byte(timodel.ActionAddColumn),
+		SchemaName: "test",
+		TableName:  "t1",
+		Query:      "ALTER TABLE test.t1 ADD COLUMN c INT",
+	}
+	ddl220.AddPostFlushFunc(record("t1:ddl@220"))
+	require.NoError(t, c.acceptFuture(&decode.Future{
+		Payload: &source.Payload{Partition: 0, Offset: 2},
+		Events: []commonEvent.Event{
+			ddl220,
+			newDML(250, "t1:dml@250"),
+			&commonEvent.ResolvedEvent{ResolvedTs: 300},
+			nil,
+		},
+	}))
+	require.NoError(t, c.acceptFuture(&decode.Future{
+		Payload: &source.Payload{Partition: 1, Offset: 1},
+		Events:  []commonEvent.Event{&commonEvent.ResolvedEvent{ResolvedTs: 300}, nil},
+	}))
+
+	require.NoError(t, c.flush(t.Context(), w))
+	require.Equal(t, uint64(199), c.effectiveWatermark())
+	require.Equal(t, uint64(199), schemas.ReleasedWatermark())
+	require.Empty(t, flushed)
+	require.Equal(t, uint64(199), w.Checkpoint())
+
+	// Resolving placeholder 1 releases effectiveW to 300, allowing 200 -> DDL 220 -> 250.
+	require.NoError(t, c.acceptFuture(&decode.Future{
+		Payload:  &source.Payload{Partition: 1, Offset: 2},
+		Resolved: []decode.ResolvedDML{{ID: 1, DML: newDML(200, "t1:dml@200"), Partition: 0, Offset: 1}},
+		Events:   []commonEvent.Event{nil},
+	}))
+	require.NoError(t, c.flush(t.Context(), w))
+	require.Equal(t, uint64(300), c.effectiveWatermark())
+	require.Equal(t, uint64(300), schemas.ReleasedWatermark())
+	require.Equal(t, []string{"t1:dml@200", "t1:ddl@220", "t1:dml@250"}, flushed)
+	require.Equal(t, uint64(300), w.Checkpoint())
+
+	// Inverted arrival: ResolvedDML arrives before PendingDecode must clear cleanly without leaking.
+	require.NoError(t, c.acceptFuture(&decode.Future{
+		Payload:  &source.Payload{Partition: 1, Offset: 3},
+		Resolved: []decode.ResolvedDML{{ID: 2, DML: newDML(305, "t1:dml@305"), Partition: 0, Offset: 3}},
+		Events:   []commonEvent.Event{nil},
+	}))
+	require.NoError(t, c.acceptFuture(&decode.Future{
+		Payload: &source.Payload{Partition: 0, Offset: 3},
+		Pending: []decode.PendingDecode{{ID: 2, CommitTs: 305}},
+		Events:  []commonEvent.Event{nil},
+	}))
+	require.Empty(t, c.pendingDecodes)
+	require.Empty(t, c.resolvedDecodes)
+	require.Equal(t, uint64(300), c.effectiveWatermark())
 }

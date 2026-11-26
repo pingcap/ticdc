@@ -50,6 +50,7 @@ type SchemaManager interface {
 		schemaVersion uint64, schemaDefinition string) ([]byte, error)
 	RegistryType() string
 	ClearRegistry(ctx context.Context, schemaName string) error
+	Close()
 }
 
 // SchemaID identifies a schema in Confluent or AWS Glue Schema Registry.

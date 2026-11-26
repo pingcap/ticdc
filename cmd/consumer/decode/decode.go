@@ -30,6 +30,7 @@ import (
 	"github.com/pingcap/ticdc/cmd/consumer/ddl"
 	"github.com/pingcap/ticdc/cmd/consumer/source"
 	"github.com/pingcap/ticdc/downstreamadapter/sink/columnselector"
+	commonType "github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
@@ -37,24 +38,63 @@ import (
 	"github.com/pingcap/ticdc/pkg/sink/codec/canal"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"github.com/pingcap/ticdc/pkg/sink/codec/csv"
+	"github.com/pingcap/ticdc/pkg/sink/codec/schemamanager"
 	"github.com/pingcap/ticdc/pkg/sink/codec/simple"
 	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/tidb/pkg/meta/model"
+	"github.com/pingcap/tidb/pkg/objstore/storeapi"
 	"go.uber.org/zap"
 	"golang.org/x/sync/errgroup"
 )
 
-const decoderQueueSize = 128
+const (
+	decoderQueueSize  = 128
+	decodeConcurrency = 16
+)
+
+// PendingDecode marks a Simple DML parked until its table schema arrives.
+type PendingDecode struct {
+	ID       uint64
+	CommitTs uint64
+}
+
+// ResolvedDML carries a parked DML decoded once its table schema arrived.
+type ResolvedDML struct {
+	ID        uint64
+	DML       *event.DMLEvent
+	Partition int32
+	Offset    int64
+}
 
 // Future carries one input and the events decoded from it. The decoder owning
-// the input's partition appends the events and closes done; the conductor reads
-// them after Ready. A
-// nil event marks the end of an input, including inputs that produce no events.
+// the input populates its events, pending placeholders, and woken DMLs and
+// closes done; the conductor reads them after Ready. A nil event marks the end
+// of an input, including inputs that produce no events.
 type Future struct {
-	Payload *source.Payload
-	Events  []event.Event
-	Marker  uint64
-	done    chan struct{}
+	Payload  *source.Payload
+	Events   []event.Event
+	Pending  []PendingDecode
+	Resolved []ResolvedDML
+	Marker   uint64
+	done     chan struct{}
+}
+
+type waitingSchemaKey struct {
+	schema  string
+	table   string
+	version uint64
+}
+
+type waitingDML struct {
+	id        uint64
+	pending   *simple.PendingMessage
+	partition int32
+	offset    int64
+}
+
+type wokenDML struct {
+	waitingDML
+	tableInfo *commonType.TableInfo
 }
 
 // decoder pairs a generic codec decoder with the simple-protocol decoder when
@@ -64,18 +104,25 @@ type decoder struct {
 	schema *simple.Decoder
 }
 
-// Group decodes every partition with its own decoder while preserving
-// submission order. Decoder state describes one partition's schema history, so
-// a decoder never handles another partition's input.
+// Group decodes inputs across concurrent decoders while preserving submission
+// order. Same-partition MQ inputs map deterministically to the same decoder,
+// and storage inputs round-robin across decoders.
 type Group struct {
-	codecConfig *common.Config
-	upstreamDB  *sql.DB
-	selectors   *columnselector.ColumnSelectors
-	decoders    []decoder
-	schemas     *common.TableInfoProvider
-	ddlMu       sync.Mutex
-	seenDDLs    map[ddl.Key]struct{}
-	// inputs dispatches an undecoded input to the decoder owning its partition.
+	kind              source.Kind
+	codecConfig       *common.Config
+	upstreamDB        *sql.DB
+	claimCheckStorage storeapi.Storage
+	schemaManager     schemamanager.SchemaManager
+	selectors         *columnselector.ColumnSelectors
+	decoders          []decoder
+	schemas           *common.TableInfoProvider
+	waitMu            sync.Mutex
+	nextPendingID     uint64
+	waiting           map[waitingSchemaKey][]waitingDML
+	ddlMu             sync.Mutex
+	seenDDLs          map[ddl.Key]struct{}
+	index             int
+	// queues dispatches undecoded inputs to the decoder pipelines.
 	queues []chan *Future
 	// output queues inputs for the conductor in submission order. A Future may
 	// still be decoding when it enters.
@@ -87,43 +134,42 @@ type Options struct {
 	Kind          source.Kind
 	CodecConfig   *common.Config
 	ReplicaConfig *config.ReplicaConfig
-	Partitions    int32
 	Topic         string
 	UpstreamURI   *url.URL
 }
 
 // NewOptions builds decode options for a source.
 func NewOptions(
-	codecConfig *common.Config, replicaConfig *config.ReplicaConfig, reader source.Reader, upstreamURI *url.URL,
+	codecConfig *common.Config, replicaConfig *config.ReplicaConfig, upstreamURI *url.URL,
 ) Options {
 	return Options{
 		Kind:          source.TypeOf(upstreamURI),
 		CodecConfig:   codecConfig,
 		ReplicaConfig: replicaConfig,
-		Partitions:    reader.Partitions(),
 		Topic:         strings.Trim(upstreamURI.Path, "/"),
 		UpstreamURI:   upstreamURI,
 	}
 }
 
 // tableInfoSharer is implemented by protocol decoders that read table info
-// through the cache shared by all partitions.
+// through the cache shared by all decoders.
 type tableInfoSharer interface {
 	ShareTableInfo(*common.TableInfoProvider)
 }
 
-// NewGroup builds a decode group for the source partitions.
+// NewGroup builds a decode group with concurrency decoupled from source partitions.
 func NewGroup(ctx context.Context, opts Options) *Group {
 	codecConfig := opts.CodecConfig
 	upstreamDB := newUpstreamDB(ctx, opts.UpstreamURI)
-	partitions := max(1, int(opts.Partitions))
 	group := &Group{
+		kind:        opts.Kind,
 		codecConfig: codecConfig,
 		upstreamDB:  upstreamDB,
 		schemas:     common.NewTableInfoProvider(),
+		waiting:     make(map[waitingSchemaKey][]waitingDML),
 		seenDDLs:    make(map[ddl.Key]struct{}),
-		decoders:    make([]decoder, partitions),
-		queues:      make([]chan *Future, partitions),
+		decoders:    make([]decoder, decodeConcurrency),
+		queues:      make([]chan *Future, decodeConcurrency),
 		output:      make(chan *Future, decoderQueueSize),
 	}
 	for i := range group.queues {
@@ -137,12 +183,29 @@ func NewGroup(ctx context.Context, opts Options) *Group {
 		group.selectors = selectors
 	}
 	// Storage decodes each file with a decoder built from that file's schema,
-	// so the group needs no per-partition decoder.
+	// so pipelines need no long-lived protocol decoder instance.
 	if opts.Kind == source.KindStorage {
 		return group
 	}
+	if codecConfig.LargeMessageHandle.EnableClaimCheck() {
+		switch codecConfig.Protocol {
+		case config.ProtocolOpen, config.ProtocolDefault, config.ProtocolCanalJSON, config.ProtocolSimple:
+			storage, err := util.GetExternalStorageWithDefaultTimeout(ctx, codecConfig.LargeMessageHandle.ClaimCheckStorageURI)
+			if err != nil {
+				log.Panic("consumer claim-check storage initialization failed", zap.Error(err))
+			}
+			group.claimCheckStorage = storage
+		}
+	}
+	if codecConfig.Protocol == config.ProtocolAvro || codecConfig.Protocol == config.ProtocolDebeziumAvro {
+		schemaM, err := schemamanager.NewConfluentSchemaManager(ctx, codecConfig.AvroConfluentSchemaRegistry, nil)
+		if err != nil {
+			log.Panic("consumer schema registry initialization failed", zap.Error(err))
+		}
+		group.schemaManager = schemaM
+	}
 	for i := range group.decoders {
-		item, err := codec.NewEventDecoder(ctx, codecConfig, opts.Topic, upstreamDB)
+		item, err := codec.NewEventDecoder(ctx, codecConfig, opts.Topic, upstreamDB, group.claimCheckStorage, group.schemaManager)
 		if err != nil {
 			log.Panic("consumer event decoder initialization failed", zap.String("protocol", codecConfig.Protocol.String()), zap.Error(err))
 		}
@@ -164,14 +227,28 @@ func (d *Group) Schemas() *common.TableInfoProvider {
 	return d.schemas
 }
 
-// Close releases the upstream metadata connection.
+// Close releases the upstream metadata connection and shared decoder clients.
 func (d *Group) Close() {
-	if d.upstreamDB == nil {
-		return
+	if d.upstreamDB != nil {
+		if err := d.upstreamDB.Close(); err != nil {
+			log.Warn("consumer upstream database close failed", zap.Error(err))
+		}
 	}
-	if err := d.upstreamDB.Close(); err != nil {
-		log.Warn("consumer upstream database close failed", zap.Error(err))
+	if d.claimCheckStorage != nil {
+		d.claimCheckStorage.Close()
 	}
+	if d.schemaManager != nil {
+		d.schemaManager.Close()
+	}
+}
+
+func (d *Group) decoderIndex(item *source.Payload) int {
+	if d.kind == source.KindStorage {
+		idx := d.index % len(d.queues)
+		d.index++
+		return idx
+	}
+	return int(uint32(item.Partition) % uint32(len(d.queues)))
 }
 
 // Add transfers ownership of the source to the group. The reader calls it
@@ -187,7 +264,7 @@ func (d *Group) Add(ctx context.Context, payloads []*source.Payload) error {
 		select {
 		case <-ctx.Done():
 			return context.Cause(ctx)
-		case d.queues[item.Partition] <- f:
+		case d.queues[d.decoderIndex(item)] <- f:
 		}
 
 		select {
@@ -215,24 +292,13 @@ func (d *Group) Run(ctx context.Context) error {
 }
 
 func (d *Group) runDecoder(ctx context.Context, decoder decoder, futures <-chan *Future) error {
-	// Inputs whose message the decoder cached until the table info arrives, in
-	// the order the decoder cached them.
-	var waiting []*Future
 	for {
-		var changed <-chan struct{}
-		waiting, changed = d.drainCached(decoder, waiting)
 		select {
 		case <-ctx.Done():
 			return context.Cause(ctx)
-		case <-changed:
 		case f := <-futures:
-			cached, err := d.decodeInput(ctx, decoder, f)
-			if err != nil {
+			if err := d.decodeInput(ctx, decoder, f); err != nil {
 				return err
-			}
-			if cached {
-				waiting = append(waiting, f)
-				continue
 			}
 			f.finish()
 		}
@@ -243,7 +309,7 @@ func (f *Future) appendEvent(value event.Event) {
 	f.Events = append(f.Events, value)
 }
 
-// Ready blocks until the pool decoded every event of the input.
+// Ready blocks until the decoder finished every event of the input.
 func (f *Future) Ready(ctx context.Context) error {
 	select {
 	case <-ctx.Done():
@@ -265,61 +331,140 @@ func (d *Group) addRow(f *Future, dml *event.DMLEvent) {
 	f.appendEvent(dml)
 }
 
-// drainCached emits rows that were decoded before their schema arrived. The
-// schema change channel is read before the pending rows to avoid missing a
-// write between that check and the select below.
-func (d *Group) drainCached(decoder decoder, waiting []*Future) ([]*Future, <-chan struct{}) {
-	if decoder.schema == nil {
-		return waiting, nil
+func (d *Group) popWaitingLocked(info *commonType.TableInfo, dst []wokenDML) []wokenDML {
+	if info == nil || info.TableName.Schema == "" || info.TableName.Table == "" {
+		return dst
 	}
-	changed := d.schemas.Changes()
-	for _, dml := range decoder.schema.GetCachedEvents() {
-		f := waiting[0]
-		waiting = waiting[1:]
-		d.addRow(f, dml)
-		f.finish()
+	key := waitingSchemaKey{
+		schema:  info.TableName.Schema,
+		table:   info.TableName.Table,
+		version: info.GetUpdateTS(),
 	}
-	return waiting, changed
+	items := d.waiting[key]
+	if len(items) == 0 {
+		return dst
+	}
+	delete(d.waiting, key)
+	for _, item := range items {
+		dst = append(dst, wokenDML{waitingDML: item, tableInfo: info})
+	}
+	return dst
 }
 
-// decodeInput decodes the input, reporting whether the decoder cached the
-// message until its table info arrives.
-func (d *Group) decodeInput(ctx context.Context, decoder decoder, future *Future) (bool, error) {
+func (d *Group) decodeSimpleRow(schemaDecoder *simple.Decoder, future *Future) {
+	pending := schemaDecoder.TakePendingDML()
+	if released := d.schemas.ReleasedWatermark(); released != 0 && pending.CommitTs() <= released {
+		return
+	}
+	d.waitMu.Lock()
+	if released := d.schemas.ReleasedWatermark(); released != 0 && pending.CommitTs() <= released {
+		d.waitMu.Unlock()
+		return
+	}
+	tableInfo := d.schemas.Read(pending.Schema(), pending.Table(), pending.SchemaVersion())
+	if tableInfo == nil {
+		if d.waiting == nil {
+			d.waiting = make(map[waitingSchemaKey][]waitingDML)
+		}
+		d.nextPendingID++
+		id := d.nextPendingID
+		key := waitingSchemaKey{
+			schema:  pending.Schema(),
+			table:   pending.Table(),
+			version: pending.SchemaVersion(),
+		}
+		d.waiting[key] = append(d.waiting[key], waitingDML{
+			id:        id,
+			pending:   pending,
+			partition: future.Payload.Partition,
+			offset:    future.Payload.Offset,
+		})
+		future.Pending = append(future.Pending, PendingDecode{
+			ID:       id,
+			CommitTs: pending.CommitTs(),
+		})
+		future.Marker = max(future.Marker, pending.CommitTs())
+		d.waitMu.Unlock()
+		return
+	}
+	d.waitMu.Unlock()
+	d.addRow(future, schemaDecoder.DecodeDMLWithInfo(pending, tableInfo))
+}
+
+func (d *Group) decodeSimpleDDL(schemaDecoder *simple.Decoder, future *Future) {
+	ddlEvent := schemaDecoder.DecodeDDLEvent()
+
+	var woken []wokenDML
+	d.waitMu.Lock()
+	if !ddlEvent.IsBootstrap && ddlEvent.FinishedTs != 0 {
+		d.schemas.WriteTableInfoAt(ddlEvent.TableInfo, ddlEvent.FinishedTs)
+	} else {
+		d.schemas.WriteTableInfo(ddlEvent.TableInfo)
+	}
+	woken = d.popWaitingLocked(ddlEvent.TableInfo, woken)
+	if len(ddlEvent.MultipleTableInfos) > 1 && ddlEvent.MultipleTableInfos[1] != nil {
+		d.schemas.WriteTableInfo(ddlEvent.MultipleTableInfos[1])
+		woken = d.popWaitingLocked(ddlEvent.MultipleTableInfos[1], woken)
+	}
+	d.waitMu.Unlock()
+
+	for _, item := range woken {
+		dml := schemaDecoder.DecodeDMLWithInfo(item.pending, item.tableInfo)
+		if dml == nil {
+			log.Panic("consumer DML decoding failed")
+		}
+		future.Resolved = append(future.Resolved, ResolvedDML{
+			ID:        item.id,
+			DML:       dml,
+			Partition: item.partition,
+			Offset:    item.offset,
+		})
+	}
+
+	if ddlEvent.IsBootstrap || ddlEvent.Query == "" {
+		return
+	}
+	if !d.claimDDL(ddlEvent) {
+		future.Marker = max(future.Marker, ddlEvent.GetCommitTs())
+		return
+	}
+	future.appendEvent(ddlEvent)
+}
+
+// decodeInput decodes one input payload into future.
+func (d *Group) decodeInput(ctx context.Context, decoder decoder, future *Future) error {
 	payload := future.Payload
 	if payload.File != nil {
-		return false, d.decodeStorage(ctx, future)
+		return d.decodeStorage(ctx, future)
 	}
 	if payload.Watermark != 0 {
 		future.appendEvent(&event.ResolvedEvent{ResolvedTs: payload.Watermark})
-		return false, nil
+		return nil
 	}
 	decoder.AddKeyValue(payload.Key, payload.Value)
 	for {
 		if err := context.Cause(ctx); err != nil {
-			return false, err
+			return err
 		}
 		kind, more := decoder.HasNext()
 		if !more {
-			return false, nil
+			return nil
 		}
 		switch kind {
 		case common.MessageTypeRow:
-			before := 0
 			if decoder.schema != nil {
-				before = decoder.schema.CachedCount()
-			}
-			dml := decoder.NextDMLEvent()
-			if dml == nil {
-				if decoder.schema != nil && decoder.schema.CachedCount() > before {
-					// Simple has one message per input; the decoder keeps it cached
-					// until the table info arrives.
-					return true, nil
-				}
-				// Stale replay skipped before table lookup.
+				d.decodeSimpleRow(decoder.schema, future)
 				continue
 			}
-			d.addRow(future, dml)
+			dml := decoder.NextDMLEvent()
+			if dml != nil {
+				d.addRow(future, dml)
+			}
 		case common.MessageTypeDDL:
+			if decoder.schema != nil {
+				d.decodeSimpleDDL(decoder.schema, future)
+				continue
+			}
 			ddlEvent := decoder.NextDDLEvent()
 			if ddlEvent.IsBootstrap || ddlEvent.Query == "" {
 				continue

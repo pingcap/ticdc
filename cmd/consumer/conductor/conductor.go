@@ -83,8 +83,7 @@ func (c *Conductor) run(ctx context.Context, tasks <-chan *decode.Future, w *wri
 			if err := future.Ready(ctx); err != nil {
 				return err
 			}
-			c.marker = max(c.marker, future.Marker)
-			if err := c.acceptBatch(future.Events, future.Payload); err != nil {
+			if err := c.acceptFuture(future); err != nil {
 				if ctx.Err() == nil {
 					log.Error("consumer task handling failed", zap.Error(err))
 				}
@@ -98,6 +97,54 @@ func (c *Conductor) run(ctx context.Context, tasks <-chan *decode.Future, w *wri
 			}
 			c.observeCheckpoint(w.Checkpoint())
 		}
+	}
+}
+
+func (c *Conductor) acceptFuture(future *decode.Future) error {
+	c.marker = max(c.marker, future.Marker)
+	for _, pending := range future.Pending {
+		c.addPendingDecode(pending.ID, pending.CommitTs)
+	}
+	for _, resolved := range future.Resolved {
+		c.resolvePendingDecode(resolved)
+	}
+	return c.acceptBatch(future.Events, future.Payload)
+}
+
+func (c *Conductor) addPendingDecode(id, commitTs uint64) {
+	c.marker = max(c.marker, commitTs)
+	if _, alreadyResolved := c.resolvedDecodes[id]; alreadyResolved {
+		delete(c.resolvedDecodes, id)
+		return
+	}
+	c.pendingDecodes[id] = commitTs
+	if commitTs != 0 && (c.minPendingDecode == 0 || commitTs < c.minPendingDecode) {
+		c.minPendingDecode = commitTs
+	}
+}
+
+func (c *Conductor) resolvePendingDecode(resolved decode.ResolvedDML) {
+	c.queueDML(&dmlTask{dml: resolved.DML, partition: resolved.Partition, offset: resolved.Offset})
+	ts, ok := c.pendingDecodes[resolved.ID]
+	if !ok {
+		c.resolvedDecodes[resolved.ID] = struct{}{}
+		return
+	}
+	delete(c.pendingDecodes, resolved.ID)
+	if len(c.pendingDecodes) == 0 {
+		c.minPendingDecode = 0
+		c.releaseSchemas()
+		return
+	}
+	if ts == c.minPendingDecode {
+		var minTs uint64
+		for _, pendingTs := range c.pendingDecodes {
+			if pendingTs != 0 {
+				minTs = earliest(minTs, pendingTs)
+			}
+		}
+		c.minPendingDecode = minTs
+		c.releaseSchemas()
 	}
 }
 
@@ -336,7 +383,7 @@ func (c *Conductor) nextReady() (*event.DDLEvent, *dmlTask) {
 
 // ddlReady reports whether every row before the DDL has been read.
 func (c *Conductor) ddlReady(ddl *event.DDLEvent) bool {
-	if ddl.GetCommitTs() <= c.watermark {
+	if ddl.GetCommitTs() <= c.effectiveWatermark() {
 		return true
 	}
 	// Creating a schema or standalone table cannot depend on earlier rows.
@@ -351,7 +398,7 @@ func (c *Conductor) ddlReady(ddl *event.DDLEvent) bool {
 
 // rowsBefore reports whether a ready row must be written before the DDL.
 func (c *Conductor) rowsBefore(block *event.DDLEvent) bool {
-	return c.hasRowBefore(0, min(c.watermark, block.GetCommitTs()), block)
+	return c.hasRowBefore(0, min(c.effectiveWatermark(), block.GetCommitTs()), block)
 }
 
 func (c *Conductor) hasRowBefore(index int, limit uint64, block *event.DDLEvent) bool {
@@ -374,7 +421,7 @@ func (c *Conductor) nextDML() *dmlTask {
 		return nil
 	}
 	head := c.readyHeap[0].rows[0]
-	if head.dml.CommitTs > c.watermark {
+	if head.dml.CommitTs > c.effectiveWatermark() {
 		return nil
 	}
 	return head
@@ -472,6 +519,9 @@ type Conductor struct {
 
 	partitionWatermarks []uint64
 	watermark           uint64
+	pendingDecodes      map[uint64]uint64
+	resolvedDecodes     map[uint64]struct{}
+	minPendingDecode    uint64
 
 	pendingDML  map[int64]*tableQueue
 	readyHeap   tableHeap
@@ -488,6 +538,8 @@ func New(reader source.Reader, schemas *codecCommon.TableInfoProvider) *Conducto
 		checkpoint:          new(atomic.Uint64),
 		positions:           make(map[int32][]sourcePosition),
 		partitionWatermarks: make([]uint64, reader.Partitions()),
+		pendingDecodes:      make(map[uint64]uint64),
+		resolvedDecodes:     make(map[uint64]struct{}),
 		pendingDML:          make(map[int64]*tableQueue),
 		queuedDDLs:          make(map[ddl.Key]struct{}),
 	}
@@ -500,13 +552,26 @@ func New(reader source.Reader, schemas *codecCommon.TableInfoProvider) *Conducto
 	return c
 }
 
+func (c *Conductor) effectiveWatermark() uint64 {
+	if c.minPendingDecode != 0 {
+		return min(c.watermark, c.minPendingDecode-1)
+	}
+	return c.watermark
+}
+
+func (c *Conductor) releaseSchemas() {
+	if effective := c.effectiveWatermark(); effective != 0 {
+		c.schemas.ReleaseBefore(effective)
+	}
+}
+
 // advanceWatermark records resolved progress. Sources without partitions
 // publish a global watermark; partitioned sources advance only when every
 // partition has been resolved.
 func (c *Conductor) advanceWatermark(ts uint64, partition int32) {
 	if len(c.partitionWatermarks) == 0 {
 		c.watermark = max(c.watermark, ts)
-		c.schemas.ReleaseBefore(c.watermark)
+		c.releaseSchemas()
 		return
 	}
 	if int(partition) >= len(c.partitionWatermarks) {
@@ -521,7 +586,7 @@ func (c *Conductor) advanceWatermark(ts uint64, partition int32) {
 		watermark = min(watermark, resolved)
 	}
 	c.watermark = max(c.watermark, watermark)
-	c.schemas.ReleaseBefore(c.watermark)
+	c.releaseSchemas()
 }
 
 // source.Payload progress can pass decoded events still awaiting delivery. Publish
@@ -537,7 +602,7 @@ func (c *Conductor) advanceWriter(w *writer.Writer) {
 	if len(c.pendingDDL) != 0 {
 		pending = earliest(pending, c.pendingDDL[0].GetCommitTs())
 	}
-	w.Advance(writer.Progress{Watermark: c.watermark, Pending: pending})
+	w.Advance(writer.Progress{Watermark: c.effectiveWatermark(), Pending: pending})
 }
 
 // observeCheckpoint publishes a durable checkpoint and wakes the confirm loop.

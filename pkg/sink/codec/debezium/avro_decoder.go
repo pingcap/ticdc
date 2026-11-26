@@ -18,10 +18,7 @@ import (
 	"database/sql"
 	"encoding/binary"
 	"encoding/json"
-	"io"
 	"math/big"
-	"net/http"
-	"strconv"
 	"strings"
 
 	lru "github.com/hashicorp/golang-lru"
@@ -31,6 +28,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/errors"
 	codecavro "github.com/pingcap/ticdc/pkg/sink/codec/avro"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
+	"github.com/pingcap/ticdc/pkg/sink/codec/schemamanager"
 	"go.uber.org/zap"
 )
 
@@ -40,10 +38,9 @@ const (
 )
 
 type avroDecoder struct {
-	ctx         context.Context
-	registryURL string
-	httpClient  *http.Client
-	inner       *decoder
+	ctx     context.Context
+	schemaM schemamanager.SchemaManager
+	inner   *decoder
 
 	schemas *lru.Cache
 }
@@ -66,15 +63,27 @@ func NewAvroDecoder(
 	if registryURL == "" {
 		return nil, errors.ErrAvroSchemaAPIError.GenWithStackByArgs("schema registry URI is empty")
 	}
-	schemas, _ := lru.New(debeziumAvroDecoderSchemaCacheSize)
+	schemaM, err := schemamanager.NewConfluentSchemaManager(ctx, registryURL, nil)
+	if err != nil {
+		return nil, err
+	}
+	return NewAvroDecoderWithSchemaManager(ctx, config, schemaM, db), nil
+}
 
+// NewAvroDecoderWithSchemaManager returns a Debezium Avro decoder sharing schemaM.
+func NewAvroDecoderWithSchemaManager(
+	ctx context.Context,
+	config *common.Config,
+	schemaM schemamanager.SchemaManager,
+	db *sql.DB,
+) common.Decoder {
+	schemas, _ := lru.New(debeziumAvroDecoderSchemaCacheSize)
 	return &avroDecoder{
-		ctx:         ctx,
-		registryURL: registryURL,
-		httpClient:  http.DefaultClient,
-		inner:       NewDecoder(config, db).(*decoder),
-		schemas:     schemas,
-	}, nil
+		ctx:     ctx,
+		schemaM: schemaM,
+		inner:   NewDecoder(config, db).(*decoder),
+		schemas: schemas,
+	}
 }
 
 func (d *avroDecoder) AddKeyValue(key, value []byte) {
@@ -173,47 +182,21 @@ func (d *avroDecoder) getSchema(schemaID int) (*registeredDebeziumAvroSchema, er
 		return cached.(*registeredDebeziumAvroSchema), nil
 	}
 
-	uri := d.registryURL + "/schemas/ids/" + strconv.Itoa(schemaID)
-	req, err := http.NewRequestWithContext(d.ctx, http.MethodGet, uri, nil)
+	ctx := d.ctx
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	schemaDefinition, err := d.schemaM.Lookup(ctx, "", schemamanager.NewConfluentSchemaID(schemaID))
 	if err != nil {
-		return nil, errors.WrapError(errors.ErrAvroSchemaAPIError, err)
-	}
-	req.Header.Add(
-		"Accept",
-		"application/vnd.schemaregistry.v1+json, application/vnd.schemaregistry+json, "+
-			"application/json",
-	)
-
-	resp, err := d.httpClient.Do(req)
-	if err != nil {
-		return nil, errors.WrapError(errors.ErrAvroSchemaAPIError, err)
-	}
-	defer func() {
-		_ = resp.Body.Close()
-	}()
-
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, errors.WrapError(errors.ErrAvroSchemaAPIError, err)
-	}
-	if resp.StatusCode != http.StatusOK {
-		return nil, errors.ErrAvroSchemaAPIError.GenWithStackByArgs(
-			"failed to query schema id " + strconv.Itoa(schemaID))
+		return nil, err
 	}
 
-	var lookupResp struct {
-		Schema string `json:"schema"`
-	}
-	if err := json.Unmarshal(body, &lookupResp); err != nil {
-		return nil, errors.WrapError(errors.ErrAvroSchemaAPIError, err)
-	}
-
-	codec, err := codecavro.GenCodec(lookupResp.Schema)
+	codec, err := codecavro.GenCodec(schemaDefinition)
 	if err != nil {
 		return nil, errors.WrapError(errors.ErrAvroSchemaAPIError, err)
 	}
 
-	decoder := json.NewDecoder(strings.NewReader(lookupResp.Schema))
+	decoder := json.NewDecoder(strings.NewReader(schemaDefinition))
 	decoder.UseNumber()
 	var schemaDef any
 	if err := decoder.Decode(&schemaDef); err != nil {

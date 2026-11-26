@@ -29,6 +29,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/sink/codec/schemamanager"
 	"github.com/pingcap/ticdc/pkg/sink/codec/simple"
 	"github.com/pingcap/ticdc/pkg/sink/kafka/claimcheck"
+	"github.com/pingcap/tidb/pkg/objstore/storeapi"
 	"go.uber.org/zap"
 )
 
@@ -55,26 +56,37 @@ func NewEventEncoder(
 	}
 }
 
-// NewEventDecoder will create a new event decoder
+// NewEventDecoder creates an event decoder, reusing externalStorage or schemaM when provided.
 func NewEventDecoder(
-	ctx context.Context, codecConfig *common.Config, topic string, upstreamTiDB *sql.DB,
+	ctx context.Context,
+	codecConfig *common.Config,
+	topic string,
+	upstreamTiDB *sql.DB,
+	externalStorage storeapi.Storage,
+	schemaM schemamanager.SchemaManager,
 ) (common.Decoder, error) {
 	switch codecConfig.Protocol {
 	case config.ProtocolOpen, config.ProtocolDefault:
-		return open.NewDecoder(ctx, codecConfig, upstreamTiDB)
+		return open.NewDecoderWithStorage(ctx, codecConfig, upstreamTiDB, externalStorage)
 	case config.ProtocolCanalJSON:
-		return canal.NewDecoder(ctx, codecConfig, upstreamTiDB)
+		return canal.NewDecoderWithStorage(ctx, codecConfig, upstreamTiDB, externalStorage)
 	case config.ProtocolAvro:
-		schemaM, err := schemamanager.NewConfluentSchemaManager(ctx, codecConfig.AvroConfluentSchemaRegistry, nil)
-		if err != nil {
-			return nil, errors.Trace(err)
+		if schemaM == nil {
+			var err error
+			schemaM, err = schemamanager.NewConfluentSchemaManager(ctx, codecConfig.AvroConfluentSchemaRegistry, nil)
+			if err != nil {
+				return nil, errors.Trace(err)
+			}
 		}
 		return avro.NewDecoder(codecConfig, schemaM, topic, upstreamTiDB), nil
 	case config.ProtocolSimple:
-		return simple.NewDecoder(ctx, codecConfig, upstreamTiDB)
+		return simple.NewDecoderWithStorage(ctx, codecConfig, upstreamTiDB, externalStorage)
 	case config.ProtocolDebezium:
 		return debezium.NewDecoder(codecConfig, upstreamTiDB), nil
 	case config.ProtocolDebeziumAvro:
+		if schemaM != nil {
+			return debezium.NewAvroDecoderWithSchemaManager(ctx, codecConfig, schemaM, upstreamTiDB), nil
+		}
 		return debezium.NewAvroDecoder(ctx, codecConfig, upstreamTiDB)
 	default:
 	}

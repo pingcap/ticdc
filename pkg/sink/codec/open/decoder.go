@@ -60,11 +60,15 @@ type decoder struct {
 func NewDecoder(
 	ctx context.Context, config *common.Config, db *sql.DB,
 ) (common.Decoder, error) {
-	var (
-		externalStorage storeapi.Storage
-		err             error
-	)
-	if config.LargeMessageHandle.EnableClaimCheck() {
+	return NewDecoderWithStorage(ctx, config, db, nil)
+}
+
+// NewDecoderWithStorage creates a new decoder reusing externalStorage when provided.
+func NewDecoderWithStorage(
+	ctx context.Context, config *common.Config, db *sql.DB, externalStorage storeapi.Storage,
+) (common.Decoder, error) {
+	var err error
+	if externalStorage == nil && config.LargeMessageHandle.EnableClaimCheck() {
 		storageURI := config.LargeMessageHandle.ClaimCheckStorageURI
 		externalStorage, err = util.GetExternalStorageWithDefaultTimeout(ctx, storageURI)
 		if err != nil {

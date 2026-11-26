@@ -15,6 +15,7 @@
 package schemamanager
 
 import (
+	"strconv"
 	"sync"
 )
 
@@ -50,8 +51,15 @@ func newEncodeCacheKey(schemaName, schemaIdentity string) schemaCacheKey {
 	}
 }
 
-func newDecodeCacheKey(schemaName string) schemaCacheKey {
-	return schemaCacheKey{schemaName: schemaName}
+func newDecodeCacheKey(schemaName string, schemaID SchemaID) schemaCacheKey {
+	identity := "confluent:" + strconv.Itoa(schemaID.confluentSchemaID)
+	if schemaID.glueSchemaID != "" {
+		identity = "glue:" + schemaID.glueSchemaID
+	}
+	return schemaCacheKey{
+		schemaName:     schemaName,
+		schemaIdentity: identity,
+	}
 }
 
 func (c *schemaCache) load(key schemaCacheKey) (*schemaCacheEntry, bool) {
