@@ -27,6 +27,8 @@ import (
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"github.com/pingcap/ticdc/pkg/sink/kafka/claimcheck"
 	"github.com/pingcap/tidb/pkg/kv"
+	"github.com/pingcap/tidb/pkg/meta/model"
+	"github.com/pingcap/tidb/pkg/parser/ast"
 	"github.com/pingcap/tidb/pkg/tablecodec"
 	"github.com/pingcap/tidb/pkg/util/chunk"
 	"github.com/stretchr/testify/require"
@@ -1232,7 +1234,6 @@ func TestDecoderTableInfoCacheUsesDDLCommitTsAcrossColumnChanges(t *testing.T) {
 }
 
 func TestDecoderTableInfoCacheUsesDDLCommitTsBoundary(t *testing.T) {
-	tableIDAllocator.Clean()
 	dec := &decoder{
 		cache: common.NewTableInfoProvider(),
 	}
@@ -1265,7 +1266,7 @@ func TestDecoderTableInfoCacheUsesDDLCommitTsBoundary(t *testing.T) {
 		"id":   "int",
 	}
 
-	dec.addDDLCommitTs("test", "table_5", 200)
+	dec.cache.AddDDL("test", "table_5", 200)
 	sameTsAsDDL := dec.queryTableInfo(buildMessage(200, beforeDropSchema))
 	afterDDL := dec.queryTableInfo(buildMessage(300, afterDropSchema))
 	lateSameTsAsDDL := dec.queryTableInfo(buildMessage(200, beforeDropSchema))
@@ -1422,7 +1423,6 @@ func TestRowKey(t *testing.T) {
 // alphabetically first column (s_data here, because the decoder sorts columns by
 // name) was used instead, which made every UPDATE scan the whole table.
 func TestTableInfoFromMessageLocatesRowByPrimaryKey(t *testing.T) {
-	tableIDAllocator.Clean()
 	dec := &decoder{
 		cache: common.NewTableInfoProvider(),
 	}
@@ -1442,4 +1442,71 @@ func TestTableInfoFromMessageLocatesRowByPrimaryKey(t *testing.T) {
 	})
 
 	common.RequireRowLocatorByPrimaryKey(t, tableInfo, "s_i_id", "s_w_id")
+}
+
+func TestCanalJSONNextDDLEventInvalidatesSharedCache(t *testing.T) {
+	ctx := t.Context()
+	cfg := common.NewConfig(config.ProtocolCanalJSON)
+	cfg.EnableTiDBExtension = true
+	encoder, err := NewJSONRowEventEncoder(cfg, nil)
+	require.NoError(t, err)
+
+	provider := common.NewTableInfoProvider()
+	dec, err := NewDecoder(ctx, cfg, nil)
+	require.NoError(t, err)
+	dec.(*decoder).ShareTableInfo(provider)
+
+	t1 := commonType.WrapTableInfo("test", &model.TableInfo{ID: 1, Name: ast.NewCIStr("t1"), UpdateTS: 100})
+	t2 := commonType.WrapTableInfo("other", &model.TableInfo{ID: 2, Name: ast.NewCIStr("t2"), UpdateTS: 100})
+	provider.WriteTableInfo(t1)
+	provider.WriteTableInfo(t2)
+
+	msg, err := encoder.EncodeDDLEvent(&commonEvent.DDLEvent{
+		FinishedTs: 120,
+		Type:       byte(model.ActionExchangeTablePartition),
+		SchemaName: "test",
+		TableName:  "t1",
+		Query:      "ALTER TABLE test.t1 EXCHANGE PARTITION p0 WITH TABLE test.t_normal",
+	})
+	require.NoError(t, err)
+	dec.AddKeyValue(msg.Key, msg.Value)
+	tp, hasNext := dec.HasNext()
+	require.True(t, hasNext)
+	require.Equal(t, common.MessageTypeDDL, tp)
+	_ = dec.NextDDLEvent()
+
+	_, before := provider.ReadAt("other", "t2", 120)
+	require.Same(t, t2, before)
+	_, afterT1 := provider.ReadAt("test", "t1", 121)
+	require.Nil(t, afterT1)
+	_, afterT2 := provider.ReadAt("other", "t2", 121)
+	require.Nil(t, afterT2)
+}
+
+func TestTxnDecoderReusesTableInfo(t *testing.T) {
+	cfg := common.NewConfig(config.ProtocolCanalJSON)
+	cfg.EnableTiDBExtension = true
+	cfg.Terminator = "\n"
+
+	row1 := `{"id":0,"database":"test","table":"t1","pkNames":["id"],"isDdl":false,"type":"INSERT","es":1,"ts":1,"sql":"","sqlType":{"id":4,"v":4},"mysqlType":{"id":"int","v":"int"},"data":[{"id":"1","v":"10"}],"old":null,"_tidb":{"commitTs":101}}`
+	row2 := `{"id":0,"database":"test","table":"t1","pkNames":["id"],"isDdl":false,"type":"INSERT","es":1,"ts":1,"sql":"","sqlType":{"id":4,"v":4},"mysqlType":{"id":"int","v":"int"},"data":[{"id":"2","v":"20"}],"old":null,"_tidb":{"commitTs":102}}`
+	row3 := `{"id":0,"database":"test","table":"t2","pkNames":["id"],"isDdl":false,"type":"INSERT","es":1,"ts":1,"sql":"","sqlType":{"id":4,"v":4},"mysqlType":{"id":"int","v":"int"},"data":[{"id":"3","v":"30"}],"old":null,"_tidb":{"commitTs":103}}`
+
+	dec := NewTxnDecoder(cfg)
+	dec.AddKeyValue(nil, []byte(row1+"\n"+row2+"\n"+row3+"\n"))
+
+	var events []*commonEvent.DMLEvent
+	for {
+		tp, hasNext := dec.HasNext()
+		if !hasNext {
+			break
+		}
+		require.Equal(t, common.MessageTypeRow, tp)
+		dml := dec.NextDMLMessage().ToDMLEvent()
+		t.Cleanup(dml.PostFlush)
+		events = append(events, dml)
+	}
+	require.Len(t, events, 3)
+	require.Same(t, events[0].TableInfo, events[1].TableInfo)
+	require.NotSame(t, events[0].TableInfo, events[2].TableInfo)
 }

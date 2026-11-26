@@ -47,8 +47,7 @@ func newAvroBatchEncoderForTest(
 func TestDebeziumAvroDecoderSchemaCacheIsBounded(t *testing.T) {
 	cfg := common.NewConfig(config.ProtocolDebeziumAvro)
 	cfg.AvroConfluentSchemaRegistry = "http://127.0.0.1:8081"
-	decoder, err := NewAvroDecoder(t.Context(), cfg, 0, nil)
-	require.NoError(t, err)
+	decoder := NewAvroDecoderWithSchemaManager(t.Context(), cfg, 0, nil, nil)
 	avroDecoder := decoder.(*avroDecoder)
 	schema := &registeredDebeziumAvroSchema{}
 

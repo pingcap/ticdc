@@ -17,8 +17,13 @@ import (
 	"slices"
 	"sort"
 	"sync"
+	"sync/atomic"
 
+	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/common"
+	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
+	timodel "github.com/pingcap/tidb/pkg/meta/model"
+	"go.uber.org/zap"
 )
 
 // TableInfoProvider keeps the TableInfo of every table version. Decoders may
@@ -26,16 +31,29 @@ import (
 // message asks for, and versions are released once the watermark passes them.
 // Tables are keyed by their original name, so T and t are different tables.
 type TableInfoProvider struct {
-	mu            sync.RWMutex
-	tables        map[accessKey]*tableVersions
-	invalidations []uint64
+	mu                sync.RWMutex
+	tables            map[accessKey]*tableVersions
+	invalidations     []uint64
+	releasedWatermark atomic.Uint64
+
+	idMu            sync.RWMutex
+	tableIDs        map[accessKey]int64
+	currentTableID  int64
+	blockedTableIDs map[accessKey]map[int64]struct{}
 }
 
 // NewTableInfoProvider creates an empty versioned provider.
 func NewTableInfoProvider() *TableInfoProvider {
 	return &TableInfoProvider{
-		tables: make(map[accessKey]*tableVersions),
+		tables:          make(map[accessKey]*tableVersions),
+		tableIDs:        make(map[accessKey]int64),
+		blockedTableIDs: make(map[accessKey]map[int64]struct{}),
 	}
+}
+
+// ReleasedWatermark returns the highest watermark passed to ReleaseBefore.
+func (c *TableInfoProvider) ReleasedWatermark() uint64 {
+	return c.releasedWatermark.Load()
 }
 
 // WriteTableInfo stores the table info under its own version.
@@ -43,17 +61,33 @@ func (c *TableInfoProvider) WriteTableInfo(info *common.TableInfo) {
 	if info == nil {
 		return
 	}
-	c.Write(info.TableName.Schema, info.TableName.Table, info.GetUpdateTS(), info)
+	c.WriteTableInfoAt(info, info.GetUpdateTS())
+}
+
+// WriteTableInfoAt stores the table info under its own version while ordering
+// version retention by effectiveTs.
+func (c *TableInfoProvider) WriteTableInfoAt(info *common.TableInfo, effectiveTs uint64) {
+	if info == nil {
+		return
+	}
+	if effectiveTs == 0 {
+		effectiveTs = info.GetUpdateTS()
+	}
+	c.writeVersion(info.TableName.Schema, info.TableName.Table, info.GetUpdateTS(), effectiveTs, info)
 }
 
 // Write stores the table info under the version the message belongs to.
 func (c *TableInfoProvider) Write(schema, table string, version uint64, info *common.TableInfo) {
+	c.writeVersion(schema, table, version, version, info)
+}
+
+func (c *TableInfoProvider) writeVersion(schema, table string, version, effectiveTs uint64, info *common.TableInfo) {
 	if schema == "" || table == "" || info == nil {
 		return
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	c.table(schema, table).set(version, info)
+	c.table(schema, table).set(version, effectiveTs, info)
 }
 
 // Read returns the table info of exactly the requested version.
@@ -97,7 +131,7 @@ func (c *TableInfoProvider) AddDDL(schema, table string, ts uint64) {
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	c.table(schema, table).set(ts, nil)
+	c.table(schema, table).set(ts, ts, nil)
 }
 
 // InvalidateAll records a DDL after which every cached table info is rebuilt:
@@ -115,6 +149,23 @@ func (c *TableInfoProvider) InvalidateAll(ts uint64) {
 	}
 }
 
+// RecordDDL updates cached table versions for a decoded DDL event.
+// DDLs that move layouts between names invalidate all cached table info;
+// other DDLs invalidate only the affected table names.
+func (c *TableInfoProvider) RecordDDL(ddl *commonEvent.DDLEvent) {
+	if c == nil || ddl == nil {
+		return
+	}
+	ts := ddl.GetCommitTs()
+	switch timodel.ActionType(ddl.Type) {
+	case timodel.ActionRenameTable, timodel.ActionRenameTables, timodel.ActionExchangeTablePartition:
+		c.InvalidateAll(ts)
+	default:
+		c.AddDDL(ddl.SchemaName, ddl.TableName, ts)
+		c.AddDDL(ddl.ExtraSchemaName, ddl.ExtraTableName, ts)
+	}
+}
+
 // ReleaseBefore drops the versions the watermark has passed. Every decoder has
 // consumed the messages carrying them; the newest dropped entry stays as the
 // floor later versions are resolved against.
@@ -124,6 +175,9 @@ func (c *TableInfoProvider) ReleaseBefore(watermark uint64) {
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	if watermark > c.releasedWatermark.Load() {
+		c.releasedWatermark.Store(watermark)
+	}
 	for key, table := range c.tables {
 		table.releaseBefore(watermark)
 		if len(table.entries) == 0 {
@@ -148,6 +202,50 @@ func (c *TableInfoProvider) table(schema, table string) *tableVersions {
 	return versions
 }
 
+// AllocateTableID allocates a physical table ID scoped to this provider.
+func (c *TableInfoProvider) AllocateTableID(schema, table string) int64 {
+	c.idMu.Lock()
+	defer c.idMu.Unlock()
+
+	key := accessKey{schema, table}
+	if tableID, ok := c.tableIDs[key]; ok {
+		return tableID
+	}
+	c.currentTableID++
+	c.tableIDs[key] = c.currentTableID
+	return c.currentTableID
+}
+
+// AddBlockTableID registers a physical table ID as blocked by DDLs on the table.
+func (c *TableInfoProvider) AddBlockTableID(schema, table string, physicalTableID int64) {
+	c.idMu.Lock()
+	defer c.idMu.Unlock()
+
+	key := accessKey{schema, table}
+	if _, ok := c.blockedTableIDs[key]; !ok {
+		c.blockedTableIDs[key] = make(map[int64]struct{})
+	}
+
+	if _, exists := c.blockedTableIDs[key][physicalTableID]; !exists {
+		c.blockedTableIDs[key][physicalTableID] = struct{}{}
+		log.Info("add table id to blocked list",
+			zap.String("schema", schema), zap.String("table", table), zap.Int64("tableID", physicalTableID))
+	}
+}
+
+// GetBlockedTables returns the physical table IDs blocked by DDLs on the table.
+func (c *TableInfoProvider) GetBlockedTables(schema, table string) []int64 {
+	c.idMu.RLock()
+	defer c.idMu.RUnlock()
+
+	blocked := c.blockedTableIDs[accessKey{schema, table}]
+	result := make([]int64, 0, len(blocked))
+	for item := range blocked {
+		result = append(result, item)
+	}
+	return result
+}
+
 // tableVersions keeps the versions of one table in ascending order. A table has
 // a handful of them, so a binary search is enough and stays allocation free.
 type tableVersions struct {
@@ -155,8 +253,9 @@ type tableVersions struct {
 }
 
 type entry struct {
-	version uint64
-	info    *common.TableInfo
+	version     uint64
+	effectiveTs uint64
+	info        *common.TableInfo
 }
 
 // at returns the version in effect at the commit ts: the newest one below it.
@@ -188,26 +287,39 @@ func (t *tableVersions) get(version uint64) *common.TableInfo {
 	return t.entries[i].info
 }
 
-func (t *tableVersions) set(version uint64, info *common.TableInfo) {
+func (t *tableVersions) set(version, effectiveTs uint64, info *common.TableInfo) {
 	i := sort.Search(len(t.entries), func(i int) bool {
 		return t.entries[i].version >= version
 	})
 	if i < len(t.entries) && t.entries[i].version == version {
+		t.entries[i].effectiveTs = max(t.entries[i].effectiveTs, effectiveTs)
 		if info != nil {
 			t.entries[i].info = info
 		}
 		return
 	}
-	t.entries = slices.Insert(t.entries, i, entry{version: version, info: info})
+	t.entries = slices.Insert(t.entries, i, entry{version: version, effectiveTs: effectiveTs, info: info})
 }
 
 func (t *tableVersions) releaseBefore(watermark uint64) {
-	i := sort.Search(len(t.entries), func(i int) bool {
-		return t.entries[i].version > watermark
-	})
-	if i <= 1 {
+	var covered int
+	var floorEffectiveTs uint64
+	for _, item := range t.entries {
+		if item.effectiveTs <= watermark {
+			covered++
+			floorEffectiveTs = max(floorEffectiveTs, item.effectiveTs)
+		}
+	}
+	if covered <= 1 {
 		return
 	}
-	clear(t.entries[:i-1])
-	t.entries = t.entries[i-1:]
+	kept := 0
+	for _, item := range t.entries {
+		if item.effectiveTs >= floorEffectiveTs {
+			t.entries[kept] = item
+			kept++
+		}
+	}
+	clear(t.entries[kept:])
+	t.entries = t.entries[:kept]
 }

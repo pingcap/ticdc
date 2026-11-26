@@ -41,8 +41,6 @@ import (
 	"go.uber.org/zap"
 )
 
-var tableIDAllocator = common.NewTableIDAllocator()
-
 type decoder struct {
 	cache *common.TableInfoProvider
 
@@ -56,21 +54,20 @@ type decoder struct {
 	config *common.Config
 
 	upstreamTiDB *sql.DB
-
-	idx int
 }
 
-// NewDecoder creates a new decoder.
+// NewDecoder creates a new decoder, reusing externalStorage when provided.
 func NewDecoder(
-	ctx context.Context, idx int, config *common.Config, db *sql.DB,
+	ctx context.Context, _ int, config *common.Config, db *sql.DB, externalStorage ...storeapi.Storage,
 ) (common.Decoder, error) {
-	var (
-		externalStorage storeapi.Storage
-		err             error
-	)
-	if config.LargeMessageHandle.EnableClaimCheck() {
+	var storage storeapi.Storage
+	if len(externalStorage) > 0 {
+		storage = externalStorage[0]
+	}
+	var err error
+	if storage == nil && config.LargeMessageHandle.EnableClaimCheck() {
 		storageURI := config.LargeMessageHandle.ClaimCheckStorageURI
-		externalStorage, err = util.GetExternalStorageWithDefaultTimeout(ctx, storageURI)
+		storage, err = util.GetExternalStorageWithDefaultTimeout(ctx, storageURI)
 		if err != nil {
 			return nil, err
 		}
@@ -82,11 +79,9 @@ func NewDecoder(
 		}
 	}
 
-	tableIDAllocator.Clean()
 	return &decoder{
-		idx:          idx,
 		config:       config,
-		storage:      externalStorage,
+		storage:      storage,
 		upstreamTiDB: db,
 		cache:        common.NewTableInfoProvider(),
 	}, nil
@@ -184,22 +179,9 @@ func (b *decoder) NextDDLEvent() *commonEvent.DDLEvent {
 	result.SchemaName = b.nextKey.Schema
 	result.TableName = b.nextKey.Table
 
-	// Every partition decoder must record the boundary, even though only
-	// partition zero executes the DDL downstream.
-	switch m.Type {
-	case timodel.ActionRenameTable, timodel.ActionRenameTables, timodel.ActionExchangeTablePartition:
-		// These DDLs move the layout between names, so the entry cached for a
-		// name may belong to another table afterwards.
-		b.cache.InvalidateAll(result.FinishedTs)
-	default:
-		b.cache.AddDDL(result.SchemaName, result.TableName, result.FinishedTs)
-	}
-
-	// only the DDL comes from the first partition will be processed.
-	if b.idx == 0 {
-		tableIDAllocator.AddBlockTableID(result.SchemaName, result.TableName, tableIDAllocator.Allocate(result.SchemaName, result.TableName))
-		result.BlockedTables = common.GetBlockedTables(tableIDAllocator, result)
-	}
+	b.cache.AddBlockTableID(result.SchemaName, result.TableName, b.cache.AllocateTableID(result.SchemaName, result.TableName))
+	result.BlockedTables = common.GetBlockedTables(b.cache, result)
+	b.cache.RecordDDL(result)
 
 	b.nextKey = nil
 	b.valueBytes = nil
@@ -220,7 +202,7 @@ func (b *decoder) NextDMLMessage() *common.DMLMessage {
 	if key.ClaimCheckLocation == "" {
 		rowType = b.rowTypeFromDMLValue(value)
 	}
-	tableID := tableIDAllocator.Allocate(key.Schema, key.Table)
+	tableID := b.cache.AllocateTableID(key.Schema, key.Table)
 	return common.NewDMLMessage(tableID, key.Schema, key.Table, key.Ts, rowType, func() *commonEvent.DMLEvent {
 		return b.decodeDMLMessage(&key, value)
 	})
@@ -425,6 +407,11 @@ func projection(info *commonType.TableInfo) string {
 	return strings.Join(names, ",")
 }
 
+// ShareTableInfo reads table info through the cache shared by all partitions.
+func (b *decoder) ShareTableInfo(cache *common.TableInfoProvider) {
+	b.cache = cache
+}
+
 func (b *decoder) queryTableInfo(key *messageKey, value *messageRow) *commonType.TableInfo {
 	version, info := b.cache.ReadAt(key.Schema, key.Table, key.Ts)
 	if info != nil {
@@ -443,8 +430,8 @@ func (b *decoder) queryTableInfo(key *messageKey, value *messageRow) *commonType
 }
 
 func (b *decoder) newTableInfo(key *messageKey, value *messageRow) *commonType.TableInfo {
-	physicalTableID := tableIDAllocator.Allocate(key.Schema, key.Table)
-	tableIDAllocator.AddBlockTableID(key.Schema, key.Table, physicalTableID)
+	physicalTableID := b.cache.AllocateTableID(key.Schema, key.Table)
+	b.cache.AddBlockTableID(key.Schema, key.Table, physicalTableID)
 	key.Partition = &physicalTableID
 	tableInfo := new(timodel.TableInfo)
 	tableInfo.ID = *key.Partition

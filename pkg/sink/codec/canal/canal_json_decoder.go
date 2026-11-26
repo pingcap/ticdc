@@ -89,19 +89,18 @@ type decoder struct {
 	cache        *common.TableInfoProvider
 }
 
-var tableIDAllocator = common.NewTableIDAllocator()
-
-// NewDecoder return a decoder for canal-json
+// NewDecoder returns a canal-json decoder, reusing externalStorage when provided.
 func NewDecoder(
-	ctx context.Context, codecConfig *common.Config, db *sql.DB,
+	ctx context.Context, codecConfig *common.Config, db *sql.DB, externalStorage ...storeapi.Storage,
 ) (common.Decoder, error) {
-	var (
-		externalStorage storeapi.Storage
-		err             error
-	)
-	if codecConfig.LargeMessageHandle.EnableClaimCheck() {
+	var storage storeapi.Storage
+	if len(externalStorage) > 0 {
+		storage = externalStorage[0]
+	}
+	var err error
+	if storage == nil && codecConfig.LargeMessageHandle.EnableClaimCheck() {
 		storageURI := codecConfig.LargeMessageHandle.ClaimCheckStorageURI
-		externalStorage, err = util.GetExternalStorageWithDefaultTimeout(ctx, storageURI)
+		storage, err = util.GetExternalStorageWithDefaultTimeout(ctx, storageURI)
 		if err != nil {
 			return nil, errors.WrapError(errors.ErrKafkaInvalidConfig, err)
 		}
@@ -113,11 +112,10 @@ func NewDecoder(
 		}
 	}
 
-	tableIDAllocator.Clean()
 	return &decoder{
 		config:       codecConfig,
 		decoder:      newBufferedJSONDecoder(),
-		storage:      externalStorage,
+		storage:      storage,
 		upstreamTiDB: db,
 		cache:        common.NewTableInfoProvider(),
 	}, nil
@@ -304,8 +302,8 @@ func (d *decoder) NextDMLMessage() *common.DMLMessage {
 	msg := d.msg
 	schemaName := *msg.getSchema()
 	tableName := *msg.getTable()
-	tableID := tableIDAllocator.Allocate(schemaName, tableName)
-	tableIDAllocator.AddBlockTableID(schemaName, tableName, tableID)
+	tableID := d.cache.AllocateTableID(schemaName, tableName)
+	d.cache.AddBlockTableID(schemaName, tableName, tableID)
 
 	var rowType commonType.RowType
 	switch msg.eventType() {
@@ -395,11 +393,10 @@ func (d *decoder) NextDDLEvent() *commonEvent.DDLEvent {
 	result.Query = d.msg.getQuery()
 	actionType := common.GetDDLActionType(result.Query)
 	result.Type = byte(actionType)
-	tableIDAllocator.AddBlockTableID(result.SchemaName, result.TableName, tableIDAllocator.Allocate(result.SchemaName, result.TableName))
+	d.cache.AddBlockTableID(result.SchemaName, result.TableName, d.cache.AllocateTableID(result.SchemaName, result.TableName))
 
-	result.BlockedTables = common.GetBlockedTables(tableIDAllocator, result)
-	d.addDDLCommitTs(result.SchemaName, result.TableName, result.GetCommitTs())
-	d.addDDLCommitTs(result.ExtraSchemaName, result.ExtraTableName, result.GetCommitTs())
+	result.BlockedTables = common.GetBlockedTables(d.cache, result)
+	d.cache.RecordDDL(result)
 	return result
 }
 
@@ -552,6 +549,11 @@ func formatValue(value any, ft types.FieldType) any {
 	return nil
 }
 
+// ShareTableInfo reads table info through the cache shared by all partitions.
+func (d *decoder) ShareTableInfo(cache *common.TableInfoProvider) {
+	d.cache = cache
+}
+
 func (d *decoder) queryTableInfo(msg canalJSONMessageInterface) *commonType.TableInfo {
 	schemaName := *msg.getSchema()
 	tableName := *msg.getTable()
@@ -559,8 +561,8 @@ func (d *decoder) queryTableInfo(msg canalJSONMessageInterface) *commonType.Tabl
 	version, tableInfo := d.cache.ReadAt(schemaName, tableName, msg.getCommitTs())
 	if tableInfo == nil {
 		tidbTableInfo := new(timodel.TableInfo)
-		tidbTableInfo.ID = tableIDAllocator.Allocate(schemaName, tableName)
-		tableIDAllocator.AddBlockTableID(schemaName, tableName, tidbTableInfo.ID)
+		tidbTableInfo.ID = d.cache.AllocateTableID(schemaName, tableName)
+		d.cache.AddBlockTableID(schemaName, tableName, tidbTableInfo.ID)
 		tidbTableInfo.Name = ast.NewCIStr(tableName)
 
 		columns := newTiColumns(msg)
@@ -571,10 +573,6 @@ func (d *decoder) queryTableInfo(msg canalJSONMessageInterface) *commonType.Tabl
 		d.cache.Write(schemaName, tableName, version, tableInfo)
 	}
 	return tableInfo
-}
-
-func (d *decoder) addDDLCommitTs(schema, table string, commitTs uint64) {
-	d.cache.AddDDL(schema, table, commitTs)
 }
 
 func newTiColumns(msg canalJSONMessageInterface) []*timodel.ColumnInfo {

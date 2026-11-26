@@ -104,7 +104,7 @@ func TestChecksumFailureStopsDecode(t *testing.T) {
 				Type: DMLTypeUpdate, Data: map[string]any{"id": int64(1)},
 				Old: map[string]any{"id": int64(1)}, Checksum: &value,
 			}
-			decoder := &Decoder{config: common.NewConfig(config.ProtocolSimple)}
+			decoder := &Decoder{config: common.NewConfig(config.ProtocolSimple), memo: common.NewTableInfoProvider()}
 			decoder.config.EnableRowChecksum = true
 			require.PanicsWithValue(t, "consumer detect checksum corrupted", func() {
 				decoder.newDMLMessage(msg, ddl.TableInfo).ToDMLEvent()
@@ -122,8 +122,6 @@ func TestCachedDMLReturnsMessage(t *testing.T) {
 		schemaVersion   = uint64(100)
 		commitTs        = uint64(90)
 	)
-	tableIDAllocator.Clean()
-	t.Cleanup(tableIDAllocator.Clean)
 
 	decoder := &Decoder{
 		config:         common.NewConfig(config.ProtocolSimple),
@@ -179,7 +177,7 @@ func TestCachedDMLReturnsMessage(t *testing.T) {
 	require.Equal(t, table, dmlMessage.Table)
 	require.Equal(t, commitTs, dmlMessage.GetCommitTs())
 	require.Equal(t, commonType.RowTypeInsert, dmlMessage.RowType)
-	require.ElementsMatch(t, []int64{logicalTableID, physicalTableID}, decoder.GetTableIDs(schema, table))
+	require.ElementsMatch(t, []int64{logicalTableID, physicalTableID}, decoder.memo.GetBlockedTables(schema, table))
 
 	decoder.msg = &message{
 		Version:  defaultVersion,

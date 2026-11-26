@@ -30,7 +30,7 @@ import (
 )
 
 func TestDecoderReusesTableInfo(t *testing.T) {
-	d := &decoder{config: common.NewConfig(config.ProtocolOpen), idx: 1, cache: common.NewTableInfoProvider()}
+	d := &decoder{config: common.NewConfig(config.ProtocolOpen), cache: common.NewTableInfoProvider()}
 	key := &messageKey{Schema: "test", Table: "t", Ts: 100}
 	cols := map[string]column{"id": {Type: mysql.TypeLong, Flag: primaryKeyFlag, Value: json.Number("1")}}
 	first := d.queryTableInfo(key, &messageRow{Update: cols})
@@ -67,7 +67,7 @@ func TestDecoderReusesTableInfo(t *testing.T) {
 }
 
 func TestRenameTableInvalidatesCachedTableInfo(t *testing.T) {
-	d := &decoder{config: common.NewConfig(config.ProtocolOpen), idx: 1, cache: common.NewTableInfoProvider()}
+	d := &decoder{config: common.NewConfig(config.ProtocolOpen), cache: common.NewTableInfoProvider()}
 	key := &messageKey{Schema: "test", Table: "a", Ts: 100}
 	cols := map[string]column{"id": {Type: mysql.TypeLong, Flag: primaryKeyFlag, Value: json.Number("1")}}
 	first := d.queryTableInfo(key, &messageRow{Update: cols})

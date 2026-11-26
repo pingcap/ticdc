@@ -1145,6 +1145,7 @@ func TestE2EPartitionTable(t *testing.T) {
 
 	dec, err := NewDecoder(ctx, 0, codecConfig, nil)
 	require.NoError(t, err)
+	allocator := dec.(*decoder).cache
 
 	m, err := enc.EncodeDDLEvent(createPartitionTableDDL)
 	require.NoError(t, err)
@@ -1180,9 +1181,9 @@ func TestE2EPartitionTable(t *testing.T) {
 
 		decodedEvent := dec.NextDMLMessage().ToDMLEvent()
 		// table id should be set to the partition table id, the PhysicalTableID
-		require.Equal(t, decodedEvent.GetTableID(), tableIDAllocator.Allocate(e.TableInfo.GetSchemaName(), e.TableInfo.GetTableName()))
+		require.Equal(t, decodedEvent.GetTableID(), allocator.AllocateTableID(e.TableInfo.GetSchemaName(), e.TableInfo.GetTableName()))
 
-		require.Contains(t, tableIDAllocator.GetBlockedTables("test", "t"), tableIDAllocator.Allocate(e.TableInfo.GetSchemaName(), e.TableInfo.GetTableName()))
+		require.Contains(t, allocator.GetBlockedTables("test", "t"), allocator.AllocateTableID(e.TableInfo.GetSchemaName(), e.TableInfo.GetTableName()))
 	}
 
 	createTable2DDL := helper.DDL2Event(`create table t2 (a int primary key, b int)`)
@@ -1213,7 +1214,7 @@ func TestE2EPartitionTable(t *testing.T) {
 	decodedDDL = dec.NextDDLEvent()
 	require.NotEmpty(t, decodedDDL.GetBlockedTables().TableIDs)
 
-	expected := tableIDAllocator.GetBlockedTables("test", "t")
+	expected := allocator.GetBlockedTables("test", "t")
 	actual := decodedDDL.GetBlockedTables().TableIDs
 	for _, id := range expected {
 		require.Contains(t, actual, id)
@@ -1246,7 +1247,7 @@ func TestE2EPartitionTable(t *testing.T) {
 	require.Equal(t, common.MessageTypeDDL, tp)
 
 	decodedDDL = dec.NextDDLEvent()
-	expected = tableIDAllocator.GetBlockedTables("test", "t")
+	expected = allocator.GetBlockedTables("test", "t")
 	actual = decodedDDL.GetBlockedTables().TableIDs
 	for _, id := range expected {
 		require.Contains(t, actual, id)
@@ -1663,6 +1664,8 @@ func TestRenameTable(t *testing.T) {
 
 	dec, err := NewDecoder(ctx, 0, codecConfig, nil)
 	require.NoError(t, err)
+	shared := common.NewTableInfoProvider()
+	dec.(*decoder).ShareTableInfo(shared)
 
 	m, err := encoder.EncodeDDLEvent(createTableDDL)
 	require.NoError(t, err)
@@ -1679,6 +1682,7 @@ func TestRenameTable(t *testing.T) {
 
 	decoder1, err := NewDecoder(ctx, 1, codecConfig, nil)
 	require.NoError(t, err)
+	decoder1.(*decoder).ShareTableInfo(shared)
 
 	err = encoder.AppendRowChangedEvent(ctx, "", insertRowEvent)
 	require.NoError(t, err)
@@ -1692,7 +1696,7 @@ func TestRenameTable(t *testing.T) {
 
 	decodedInsert := decoder1.NextDMLMessage().ToDMLEvent()
 	require.NotZero(t, decodedInsert.GetTableID())
-	require.Contains(t, tableIDAllocator.GetBlockedTables("test", "t"), decodedInsert.GetTableID())
+	require.Contains(t, shared.GetBlockedTables("test", "t"), decodedInsert.GetTableID())
 
 	m, err = encoder.EncodeDDLEvent(renameTableDDL)
 	require.NoError(t, err)
@@ -1721,6 +1725,10 @@ func TestDDLSequence(t *testing.T) {
 
 	decoder, err := NewDecoder(ctx, 0, codecConfig, nil)
 	require.NoError(t, err)
+	allocator := common.NewTableInfoProvider()
+	decoder.(interface {
+		ShareTableInfo(*common.TableInfoProvider)
+	}).ShareTableInfo(allocator)
 
 	createDB := helper.DDL2Event(`create database abc`)
 
@@ -1798,7 +1806,7 @@ func TestDDLSequence(t *testing.T) {
 
 	decodedInsert := decoder.NextDMLMessage().ToDMLEvent()
 	require.NotZero(t, decodedInsert.GetTableID())
-	require.Contains(t, tableIDAllocator.GetBlockedTables("test", "t"), decodedInsert.GetTableID())
+	require.Contains(t, allocator.GetBlockedTables("test", "t"), decodedInsert.GetTableID())
 
 	addColumn := helper.DDL2Event(`alter table t add column c int`)
 
