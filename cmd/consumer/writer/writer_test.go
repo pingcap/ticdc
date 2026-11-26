@@ -20,7 +20,10 @@ import (
 	"github.com/golang/mock/gomock"
 	"github.com/pingcap/ticdc/cmd/consumer/ddl"
 	sinkmock "github.com/pingcap/ticdc/downstreamadapter/sink/mock"
+	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/common/event"
+	"github.com/pingcap/ticdc/pkg/integrity"
+	"github.com/pingcap/tidb/pkg/util/chunk"
 	"github.com/stretchr/testify/require"
 )
 
@@ -151,4 +154,89 @@ func TestWriterFlushOrdersDMLBeforeDDLAndRetainsDDLWrites(t *testing.T) {
 	// Historical DDL replay after checkpoint advancement is still deduplicated.
 	w.AddDDL(ddlEvent)
 	require.NoError(t, w.Flush(t.Context()))
+}
+
+func TestWriterFilterRowsPartialMultiRowWithUpdate(t *testing.T) {
+	helper := event.NewEventTestHelper(t)
+	defer helper.Close()
+
+	_ = helper.DDL2Event("create table test.t(id int primary key, v int)")
+	ins1Seen := helper.DML2Event("test", "t", "insert into test.t values (1, 10)")
+	ins1Seen.CommitTs = 200
+
+	helper.ExecuteDeleteDml("test", "t", "delete from test.t where id = 1")
+	ins1Dup := helper.DML2Event("test", "t", "insert into test.t values (1, 10)")
+	upd2, _ := helper.DML2UpdateEvent(
+		"test", "t",
+		"insert into test.t values (2, 20)",
+		"update test.t set v = 21 where id = 2",
+	)
+	ins3 := helper.DML2Event("test", "t", "insert into test.t values (3, 30)")
+
+	batch := event.NewDMLEvent(ins1Dup.DispatcherID, ins1Dup.PhysicalTableID, 190, 200, ins1Dup.TableInfo)
+	batch.Rows = chunk.NewChunkWithCapacity(ins1Dup.TableInfo.GetFieldSlice(), 4)
+	batch.Rows.Append(ins1Dup.Rows, 0, 1)
+	batch.Rows.Append(upd2.Rows, 0, 2)
+	batch.Rows.Append(ins3.Rows, 0, 1)
+	batch.RowTypes = []common.RowType{
+		common.RowTypeInsert,
+		common.RowTypeUpdate, common.RowTypeUpdate,
+		common.RowTypeInsert,
+	}
+	batch.RowKeys = [][]byte{[]byte("k1"), []byte("k2-pre"), []byte("k2-post"), []byte("k3")}
+	batch.Checksum = []*integrity.Checksum{{Current: 1}, {Previous: 2, Current: 22}, {Current: 3}}
+	batch.Length = 3
+
+	var batchFlushed bool
+	batch.AddPostFlushFunc(func() { batchFlushed = true })
+
+	ctrl := gomock.NewController(t)
+	target := sinkmock.NewMockSink(ctrl)
+	var filtered *event.DMLEvent
+	gomock.InOrder(
+		target.EXPECT().AddDMLEvent(gomock.Any()).Do(func(dml *event.DMLEvent) {
+			dml.PostFlush()
+		}).Times(1),
+		target.EXPECT().AddDMLEvent(gomock.Any()).Do(func(dml *event.DMLEvent) {
+			filtered = dml
+			dml.PostFlush()
+		}).Times(1),
+	)
+
+	w := &Writer{
+		target:    target,
+		mutations: make(map[mutationKey]bool),
+		ddlWrites: make(map[ddl.Key]bool),
+	}
+
+	w.AddDML(ins1Seen)
+	require.NoError(t, w.Flush(t.Context()))
+
+	w.AddDML(batch)
+	require.NoError(t, w.Flush(t.Context()))
+
+	require.True(t, batchFlushed)
+	require.NotNil(t, filtered)
+	require.NotSame(t, batch, filtered)
+	require.Equal(t, int32(2), filtered.Len())
+	require.Equal(t, []common.RowType{common.RowTypeUpdate, common.RowTypeUpdate, common.RowTypeInsert}, filtered.RowTypes)
+	require.Equal(t, [][]byte{[]byte("k2-pre"), []byte("k2-post"), []byte("k3")}, filtered.RowKeys)
+	require.Equal(t, []*integrity.Checksum{{Previous: 2, Current: 22}, {Current: 3}}, filtered.Checksum)
+
+	row0, ok := filtered.GetNextRow()
+	require.True(t, ok)
+	require.Equal(t, common.RowTypeUpdate, row0.RowType)
+	require.Equal(t, int64(2), row0.PreRow.GetInt64(0))
+	require.Equal(t, int64(20), row0.PreRow.GetInt64(1))
+	require.Equal(t, int64(2), row0.Row.GetInt64(0))
+	require.Equal(t, int64(21), row0.Row.GetInt64(1))
+
+	row1, ok := filtered.GetNextRow()
+	require.True(t, ok)
+	require.Equal(t, common.RowTypeInsert, row1.RowType)
+	require.Equal(t, int64(3), row1.Row.GetInt64(0))
+	require.Equal(t, int64(30), row1.Row.GetInt64(1))
+
+	_, ok = filtered.GetNextRow()
+	require.False(t, ok)
 }

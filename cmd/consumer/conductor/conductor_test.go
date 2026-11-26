@@ -349,3 +349,80 @@ func TestConductorEffectiveWatermarkPendingDecodeAndInvertedOrder(t *testing.T) 
 	require.Empty(t, c.resolvedDecodes)
 	require.Equal(t, uint64(300), c.effectiveWatermark())
 }
+
+func TestConductorBlockedTableReentersReadyHeapAndCreateTableLike(t *testing.T) {
+	c := New(&stubReader{partitions: 0}, codecCommon.NewTableInfoProvider())
+	w := writer.New(t.Context(), writer.NewOptions("blackhole://", config.GetDefaultReplicaConfig()))
+
+	writerCtx, cancel := context.WithCancel(t.Context())
+	writerDone := make(chan error, 1)
+	go func() {
+		writerDone <- w.Start(writerCtx)
+	}()
+	defer func() {
+		cancel()
+		<-writerDone
+	}()
+
+	t1Info := commonType.WrapTableInfo("test", &timodel.TableInfo{ID: 1, Name: ast.NewCIStr("t1")})
+	var mu sync.Mutex
+	var flushed []string
+	record := func(label string) func() {
+		return func() {
+			mu.Lock()
+			flushed = append(flushed, label)
+			mu.Unlock()
+		}
+	}
+	newDML := func(commitTs uint64, label string) *commonEvent.DMLEvent {
+		dml := &commonEvent.DMLEvent{
+			PhysicalTableID: 1,
+			CommitTs:        commitTs,
+			TableInfo:       t1Info,
+			Rows:            chunk.NewChunkWithCapacity(nil, 0),
+			RowTypes:        []commonType.RowType{commonType.RowTypeInsert},
+			Length:          1,
+		}
+		dml.AddPostFlushFunc(record(label))
+		return dml
+	}
+
+	// Queue ALTER@150 and DML@160 first so t1 sits in blockedHeap, then deliver an earlier DML@140.
+	ddl150 := &commonEvent.DDLEvent{
+		FinishedTs: 150,
+		Type:       byte(timodel.ActionAddColumn),
+		SchemaName: "test",
+		TableName:  "t1",
+		Query:      "ALTER TABLE test.t1 ADD COLUMN c INT",
+	}
+	ddl150.AddPostFlushFunc(record("t1:ddl@150"))
+	require.NoError(t, c.accept(ddl150, &source.Payload{}))
+	require.NoError(t, c.accept(newDML(160, "t1:dml@160"), &source.Payload{}))
+	require.Empty(t, c.readyHeap)
+	require.Len(t, c.blockedHeap, 1)
+
+	require.NoError(t, c.accept(newDML(140, "t1:dml@140"), &source.Payload{}))
+	require.Len(t, c.readyHeap, 1)
+	require.Empty(t, c.blockedHeap)
+
+	c.advanceWatermark(150, 0)
+	require.NoError(t, c.flush(t.Context(), w))
+	require.Equal(t, []string{"t1:dml@140", "t1:ddl@150"}, flushed)
+
+	// CREATE TABLE ... LIKE ... references a source table, so it must wait for W >= FinishedTs.
+	createLike := &commonEvent.DDLEvent{
+		FinishedTs: 200,
+		Type:       byte(timodel.ActionCreateTable),
+		SchemaName: "test",
+		TableName:  "t2",
+		Query:      "CREATE TABLE test.t2 LIKE test.t1",
+	}
+	createLike.AddPostFlushFunc(record("t2:create_like@200"))
+	require.NoError(t, c.accept(createLike, &source.Payload{}))
+	require.NoError(t, c.flush(t.Context(), w))
+	require.Equal(t, []string{"t1:dml@140", "t1:ddl@150"}, flushed)
+
+	c.advanceWatermark(200, 0)
+	require.NoError(t, c.flush(t.Context(), w))
+	require.Equal(t, []string{"t1:dml@140", "t1:ddl@150", "t1:dml@160", "t2:create_like@200"}, flushed)
+}

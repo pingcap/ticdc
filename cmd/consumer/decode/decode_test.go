@@ -31,6 +31,7 @@ import (
 	"github.com/pingcap/ticdc/cmd/consumer/source"
 	"github.com/pingcap/ticdc/downstreamadapter/sink/columnselector"
 	"github.com/pingcap/ticdc/pkg/cloudstorage"
+	commonType "github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/sink/codec"
@@ -479,6 +480,125 @@ func TestDecodeGroupSimpleCrossPartitionWakeupOutOfOrderAndOver128(t *testing.T)
 		delete(t1Pending, r.ID)
 	}
 	require.Empty(t, t1Pending)
+
+	group.waitMu.Lock()
+	require.Empty(t, group.waiting)
+	group.waitMu.Unlock()
+}
+
+func TestDecodeGroupSimpleDDLWakesPreAndPostSchemaWaiters(t *testing.T) {
+	helper := event.NewEventTestHelper(t)
+	defer helper.Close()
+
+	preDDL := helper.DDL2Event("create table test.t1(id int primary key, v int)")
+	preDML := helper.DML2Event("test", "t1", "insert into test.t1 values (1, 10)")
+	alterDDL := helper.DDL2Event("alter table test.t1 add column c int")
+	postDML := helper.DML2Event("test", "t1", "insert into test.t1 values (2, 20, 30)")
+
+	preDDL.TableInfo.UpdateTS = 100
+	preDML.TableInfo.UpdateTS = 100
+	alterDDL.FinishedTs = 200
+	alterDDL.TableInfo.UpdateTS = 200
+	alterDDL.MultipleTableInfos = []*commonType.TableInfo{alterDDL.TableInfo, preDDL.TableInfo}
+	postDML.TableInfo.UpdateTS = 200
+
+	cfg := common.NewConfig(config.ProtocolSimple)
+	enc, err := simple.NewEncoder(cfg, nil)
+	require.NoError(t, err)
+
+	preRow, ok := preDML.GetNextRow()
+	require.True(t, ok)
+	require.NoError(t, enc.AppendRowChangedEvent(t.Context(), "topic", &event.RowEvent{
+		TableInfo:      preDML.TableInfo,
+		CommitTs:       180,
+		Event:          preRow,
+		ColumnSelector: columnselector.NewDefaultColumnSelector(),
+		Callback:       func() {},
+	}))
+	preMsgs := enc.Build()
+	require.Len(t, preMsgs, 1)
+
+	postRow, ok := postDML.GetNextRow()
+	require.True(t, ok)
+	require.NoError(t, enc.AppendRowChangedEvent(t.Context(), "topic", &event.RowEvent{
+		TableInfo:      postDML.TableInfo,
+		CommitTs:       210,
+		Event:          postRow,
+		ColumnSelector: columnselector.NewDefaultColumnSelector(),
+		Callback:       func() {},
+	}))
+	postMsgs := enc.Build()
+	require.Len(t, postMsgs, 1)
+
+	alterMsg, err := enc.EncodeDDLEvent(alterDDL)
+	require.NoError(t, err)
+
+	upstreamURI, err := url.Parse("kafka://127.0.0.1:9092/topic")
+	require.NoError(t, err)
+	group := NewGroup(t.Context(), NewOptions(cfg, config.GetDefaultReplicaConfig(), upstreamURI))
+
+	runCtx, cancel := context.WithCancel(t.Context())
+	runDone := make(chan error, 1)
+	go func() {
+		runDone <- group.Run(runCtx)
+	}()
+	defer func() {
+		cancel()
+		require.ErrorIs(t, <-runDone, context.Canceled)
+		group.Close()
+	}()
+
+	require.NoError(t, group.Add(t.Context(), []*source.Payload{
+		{Partition: 0, Offset: 10, Value: preMsgs[0].Value},
+		{Partition: 1, Offset: 20, Value: postMsgs[0].Value},
+	}))
+
+	fPre := <-group.Output()
+	require.NoError(t, fPre.Ready(t.Context()))
+	require.Len(t, fPre.Pending, 1)
+
+	fPost := <-group.Output()
+	require.NoError(t, fPost.Ready(t.Context()))
+	require.Len(t, fPost.Pending, 1)
+
+	require.NoError(t, group.Add(t.Context(), []*source.Payload{
+		{Partition: 2, Offset: 30, Value: alterMsg.Value},
+	}))
+
+	// First ALTER arrival wakes both PreTableSchema and post-DDL waiters and forwards the DDL.
+	fAlter := <-group.Output()
+	require.NoError(t, fAlter.Ready(t.Context()))
+	require.Zero(t, fAlter.Marker)
+	require.Len(t, fAlter.Events, 2)
+	forwardedDDL := fAlter.Events[0].(*event.DDLEvent)
+	require.Equal(t, alterDDL.Query, forwardedDDL.Query)
+	require.Equal(t, uint64(200), forwardedDDL.GetCommitTs())
+	require.Nil(t, fAlter.Events[1])
+	require.Len(t, fAlter.Resolved, 2)
+
+	resolvedByID := make(map[uint64]ResolvedDML, 2)
+	for _, r := range fAlter.Resolved {
+		resolvedByID[r.ID] = r
+		r.DML.PostFlush()
+	}
+	wokenPre := resolvedByID[fPre.Pending[0].ID]
+	require.Equal(t, int32(0), wokenPre.Partition)
+	require.Equal(t, int64(10), wokenPre.Offset)
+	require.Equal(t, uint64(180), wokenPre.DML.CommitTs)
+	wokenPost := resolvedByID[fPost.Pending[0].ID]
+	require.Equal(t, int32(1), wokenPost.Partition)
+	require.Equal(t, int64(20), wokenPost.Offset)
+	require.Equal(t, uint64(210), wokenPost.DML.CommitTs)
+
+	// Duplicate ALTER on another partition drops the DDL while retaining commit-ts as Marker.
+	require.NoError(t, group.Add(t.Context(), []*source.Payload{
+		{Partition: 3, Offset: 40, Value: alterMsg.Value},
+	}))
+	fDup := <-group.Output()
+	require.NoError(t, fDup.Ready(t.Context()))
+	require.Equal(t, []event.Event{nil}, fDup.Events)
+	require.Equal(t, uint64(200), fDup.Marker)
+	require.Empty(t, fDup.Resolved)
 
 	group.waitMu.Lock()
 	require.Empty(t, group.waiting)
