@@ -1075,9 +1075,6 @@ func (m *Maintainer) onMaintainerBootstrapResponse(msg *messaging.TargetMessage)
 		log.Warn("maintainer bootstrap failed",
 			zap.Stringer("changefeedID", m.changefeedID),
 			zap.String("error", resp.Err.Message))
-		// Cache the error response so the bootstrapper does not resend the
-		// same rejected request while the error is reported to the coordinator.
-		m.bootstrapper.HandleBootstrapResponse(msg.From, resp)
 		m.onError(msg.From, resp.Err)
 		return
 	}
