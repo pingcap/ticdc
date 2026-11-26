@@ -18,6 +18,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/pingcap/ticdc/downstreamadapter/sink/columnselector"
 	"github.com/pingcap/ticdc/downstreamadapter/syncpoint"
 	"github.com/pingcap/ticdc/eventpb"
 	"github.com/pingcap/ticdc/heartbeatpb"
@@ -81,6 +82,18 @@ type SharedInfo struct {
 	// metricHandleDDLHis records each DDL handling time duration,
 	// which includes the time of executing the DDL and waiting for the DDL to be resolved.
 	metricHandleDDLHis prometheus.Observer
+
+	meteringColumnSelectors *columnselector.ColumnSelectors
+	meteringCounter         *atomic.Uint64
+}
+
+// SetTrafficMetering configures DML traffic metering collection on SharedInfo.
+func (s *SharedInfo) SetTrafficMetering(
+	selectors *columnselector.ColumnSelectors,
+	counter *atomic.Uint64,
+) {
+	s.meteringColumnSelectors = selectors
+	s.meteringCounter = counter
 }
 
 // NewSharedInfo creates a new SharedInfo with the given parameters

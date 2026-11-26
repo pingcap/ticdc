@@ -326,11 +326,35 @@ func (d *BasicDispatcher) AddDMLEventsToSink(events []*commonEvent.DMLEvent, wak
 	for _, event := range filteredEvents {
 		d.tableProgress.Add(event)
 	}
+	d.attachTrafficMeteringCallbacks(filteredEvents)
 	for _, event := range filteredEvents {
 		d.sink.AddDMLEvent(event)
 		failpoint.Inject("BlockAddDMLEvents", nil)
 	}
 	return true
+}
+
+func (d *BasicDispatcher) attachTrafficMeteringCallbacks(events []*commonEvent.DMLEvent) {
+	if common.IsRedoMode(d.mode) || d.sharedInfo == nil || d.sharedInfo.meteringCounter == nil {
+		return
+	}
+	counter := d.sharedInfo.meteringCounter
+	selectors := d.sharedInfo.meteringColumnSelectors
+	for _, event := range events {
+		var selector commonEvent.Selector
+		if selectors != nil {
+			selector = selectors.GetForTableInfo(event.TableInfo)
+		}
+		bytes, err := measureDMLEventV1(event, selector)
+		if err != nil {
+			recordMeteringMeasureError(d.sharedInfo.changefeedID, err)
+		}
+		if bytes > 0 {
+			event.AddPostFlushFunc(func() {
+				counter.Add(bytes)
+			})
+		}
+	}
 }
 
 // InitializeTableSchemaStore initializes the tableSchemaStore for the table trigger event dispatcher.

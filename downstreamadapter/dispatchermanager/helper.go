@@ -514,6 +514,9 @@ func (h *HeartBeatResponseHandler) Handle(dispatcherManager *DispatcherManager, 
 	if !isHeartBeatResponseAllowed(dispatcherManager, heartbeatResponse) {
 		return false
 	}
+	if heartbeatResponse.MeteringEpoch > 0 && heartbeatResponse.MeteringSeq > 0 {
+		dispatcherManager.metering.HandleCommand(heartbeatResponse.MeteringEpoch, heartbeatResponse.MeteringSeq)
+	}
 	dispatcherStatuses := heartbeatResponse.GetDispatcherStatuses()
 	for _, dispatcherStatus := range dispatcherStatuses {
 		influencedDispatchersType := dispatcherStatus.InfluencedDispatchers.InfluenceType

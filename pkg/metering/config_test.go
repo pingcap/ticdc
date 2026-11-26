@@ -8,6 +8,7 @@
 //
 // Unless required by applicable law or agreed to in writing, software
 // distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
@@ -17,6 +18,7 @@ import (
 	"testing"
 
 	"github.com/pingcap/metering_sdk/config"
+	"github.com/pingcap/metering_sdk/storage"
 	"github.com/stretchr/testify/require"
 )
 
@@ -28,9 +30,19 @@ func TestValidateConfig(t *testing.T) {
 	}{
 		{"disabled nil", nil, true},
 		{"disabled empty", &config.MeteringConfig{}, true},
-		{"SDK owns provider configuration", &config.MeteringConfig{Type: "s3"}, true},
-		{"pool", &config.MeteringConfig{Type: "s3", SharedPoolID: "pool1"}, true},
-		{"pool traversal", &config.MeteringConfig{Type: "s3", SharedPoolID: "../pool"}, false},
+		{"valid s3", config.NewMeteringConfig().WithS3("us-west-2", "bucket").WithEndpoint("https://s3.us-west-2.amazonaws.com").WithSharedPoolID("pool1"), true},
+		{"valid oss", config.NewMeteringConfig().WithOSS("oss-cn-beijing", "bucket"), true},
+		{"valid cos", config.NewMeteringConfig().WithCOS("ap-beijing", "bucket-123"), true},
+		{"valid gcs", &config.MeteringConfig{Type: storage.ProviderTypeGCS, Bucket: "bucket"}, true},
+		{"valid azure", config.NewMeteringConfig().WithAzure("acct", "container").WithEndpoint("https://acct.blob.core.windows.net"), true},
+		{"valid localfs", config.NewMeteringConfig().WithLocalFS("/tmp/metering"), true},
+		{"unsupported type", &config.MeteringConfig{Type: "unknown"}, false},
+		{"s3 missing bucket", &config.MeteringConfig{Type: storage.ProviderTypeS3, Region: "us-west-2"}, false},
+		{"s3 missing region", &config.MeteringConfig{Type: storage.ProviderTypeS3, Bucket: "bucket"}, false},
+		{"s3 invalid endpoint", &config.MeteringConfig{Type: storage.ProviderTypeS3, Bucket: "bucket", Region: "us-west-2", Endpoint: "s3.amazonaws.com"}, false},
+		{"azure missing account name", &config.MeteringConfig{Type: storage.ProviderTypeAzure, Bucket: "container"}, false},
+		{"localfs missing base path", &config.MeteringConfig{Type: storage.ProviderTypeLocalFS}, false},
+		{"pool traversal", config.NewMeteringConfig().WithS3("us-west-2", "bucket").WithSharedPoolID("../pool"), false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			err := ValidateConfig(tc.cfg)

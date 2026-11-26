@@ -65,6 +65,11 @@ session-token = "test-token"
 	}
 	cfg.Metering.SharedPoolID = "../pool"
 	require.Error(t, cfg.ValidateAndAdjust())
+	cfg.Metering.SharedPoolID = "pool1"
+	cfg.Metering.Endpoint = "invalid-endpoint"
+	require.Error(t, cfg.ValidateAndAdjust())
+	cfg.Metering.Endpoint = "https://s3.us-west-2.amazonaws.com"
+	require.NoError(t, cfg.ValidateAndAdjust())
 }
 
 func TestServerConfigStringMasksKMSCredentials(t *testing.T) {

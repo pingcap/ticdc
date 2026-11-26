@@ -61,6 +61,47 @@ var (
 			Name:      "capture_p2p_witness_available",
 			Help:      "Whether a remote capture is available to witness the coordinator capture.",
 		})
+
+	meteringEnabledGauge = prometheus.NewGauge(
+		prometheus.GaugeOpts{
+			Namespace: "ticdc",
+			Subsystem: "metering",
+			Name:      "enabled",
+			Help:      "Whether traffic metering reporting is enabled on the coordinator (1 = enabled, 0 = disabled).",
+		})
+
+	meteringReportCounter = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: "ticdc",
+			Subsystem: "metering",
+			Name:      "report_total",
+			Help:      "Total number of traffic metering upload attempts by outcome.",
+		}, []string{"result"})
+
+	meteringLastSuccessTimestampGauge = prometheus.NewGauge(
+		prometheus.GaugeOpts{
+			Namespace: "ticdc",
+			Subsystem: "metering",
+			Name:      "last_success_timestamp_seconds",
+			Help:      "Unix timestamp of the last successful traffic metering upload.",
+		})
+
+	meteringReportDuration = prometheus.NewHistogram(
+		prometheus.HistogramOpts{
+			Namespace: "ticdc",
+			Subsystem: "metering",
+			Name:      "report_duration_seconds",
+			Help:      "Duration in seconds of traffic metering upload attempts.",
+			Buckets:   prometheus.ExponentialBuckets(0.01, 2, 12),
+		})
+
+	meteringPendingBytesGauge = prometheus.NewGauge(
+		prometheus.GaugeOpts{
+			Namespace: "ticdc",
+			Subsystem: "metering",
+			Name:      "pending_bytes",
+			Help:      "Total unreported traffic bytes currently buffered in coordinator memory.",
+		})
 )
 
 // RegisterMetrics registers the metrics owned by this package.
@@ -70,4 +111,9 @@ func RegisterMetrics(registry *prometheus.Registry) {
 	registry.MustRegister(captureLeaseHeartbeatCounter)
 	registry.MustRegister(captureP2PWitnessAvailable)
 	registry.MustRegister(changefeedErrorInfoGauge)
+	registry.MustRegister(meteringEnabledGauge)
+	registry.MustRegister(meteringReportCounter)
+	registry.MustRegister(meteringLastSuccessTimestampGauge)
+	registry.MustRegister(meteringReportDuration)
+	registry.MustRegister(meteringPendingBytesGauge)
 }

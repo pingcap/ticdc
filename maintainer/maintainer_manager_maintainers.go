@@ -230,6 +230,7 @@ func (p *managerMaintainerSet) handleAddMaintainer(
 	// manager-level drain fanout can always observe it in the registry.
 	target, epoch := getDrainTarget()
 	registeredMaintainer.SetDispatcherDrainTarget(target, epoch)
+	registeredMaintainer.SetMeteringInitialState(req.MeteringEpoch, req.MeteringLastSeq)
 	registeredMaintainer.pushEvent(&Event{changefeedID: changefeedID, eventType: EventInit})
 	return nil
 }
@@ -423,6 +424,13 @@ func (p *managerMaintainerSet) cleanupRemovedMaintainer(key, value interface{}) 
 func (p *managerMaintainerSet) applyDispatcherDrainTarget(target node.ID, epoch uint64) {
 	p.registry.Range(func(_, value interface{}) bool {
 		value.(*Maintainer).SetDispatcherDrainTarget(target, epoch)
+		return true
+	})
+}
+
+func (p *managerMaintainerSet) applyMeteringEpoch(epoch uint64) {
+	p.registry.Range(func(_, value interface{}) bool {
+		value.(*Maintainer).SetMeteringEpoch(epoch)
 		return true
 	})
 }

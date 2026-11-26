@@ -8,12 +8,11 @@
 //
 // Unless required by applicable law or agreed to in writing, software
 // distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// Package traffic measures canonical SQL values selected by a sink's encoder.
-// It does not select columns, count delivery attempts, or confirm delivery.
-package traffic
+package metering
 
 import (
 	"fmt"
@@ -23,13 +22,8 @@ import (
 	"github.com/pingcap/tidb/pkg/util/chunk"
 )
 
-// RuleVersion1 identifies the canonical rules in the traffic metering specification.
-const RuleVersion1 uint64 = 1
-
-// MeasureValueV1 returns the canonical bytes for one actual value encoding.
-// row and offset refer to an already decoded TiCDC row; typeCode is its SQL base
-// type. Callers own selection and accumulation, including repeated encodings.
-// Existing rules must retain their results across TiDB dependency upgrades.
+// MeasureValueV1 returns the canonical byte count for a decoded SQL column value
+// at row[offset]. Existing v1 rules must remain stable across TiDB upgrades.
 func MeasureValueV1(row chunk.Row, offset int, typeCode byte) (uint64, error) {
 	if row.IsNull(offset) {
 		return 1, nil

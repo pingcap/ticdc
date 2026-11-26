@@ -85,9 +85,9 @@ type coordinator struct {
 	pdClient pd.Client
 	pdClock  pdutil.Clock
 
-	// trafficReporter belongs to this coordinator term and is never shared with
+	// metering belongs to this coordinator term and is never shared with
 	// followers or the next coordinator instance.
-	trafficReporter *metering.Reporter
+	metering *meteringReporter
 
 	// eventCh is used to receive the event from message center, basically these messages
 	// are from maintainer.
@@ -180,11 +180,15 @@ func (c *coordinator) Run(ctx context.Context) error {
 	if err := c.initializeMetering(); err != nil {
 		return err
 	}
+	if c.metering != nil {
+		meteringEnabledGauge.Set(1)
+		defer func() {
+			meteringEnabledGauge.Set(0)
+			c.metering.Close()
+		}()
+	}
 
 	eg, ctx := errgroup.WithContext(ctx)
-	if c.trafficReporter != nil {
-		defer c.trafficReporter.Close()
-	}
 	eg.Go(func() error {
 		return c.run(ctx)
 	})
@@ -198,21 +202,35 @@ func (c *coordinator) Run(ctx context.Context) error {
 	eg.Go(func() error {
 		return c.controller.collectMetrics(ctx)
 	})
+	if c.metering != nil {
+		eg.Go(func() error {
+			return c.metering.Run(ctx)
+		})
+	}
 
-	return eg.Wait()
+	err := eg.Wait()
+	if c.metering != nil {
+		c.metering.FlushOnShutdown()
+	}
+	return err
 }
 
 func (c *coordinator) initializeMetering() error {
-	if !kerneltype.IsNextGen() {
+	serverCfg := config.GetGlobalServerConfig()
+	if serverCfg == nil || serverCfg.Metering == nil || serverCfg.Metering.Type == "" {
 		return nil
 	}
-	destination := config.GetGlobalServerConfig().Metering
-	if destination == nil || destination.Type == "" {
-		return nil
+	reporter, err := metering.NewReporter(serverCfg.Metering, serverCfg.ClusterID)
+	if err != nil {
+		return err
 	}
-	var err error
-	c.trafficReporter, err = metering.NewReporter(destination)
-	return err
+	var acc *meteringAccumulator
+	if c.controller != nil {
+		c.controller.EnableMetering()
+		acc = c.controller.metering
+	}
+	c.metering = newMeteringReporter(reporter, acc)
+	return nil
 }
 
 // run handles the following:

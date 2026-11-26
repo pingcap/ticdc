@@ -30,7 +30,16 @@ var handleDDLHistogram = prometheus.NewHistogramVec(
 		Buckets:   prometheus.ExponentialBuckets(0.01, 2, 18),
 	}, []string{metrics.GetKeyspaceLabel(), "changefeed"})
 
+var meteringUnknownSQLTypeCounter = prometheus.NewCounter(
+	prometheus.CounterOpts{
+		Namespace: "ticdc",
+		Subsystem: "metering",
+		Name:      "unknown_sql_type_total",
+		Help:      "Total number of DML events containing SQL column types treated as 0 bytes by traffic metering.",
+	})
+
 // RegisterMetrics registers the metrics owned by this package.
 func RegisterMetrics(registry *prometheus.Registry) {
 	registry.MustRegister(handleDDLHistogram)
+	registry.MustRegister(meteringUnknownSQLTypeCounter)
 }
