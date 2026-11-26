@@ -302,23 +302,33 @@ func (t *tableVersions) set(version, effectiveTs uint64, info *common.TableInfo)
 }
 
 func (t *tableVersions) releaseBefore(watermark uint64) {
-	var covered int
-	var floorEffectiveTs uint64
+	var (
+		hasVersionFloor   bool
+		floorVersion      uint64
+		hasEffectiveFloor bool
+		floorEffectiveTs  uint64
+	)
 	for _, item := range t.entries {
-		if item.effectiveTs <= watermark {
-			covered++
-			floorEffectiveTs = max(floorEffectiveTs, item.effectiveTs)
+		if item.version <= watermark && (!hasVersionFloor || item.version > floorVersion) {
+			hasVersionFloor = true
+			floorVersion = item.version
 		}
-	}
-	if covered <= 1 {
-		return
+		if item.effectiveTs <= watermark && (!hasEffectiveFloor || item.effectiveTs > floorEffectiveTs) {
+			hasEffectiveFloor = true
+			floorEffectiveTs = item.effectiveTs
+		}
 	}
 	kept := 0
 	for _, item := range t.entries {
-		if item.effectiveTs >= floorEffectiveTs {
+		keepVersion := item.version > watermark || (hasVersionFloor && item.version == floorVersion)
+		keepEffective := item.effectiveTs > watermark || (hasEffectiveFloor && item.effectiveTs == floorEffectiveTs)
+		if keepVersion || keepEffective {
 			t.entries[kept] = item
 			kept++
 		}
+	}
+	if kept == len(t.entries) {
+		return
 	}
 	clear(t.entries[kept:])
 	t.entries = t.entries[:kept]

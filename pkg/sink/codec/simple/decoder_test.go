@@ -224,3 +224,68 @@ func TestDecodedTableInfoLocatesRowByPrimaryKey(t *testing.T) {
 		indexIDs[index.ID] = struct{}{}
 	}
 }
+
+func TestDecodeDDLEventDoesNotMutateMemo(t *testing.T) {
+	const (
+		schema  = "test"
+		table   = "t"
+		tableID = int64(42)
+		version = uint64(100)
+	)
+	tableSchema := &TableSchema{
+		Schema:  schema,
+		Table:   table,
+		TableID: tableID,
+		Version: version,
+		Columns: []*columnSchema{
+			{
+				Name: "id",
+				DataType: dataType{
+					MySQLType: "bigint",
+					Charset:   "binary",
+					Collate:   "binary",
+					Length:    20,
+				},
+			},
+		},
+	}
+
+	decoder := &Decoder{
+		config:         common.NewConfig(config.ProtocolSimple),
+		memo:           common.NewTableInfoProvider(),
+		cachedMessages: list.New(),
+	}
+	decoder.msg = &message{
+		Version:     defaultVersion,
+		Type:        MessageTypeBootstrap,
+		CommitTs:    version,
+		TableSchema: tableSchema,
+	}
+	bootstrap := decoder.DecodeDDLEvent()
+	require.True(t, bootstrap.IsBootstrap)
+	require.Empty(t, decoder.memo.GetBlockedTables(schema, table))
+	require.Nil(t, decoder.memo.Read(schema, table, version))
+
+	decoder.msg = &message{
+		Version:     defaultVersion,
+		Type:        DDLTypeAlter,
+		SQL:         "ALTER TABLE test.t ADD COLUMN c INT",
+		CommitTs:    version + 10,
+		TableSchema: tableSchema,
+	}
+	ddl := decoder.DecodeDDLEvent()
+	require.Equal(t, "ALTER TABLE test.t ADD COLUMN c INT", ddl.Query)
+	require.Empty(t, decoder.memo.GetBlockedTables(schema, table))
+	require.Nil(t, decoder.memo.Read(schema, table, version))
+
+	decoder.msg = &message{
+		Version:     defaultVersion,
+		Type:        DDLTypeCreate,
+		SQL:         "ALTER TABLE test.t ADD COLUMN d INT",
+		CommitTs:    version + 20,
+		TableSchema: tableSchema,
+	}
+	ddlViaNext := decoder.NextDDLEvent()
+	require.ElementsMatch(t, []int64{tableID}, decoder.memo.GetBlockedTables(schema, table))
+	require.ElementsMatch(t, []int64{tableID}, ddlViaNext.BlockedTables.TableIDs)
+}

@@ -16,6 +16,7 @@ package canal
 import (
 	"bytes"
 	"encoding/json"
+	"maps"
 
 	"github.com/pingcap/log"
 	commonType "github.com/pingcap/ticdc/pkg/common"
@@ -32,10 +33,12 @@ import (
 type txnDecoder struct {
 	data []byte
 
-	config    *common.Config
-	msg       canalJSONMessageInterface
-	tableInfo *commonType.TableInfo
-	cache     *common.TableInfoProvider
+	config          *common.Config
+	msg             canalJSONMessageInterface
+	tableInfo       *commonType.TableInfo
+	tableMySQLTypes map[string]string
+	tablePKNames    map[string]struct{}
+	cache           *common.TableInfoProvider
 }
 
 // NewTxnDecoder return a new CanalJSONTxnEventDecoder.
@@ -59,6 +62,8 @@ func (d *txnDecoder) AddKeyValue(_, value []byte) {
 	}
 	d.data = value
 	d.tableInfo = nil
+	d.tableMySQLTypes = nil
+	d.tablePKNames = nil
 }
 
 // HasNext return true if there is any event can be returned.
@@ -134,10 +139,16 @@ func (d *txnDecoder) NextDMLMessage() *common.DMLMessage {
 }
 
 func (d *txnDecoder) canalJSONMessage2RowChange(msg canalJSONMessageInterface) *commonEvent.DMLEvent {
+	mysqlTypes := msg.getMySQLType()
+	pkNames := msg.pkNameSet()
 	if d.tableInfo == nil ||
 		d.tableInfo.GetSchemaName() != *msg.getSchema() ||
-		d.tableInfo.GetTableName() != *msg.getTable() {
+		d.tableInfo.GetTableName() != *msg.getTable() ||
+		!maps.Equal(d.tableMySQLTypes, mysqlTypes) ||
+		!maps.Equal(d.tablePKNames, pkNames) {
 		d.tableInfo = newTableInfo(msg)
+		d.tableMySQLTypes = mysqlTypes
+		d.tablePKNames = pkNames
 	}
 	tableInfo := d.tableInfo
 	result := new(commonEvent.DMLEvent)

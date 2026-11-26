@@ -308,6 +308,11 @@ func (d *Decoder) NextDDLEvent() *commonEvent.DDLEvent {
 	ddl := d.buildDDLEvent(d.msg)
 	d.msg = nil
 
+	d.memo.AddBlockTableID(ddl.SchemaName, ddl.TableName, ddl.TableInfo.TableName.TableID)
+	if ddl.Query != "" {
+		ddl.BlockedTables = common.GetBlockedTables(d.memo, ddl)
+	}
+
 	if !ddl.IsBootstrap && ddl.FinishedTs != 0 {
 		d.memo.WriteTableInfoAt(ddl.TableInfo, ddl.FinishedTs)
 	} else {
@@ -374,6 +379,9 @@ func (d *Decoder) DecodeDDLEvent() *commonEvent.DDLEvent {
 	}
 	ddl := d.buildDDLEvent(d.msg)
 	d.msg = nil
+	if ddl.Query != "" {
+		ddl.BlockedTables = common.GetBlockedTables(d.memo, ddl)
+	}
 	return ddl
 }
 
@@ -517,7 +525,6 @@ func (d *Decoder) buildDDLEvent(msg *message) *commonEvent.DDLEvent {
 	result.FinishedTs = msg.CommitTs
 	result.SchemaName = tableInfo.TableName.Schema
 	result.TableName = tableInfo.TableName.Table
-	d.memo.AddBlockTableID(result.SchemaName, result.TableName, tableInfo.TableName.TableID)
 
 	if preTableInfo != nil {
 		result.ExtraSchemaName = preTableInfo.GetSchemaName()
@@ -531,7 +538,6 @@ func (d *Decoder) buildDDLEvent(msg *message) *commonEvent.DDLEvent {
 
 	actionType := common.GetDDLActionType(result.Query)
 	result.Type = byte(actionType)
-	result.BlockedTables = common.GetBlockedTables(d.memo, result)
 	return result
 }
 

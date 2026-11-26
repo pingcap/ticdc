@@ -1510,3 +1510,35 @@ func TestTxnDecoderReusesTableInfo(t *testing.T) {
 	require.Same(t, events[0].TableInfo, events[1].TableInfo)
 	require.NotSame(t, events[0].TableInfo, events[2].TableInfo)
 }
+
+func TestTxnDecoderRebuildsTableInfoOnColumnSetChange(t *testing.T) {
+	cfg := common.NewConfig(config.ProtocolCanalJSON)
+	cfg.EnableTiDBExtension = true
+	cfg.Terminator = "\n"
+
+	deleteRow := `{"id":0,"database":"test","table":"t1","pkNames":["id"],"isDdl":false,"type":"DELETE","es":1,"ts":1,"sql":"","sqlType":{"id":4},"mysqlType":{"id":"int"},"data":[{"id":"1"}],"old":null,"_tidb":{"commitTs":101}}`
+	insertRow := `{"id":0,"database":"test","table":"t1","pkNames":["id"],"isDdl":false,"type":"INSERT","es":1,"ts":1,"sql":"","sqlType":{"id":4,"v":4},"mysqlType":{"id":"int","v":"int"},"data":[{"id":"2","v":"20"}],"old":null,"_tidb":{"commitTs":102}}`
+
+	dec := NewTxnDecoder(cfg)
+	dec.AddKeyValue(nil, []byte(deleteRow+"\n"+insertRow+"\n"))
+
+	var events []*commonEvent.DMLEvent
+	for {
+		tp, hasNext := dec.HasNext()
+		if !hasNext {
+			break
+		}
+		require.Equal(t, common.MessageTypeRow, tp)
+		dml := dec.NextDMLMessage().ToDMLEvent()
+		t.Cleanup(dml.PostFlush)
+		events = append(events, dml)
+	}
+	require.Len(t, events, 2)
+	require.NotSame(t, events[0].TableInfo, events[1].TableInfo)
+	require.Len(t, events[0].TableInfo.GetColumns(), 1)
+	require.Len(t, events[1].TableInfo.GetColumns(), 2)
+	row, ok := events[1].GetNextRow()
+	require.True(t, ok)
+	require.Equal(t, int64(2), row.Row.GetInt64(0))
+	require.Equal(t, int64(20), row.Row.GetInt64(1))
+}

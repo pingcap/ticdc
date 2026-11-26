@@ -209,79 +209,71 @@ func (m *confluentSchemaManager) Lookup(
 	schemaID SchemaID,
 ) (string, error) {
 	cacheKey := newDecodeCacheKey(schemaName, schemaID)
-	entry, exists := m.cache.load(cacheKey)
-	if exists {
-		return entry.schemaDefinition, nil
-	}
+	entry, err := m.cache.getOrLoadDecode(cacheKey, func() (*schemaCacheEntry, error) {
+		uri := m.registryURL + "/schemas/ids/" + strconv.Itoa(schemaID.confluentSchemaID)
 
-	unlock := m.cache.lockSubject(cacheKey.schemaIdentity)
-	defer unlock()
+		req, err := http.NewRequestWithContext(ctx, "GET", uri, nil)
+		if err != nil {
+			err = util.MaskSensitiveDataInURLError(err)
+			log.Error("Error constructing request for Registry lookup", zap.Error(err))
+			return nil, errors.WrapError(errors.ErrAvroSchemaAPIError, err)
+		}
+		req.Header.Add(
+			"Accept",
+			"application/vnd.schemaregistry.v1+json, application/vnd.schemaregistry+json, "+
+				"application/json",
+		)
 
-	if entry, exists := m.cache.load(cacheKey); exists {
-		return entry.schemaDefinition, nil
-	}
+		resp, err := httpRetry(ctx, m.httpCli, req)
+		if err != nil {
+			return nil, err
+		}
+		defer resp.Body.Close()
 
-	uri := m.registryURL + "/schemas/ids/" + strconv.Itoa(schemaID.confluentSchemaID)
+		body, err := io.ReadAll(resp.Body)
+		if err != nil {
+			log.Error("Failed to parse result from Registry", zap.Error(err))
+			return nil, errors.WrapError(errors.ErrAvroSchemaAPIError, err)
+		}
 
-	req, err := http.NewRequestWithContext(ctx, "GET", uri, nil)
-	if err != nil {
-		err = util.MaskSensitiveDataInURLError(err)
-		log.Error("Error constructing request for Registry lookup", zap.Error(err))
-		return "", errors.WrapError(errors.ErrAvroSchemaAPIError, err)
-	}
-	req.Header.Add(
-		"Accept",
-		"application/vnd.schemaregistry.v1+json, application/vnd.schemaregistry+json, "+
-			"application/json",
-	)
+		if resp.StatusCode != 200 && resp.StatusCode != 404 {
+			log.Error("Failed to query schema from the Registry, HTTP error",
+				zap.Int("status", resp.StatusCode),
+				zap.ByteString("responseBody", body))
+			return nil, errors.ErrAvroSchemaAPIError.GenWithStack(
+				"Failed to query schema from the Registry, HTTP error",
+			)
+		}
 
-	resp, err := httpRetry(ctx, m.httpCli, req)
+		if resp.StatusCode == 404 {
+			log.Warn("Specified schema not found in Registry",
+				zap.String("key", schemaName),
+				zap.Int("schemaID", schemaID.confluentSchemaID))
+			return nil, errors.ErrAvroSchemaAPIError.GenWithStackByArgs(
+				"Schema not found in Registry",
+			)
+		}
+
+		var jsonResp lookupResponse
+		err = json.Unmarshal(body, &jsonResp)
+		if err != nil {
+			log.Error("Failed to parse result from Registry", zap.Error(err))
+			return nil, errors.WrapError(errors.ErrAvroSchemaAPIError, err)
+		}
+
+		cacheEntry := new(schemaCacheEntry)
+		cacheEntry.schemaDefinition = jsonResp.Schema
+		cacheEntry.schemaID.confluentSchemaID = schemaID.confluentSchemaID
+		cacheEntry.header, err = BuildConfluentWireHeader(schemaID.confluentSchemaID)
+		if err != nil {
+			return nil, err
+		}
+		return cacheEntry, nil
+	})
 	if err != nil {
 		return "", err
 	}
-	defer resp.Body.Close()
-
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		log.Error("Failed to parse result from Registry", zap.Error(err))
-		return "", errors.WrapError(errors.ErrAvroSchemaAPIError, err)
-	}
-
-	if resp.StatusCode != 200 && resp.StatusCode != 404 {
-		log.Error("Failed to query schema from the Registry, HTTP error",
-			zap.Int("status", resp.StatusCode),
-			zap.ByteString("responseBody", body))
-		return "", errors.ErrAvroSchemaAPIError.GenWithStack(
-			"Failed to query schema from the Registry, HTTP error",
-		)
-	}
-
-	if resp.StatusCode == 404 {
-		log.Warn("Specified schema not found in Registry",
-			zap.String("key", schemaName),
-			zap.Int("schemaID", schemaID.confluentSchemaID))
-		return "", errors.ErrAvroSchemaAPIError.GenWithStackByArgs(
-			"Schema not found in Registry",
-		)
-	}
-
-	var jsonResp lookupResponse
-	err = json.Unmarshal(body, &jsonResp)
-	if err != nil {
-		log.Error("Failed to parse result from Registry", zap.Error(err))
-		return "", errors.WrapError(errors.ErrAvroSchemaAPIError, err)
-	}
-
-	cacheEntry := new(schemaCacheEntry)
-	cacheEntry.schemaDefinition = jsonResp.Schema
-	cacheEntry.schemaID.confluentSchemaID = schemaID.confluentSchemaID
-	cacheEntry.header, err = BuildConfluentWireHeader(schemaID.confluentSchemaID)
-	if err != nil {
-		return "", err
-	}
-
-	m.cache.store(cacheKey, cacheEntry)
-	return cacheEntry.schemaDefinition, nil
+	return entry.schemaDefinition, nil
 }
 
 // GetCachedOrRegister checks if the suitable Avro schema has been cached.

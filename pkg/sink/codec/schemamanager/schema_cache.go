@@ -17,7 +17,11 @@ package schemamanager
 import (
 	"strconv"
 	"sync"
+
+	lru "github.com/hashicorp/golang-lru"
 )
+
+const defaultDecodeSchemaCacheSize = 1024
 
 type schemaCacheEntry struct {
 	schemaVersion    uint64
@@ -32,15 +36,18 @@ type schemaCacheKey struct {
 }
 
 type schemaCache struct {
-	mu      sync.RWMutex
-	entries map[schemaCacheKey]*schemaCacheEntry
+	mu            sync.RWMutex
+	entries       map[schemaCacheKey]*schemaCacheEntry
+	decodeEntries *lru.Cache
 
 	subjectLocks sync.Map
 }
 
 func newSchemaCache() *schemaCache {
+	decodeEntries, _ := lru.New(defaultDecodeSchemaCacheSize)
 	return &schemaCache{
-		entries: make(map[schemaCacheKey]*schemaCacheEntry),
+		entries:       make(map[schemaCacheKey]*schemaCacheEntry),
+		decodeEntries: decodeEntries,
 	}
 }
 
@@ -106,6 +113,29 @@ func (c *schemaCache) getOrCreate(
 	}
 	c.store(key, entry)
 	return entry, false, nil
+}
+
+func (c *schemaCache) getOrLoadDecode(
+	key schemaCacheKey,
+	load func() (*schemaCacheEntry, error),
+) (*schemaCacheEntry, error) {
+	if cached, ok := c.decodeEntries.Get(key); ok {
+		return cached.(*schemaCacheEntry), nil
+	}
+
+	unlock := c.lockSubject(key.schemaIdentity)
+	defer unlock()
+
+	if cached, ok := c.decodeEntries.Get(key); ok {
+		return cached.(*schemaCacheEntry), nil
+	}
+
+	entry, err := load()
+	if err != nil {
+		return nil, err
+	}
+	c.decodeEntries.Add(key, entry)
+	return entry, nil
 }
 
 func (c *schemaCache) lockSubject(schemaName string) func() {

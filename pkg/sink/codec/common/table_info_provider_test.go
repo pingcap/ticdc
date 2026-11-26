@@ -103,14 +103,28 @@ func TestTableInfoProviderAllocatorIsolationAndConcurrency(t *testing.T) {
 
 func TestTableInfoProviderReleaseBeforeWithEffectiveTs(t *testing.T) {
 	provider := NewTableInfoProvider()
-	oldT1 := commonType.WrapTableInfo("test", &timodel.TableInfo{ID: 1, Name: ast.NewCIStr("t1"), UpdateTS: 100})
-	newT1 := commonType.WrapTableInfo("test", &timodel.TableInfo{ID: 2, Name: ast.NewCIStr("t1"), UpdateTS: 50})
+	oldestT1 := commonType.WrapTableInfo("test", &timodel.TableInfo{ID: 1, Name: ast.NewCIStr("t1"), UpdateTS: 20})
+	oldT1 := commonType.WrapTableInfo("test", &timodel.TableInfo{ID: 2, Name: ast.NewCIStr("t1"), UpdateTS: 100})
+	newT1 := commonType.WrapTableInfo("test", &timodel.TableInfo{ID: 3, Name: ast.NewCIStr("t1"), UpdateTS: 50})
 
+	provider.WriteTableInfoAt(oldestT1, 20)
 	provider.WriteTableInfoAt(oldT1, 100)
 	provider.WriteTableInfoAt(newT1, 300)
 
 	provider.ReleaseBefore(350)
 	require.Equal(t, uint64(350), provider.ReleasedWatermark())
+	require.Nil(t, provider.Read("test", "t1", 20))
 	require.Same(t, newT1, provider.Read("test", "t1", 50))
+	version, info := provider.ReadAt("test", "t1", 400)
+	require.Equal(t, uint64(100), version)
+	require.Same(t, oldT1, info)
+
+	newerT1 := commonType.WrapTableInfo("test", &timodel.TableInfo{ID: 4, Name: ast.NewCIStr("t1"), UpdateTS: 200})
+	provider.WriteTableInfoAt(newerT1, 400)
+	provider.ReleaseBefore(450)
+	require.Nil(t, provider.Read("test", "t1", 50))
 	require.Nil(t, provider.Read("test", "t1", 100))
+	version, info = provider.ReadAt("test", "t1", 500)
+	require.Equal(t, uint64(200), version)
+	require.Same(t, newerT1, info)
 }

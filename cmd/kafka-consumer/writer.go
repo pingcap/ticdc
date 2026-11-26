@@ -84,6 +84,7 @@ type writer struct {
 
 	// this should be used by the canal-json, avro and open protocol
 	partitionTableAccessor *common.PartitionTableAccessor
+	tableInfoProvider      *common.TableInfoProvider
 
 	eventRouter            *eventrouter.EventRouter
 	protocol               config.Protocol
@@ -102,6 +103,7 @@ func newWriter(ctx context.Context, o *option) *writer {
 		maxBatchSize:           o.maxBatchSize,
 		progresses:             make([]*partitionProgress, o.partitionNum),
 		partitionTableAccessor: common.NewPartitionTableAccessor(),
+		tableInfoProvider:      common.NewTableInfoProvider(),
 		ddlList:                make([]*event.DDLEvent, 0),
 		ddlWithMaxCommitTs:     make(map[int64]uint64),
 		enableTableAcrossNodes: o.enableTableAcrossNodes,
@@ -123,6 +125,11 @@ func newWriter(ctx context.Context, o *option) *writer {
 		decoder, err := codec.NewEventDecoder(ctx, i, o.codecConfig, o.topic, db)
 		if err != nil {
 			log.Panic("cannot create the decoder", zap.Error(err))
+		}
+		if sharer, ok := decoder.(interface {
+			ShareTableInfo(*common.TableInfoProvider)
+		}); ok {
+			sharer.ShareTableInfo(w.tableInfoProvider)
 		}
 		w.progresses[i] = newPartitionProgress(int32(i), decoder)
 	}
@@ -331,10 +338,16 @@ func (w *writer) getBlockTableIDs(ddl *event.DDLEvent) map[int64]struct{} {
 	}
 	if w.partitionTableAccessor != nil &&
 		w.partitionTableAccessor.IsPartitionTable(ddl.GetSchemaName(), ddl.GetTableName()) {
-		provider, ok := w.progresses[0].decoder.Unwrap().(tableIDProvider)
-		if ok {
-			for _, tableID := range provider.GetTableIDs(ddl.GetSchemaName(), ddl.GetTableName()) {
+		if w.tableInfoProvider != nil {
+			for _, tableID := range w.tableInfoProvider.GetBlockedTables(ddl.GetSchemaName(), ddl.GetTableName()) {
 				tableIDs[tableID] = struct{}{}
+			}
+		} else if len(w.progresses) > 0 && w.progresses[0].decoder != nil {
+			provider, ok := w.progresses[0].decoder.Unwrap().(tableIDProvider)
+			if ok {
+				for _, tableID := range provider.GetTableIDs(ddl.GetSchemaName(), ddl.GetTableName()) {
+					tableIDs[tableID] = struct{}{}
+				}
 			}
 		}
 	}
