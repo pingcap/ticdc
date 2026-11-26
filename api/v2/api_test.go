@@ -29,7 +29,9 @@ import (
 	"github.com/pingcap/ticdc/pkg/config/kerneltype"
 	"github.com/pingcap/ticdc/pkg/etcd"
 	"github.com/pingcap/ticdc/pkg/keyspace"
+	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/ticdc/pkg/server/mock"
+	"github.com/pingcap/ticdc/server/watcher"
 	"github.com/stretchr/testify/require"
 	clientv3 "go.etcd.io/etcd/client/v3"
 	"go.uber.org/zap/zapcore"
@@ -198,7 +200,6 @@ func TestManagementRoutesRequireAuthentication(t *testing.T) {
 		{http.MethodGet, "/api/v2/unsafe/metadata?keyspace=" + common.DefaultKeyspaceName},
 		{http.MethodPost, "/api/v2/unsafe/resolve_lock?keyspace=" + common.DefaultKeyspaceName},
 		{http.MethodDelete, "/api/v2/unsafe/service_gc_safepoint?keyspace=" + common.DefaultKeyspaceName},
-		{http.MethodGet, "/api/v2/captures?keyspace=" + common.DefaultKeyspaceName},
 		{http.MethodGet, "/api/v2/processors?keyspace=" + common.DefaultKeyspaceName},
 		{http.MethodGet, "/api/v2/processors/test/node?keyspace=" + common.DefaultKeyspaceName},
 		{http.MethodPost, "/api/v2/tso?keyspace=" + common.DefaultKeyspaceName},
@@ -226,6 +227,34 @@ func TestManagementRoutesRequireAuthentication(t *testing.T) {
 			require.Equal(t, http.StatusUnauthorized, response.Code, response.Body.String())
 		})
 	}
+}
+
+func TestCaptureRouteAllowedWithClientUserRequired(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	originalConfig := config.GetGlobalServerConfig()
+	t.Cleanup(func() { config.StoreGlobalServerConfig(originalConfig) })
+	cfg := originalConfig.Clone()
+	cfg.Security.ClientUserRequired = true
+	config.StoreGlobalServerConfig(cfg)
+
+	originalNodeManager, _ := appcontext.TryGetService[*watcher.NodeManager](watcher.NodeManagerName)
+	t.Cleanup(func() { appcontext.SetService(watcher.NodeManagerName, originalNodeManager) })
+	appcontext.SetService(watcher.NodeManagerName, watcher.NewNodeManager(nil, nil))
+
+	ctrl := gomock.NewController(t)
+	apiServer := mock.NewMockServer(ctrl)
+	apiServer.EXPECT().IsCoordinator().Return(true)
+	apiServer.EXPECT().SelfInfo().Return(&node.Info{ID: "capture-1"}, nil)
+
+	router := gin.New()
+	RegisterOpenAPIV2Routes(router, NewOpenAPIV2(apiServer))
+
+	request := httptest.NewRequest(http.MethodGet, "/api/v2/captures", nil)
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, request)
+
+	require.Equal(t, http.StatusOK, response.Code, response.Body.String())
 }
 
 func TestManagementRoutesAllowedWithoutClientUserRequired(t *testing.T) {

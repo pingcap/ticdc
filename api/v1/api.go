@@ -94,7 +94,7 @@ func RegisterOpenAPIV1Routes(router *gin.Engine, api OpenAPIV1) {
 
 	// capture API
 	captureGroup := v1.Group("/captures")
-	captureGroup.Use(nodeAuthenticateMiddleware, coordinatorMiddleware)
+	captureGroup.Use(coordinatorMiddleware)
 	captureGroup.GET("", setV1Header, api.v2.ListCaptures)
 	// This API need to be adjusted to be compatible with the API v1.
 	captureGroup.PUT("/drain", authenticateMiddleware, setV1Header, api.drainCapture)

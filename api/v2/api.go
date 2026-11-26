@@ -94,7 +94,7 @@ func RegisterOpenAPIV2Routes(router *gin.Engine, api OpenAPIV2) {
 
 	// capture apis
 	captureGroup := v2.Group("/captures")
-	captureGroup.Use(nodeAuthenticateMiddleware, coordinatorMiddleware)
+	captureGroup.Use(coordinatorMiddleware)
 	captureGroup.GET("", api.ListCaptures)
 
 	verifyTableGroup := v2.Group("/verify_table")
