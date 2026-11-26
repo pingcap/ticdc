@@ -166,16 +166,32 @@ func (c *pulsarReader) Read(ctx context.Context) ([]*Payload, error) {
 		return nil, context.Cause(ctx)
 	case message = <-c.consumer.Chan():
 	}
+	batch := make([]*Payload, 1, min(len(c.consumer.Chan())+1, readBatchRows))
+	batch[0] = c.toPayload(message)
+	for len(batch) < readBatchRows {
+		select {
+		case message = <-c.consumer.Chan():
+			batch = append(batch, c.toPayload(message))
+		default:
+			return batch, nil
+		}
+	}
+	return batch, nil
+}
+
+func (c *pulsarReader) toPayload(message pulsar.ConsumerMessage) *Payload {
 	id := message.ID()
-	return []*Payload{{
+	key := []byte(message.Key())
+	value := message.Payload()
+	return &Payload{
 		Partition: c.partitions[message.Topic()],
-		Key:       []byte(message.Key()),
-		Value:     message.Payload(),
-		Bytes:     int64(len(message.Key()) + len(message.Payload())),
+		Key:       key,
+		Value:     value,
+		Bytes:     int64(len(key) + len(value)),
 		Ack: func(ctx context.Context) error {
 			return c.confirmPosition(ctx, id)
 		},
-	}}, nil
+	}
 }
 
 func (c *pulsarReader) Close() {

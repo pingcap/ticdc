@@ -429,6 +429,10 @@ func (c *storageReader) Read(ctx context.Context) ([]*Payload, error) {
 		if err := c.scanInputs(ctx); err != nil {
 			return nil, err
 		}
+		if len(c.ranges) == 0 && c.sourceCheckpoint > c.watermark {
+			c.watermark = c.sourceCheckpoint
+			return []*Payload{{Watermark: c.sourceCheckpoint}}, nil
+		}
 		return nil, nil
 	}
 	item := c.ranges[0]
