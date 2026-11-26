@@ -603,26 +603,11 @@ func (s *remoteMessageTarget) handleIncomingMessage(ctx context.Context, stream 
 			err = errors.AppError{Type: errors.ErrorTypeMessageReceiveFailed, Reason: errors.Trace(err).Error()}
 			return err
 		}
-		if message == nil {
-			return errors.AppError{
-				Type:   errors.ErrorTypeInvalidMessage,
-				Reason: "received a nil message",
-			}
-		}
-		if node.ID(message.From) != s.targetId || node.ID(message.To) != s.messageCenterID {
-			return errors.AppError{
-				Type: errors.ErrorTypeInvalidMessage,
-				Reason: fmt.Sprintf(
-					"message identity mismatch: expected %s -> %s, got %s -> %s",
-					s.targetId, s.messageCenterID, message.From, message.To),
-			}
-		}
-
 		mt := IOType(message.Type)
 
 		targetMsg := &TargetMessage{
-			From:  s.targetId,
-			To:    s.messageCenterID,
+			From:  node.ID(message.From),
+			To:    node.ID(message.To),
 			Topic: message.Topic,
 			Type:  mt,
 		}
