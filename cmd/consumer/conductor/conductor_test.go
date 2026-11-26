@@ -19,12 +19,15 @@ import (
 	"sync/atomic"
 	"testing"
 
+	"github.com/pingcap/ticdc/cmd/consumer/ddl"
 	"github.com/pingcap/ticdc/cmd/consumer/source"
 	"github.com/pingcap/ticdc/cmd/consumer/writer"
+	commonType "github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
 	codecCommon "github.com/pingcap/ticdc/pkg/sink/codec/common"
 	timodel "github.com/pingcap/tidb/pkg/meta/model"
+	"github.com/pingcap/tidb/pkg/parser/ast"
 	"github.com/stretchr/testify/require"
 )
 
@@ -41,7 +44,6 @@ func TestConductorFlushDDLWithoutDML(t *testing.T) {
 	w := writer.New(t.Context(), writer.NewOptions(
 		"blackhole://",
 		config.GetDefaultReplicaConfig(),
-		codecCommon.NewConfig(config.ProtocolCanalJSON),
 	))
 
 	var flushed []string
@@ -118,4 +120,51 @@ func TestConductorPositionsNonMonotonicIdleAndBoundedMemory(t *testing.T) {
 	}
 	c.confirmPositions(t.Context(), 5000)
 	require.Empty(t, c.positions[0])
+}
+
+func TestDDLBarrierScopeRenameExchangeAndCaseInsensitive(t *testing.T) {
+	alterRename := &commonEvent.DDLEvent{
+		Type:       byte(timodel.ActionRenameTable),
+		SchemaName: "test",
+		TableName:  "t2",
+		Query:      "ALTER TABLE test.t1 RENAME TO test.t2",
+	}
+	require.NoError(t, setDDLTableNames(alterRename))
+	require.ElementsMatch(t, []commonEvent.SchemaTableName{
+		{SchemaName: "test", TableName: "t2"},
+		{SchemaName: "test", TableName: "t1"},
+	}, ddlProcessedTables(alterRename))
+
+	renameTables := &commonEvent.DDLEvent{
+		Type:       byte(timodel.ActionRenameTables),
+		SchemaName: "test",
+		TableName:  "t3",
+		Query:      "RENAME TABLE test.t1 TO test.t3, test.t2 TO test.t4",
+	}
+	require.NoError(t, setDDLTableNames(renameTables))
+	require.ElementsMatch(t, []commonEvent.SchemaTableName{
+		{SchemaName: "test", TableName: "t3"},
+		{SchemaName: "test", TableName: "t1"},
+		{SchemaName: "test", TableName: "t2"},
+		{SchemaName: "test", TableName: "t4"},
+	}, ddlProcessedTables(renameTables))
+
+	exchange := &commonEvent.DDLEvent{
+		Type:       byte(timodel.ActionExchangeTablePartition),
+		SchemaName: "test",
+		TableName:  "p_tbl",
+		Query:      "ALTER TABLE test.p_tbl EXCHANGE PARTITION p0 WITH TABLE test.n_tbl",
+	}
+	require.NoError(t, setDDLTableNames(exchange))
+	require.ElementsMatch(t, []commonEvent.SchemaTableName{
+		{SchemaName: "test", TableName: "p_tbl"},
+		{SchemaName: "test", TableName: "n_tbl"},
+	}, ddlProcessedTables(exchange))
+
+	dml := &commonEvent.DMLEvent{
+		PhysicalTableID: 99,
+		TableInfo:       commonType.WrapTableInfo("TEST", &timodel.TableInfo{Name: ast.NewCIStr("T1")}),
+	}
+	require.True(t, ddl.BlocksTable(alterRename, dml))
+	require.True(t, ddl.BlocksTable(renameTables, dml))
 }

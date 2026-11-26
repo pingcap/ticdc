@@ -63,7 +63,7 @@ func newConsumer(ctx context.Context, options *options) *consumer {
 		reader:    reader,
 		decoder:   decoder,
 		conductor: conductor.New(reader, decoder.Schemas()),
-		writer:    writer.New(ctx, writer.NewOptions(options.downstreamURI, replicaConfig, codecConfig)),
+		writer:    writer.New(ctx, writer.NewOptions(options.downstreamURI, replicaConfig)),
 	}
 	return c
 }

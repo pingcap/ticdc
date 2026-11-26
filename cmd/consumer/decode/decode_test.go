@@ -93,10 +93,9 @@ func TestDecodeGroupBroadcastDDLDedupBootstrapAndStaleSkip(t *testing.T) {
 
 	row, ok := dmlEvent.GetNextRow()
 	require.True(t, ok)
-	staleTable := ddlEvent.TableInfo.CloneWithRouting(ddlEvent.TableInfo.GetSchemaName(), ddlEvent.TableInfo.GetTableName())
-	staleTable.UpdateTS = 50
+	dmlEvent.TableInfo.UpdateTS = 50
 	require.NoError(t, enc.AppendRowChangedEvent(t.Context(), "topic", &event.RowEvent{
-		TableInfo:      staleTable,
+		TableInfo:      dmlEvent.TableInfo,
 		CommitTs:       200,
 		Event:          row,
 		ColumnSelector: columnselector.NewDefaultColumnSelector(),

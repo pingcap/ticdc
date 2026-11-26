@@ -18,6 +18,7 @@ package ddl
 
 import (
 	"slices"
+	"strings"
 
 	"github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/tidb/pkg/meta/model"
@@ -59,22 +60,27 @@ func blocksIdentity(ddl *event.DDLEvent, tableID int64, schema, table string) bo
 	if (ddl.Type == byte(model.ActionRenameTables) || ddl.Type == byte(model.ActionExchangeTablePartition)) && len(ddl.BlockedTableNames) == 0 && len(ddl.MultipleTableInfos) == 0 {
 		return true
 	}
-	if (schema == ddl.SchemaName && table == ddl.TableName) ||
-		(schema == ddl.ExtraSchemaName && table == ddl.ExtraTableName) {
+	if sameTable(schema, table, ddl.SchemaName, ddl.TableName) ||
+		sameTable(schema, table, ddl.ExtraSchemaName, ddl.ExtraTableName) {
 		return true
 	}
 	for _, name := range ddl.BlockedTableNames {
-		if schema == name.SchemaName && table == name.TableName {
+		if sameTable(schema, table, name.SchemaName, name.TableName) {
 			return true
 		}
 	}
 	for _, info := range ddl.MultipleTableInfos {
-		if info != nil && schema == info.GetSchemaName() && table == info.GetTableName() {
+		if info != nil && sameTable(schema, table, info.GetSchemaName(), info.GetTableName()) {
 			return true
 		}
 	}
 	if ddl.BlockedTables != nil && slices.Contains(ddl.BlockedTables.TableIDs, tableID) {
 		return true
 	}
-	return (ddl.TableName == "" || (ddl.BlockedTables != nil && ddl.BlockedTables.InfluenceType == event.InfluenceTypeDB)) && schema == ddl.SchemaName
+	return (ddl.TableName == "" || (ddl.BlockedTables != nil && ddl.BlockedTables.InfluenceType == event.InfluenceTypeDB)) &&
+		strings.EqualFold(schema, ddl.SchemaName)
+}
+
+func sameTable(schemaA, tableA, schemaB, tableB string) bool {
+	return strings.EqualFold(schemaA, schemaB) && strings.EqualFold(tableA, tableB)
 }

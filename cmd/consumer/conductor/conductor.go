@@ -12,7 +12,7 @@
 // limitations under the License.
 
 // Package conductor orders decoded events, resolves DDL dependencies, and
-// turns both into sink work.
+// turns both into sink writes.
 package conductor
 
 import (
@@ -99,35 +99,33 @@ func (c *Conductor) run(ctx context.Context, tasks <-chan *decode.Future, w *wri
 	}
 }
 
-func (c *Conductor) acceptBatch(batch []event.Event, payload *source.Payload) error {
-	for _, work := range batch {
-		if err := c.accept(work, payload); err != nil {
+func (c *Conductor) acceptBatch(events []event.Event, payload *source.Payload) error {
+	for _, e := range events {
+		if err := c.accept(e, payload); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func (c *Conductor) accept(work event.Event, payload *source.Payload) error {
-	switch work := work.(type) {
+func (c *Conductor) accept(e event.Event, payload *source.Payload) error {
+	switch e := e.(type) {
 	case *event.DMLEvent:
-		c.marker = max(c.marker, work.CommitTs)
-		c.queueDML(&dmlTask{dml: work, partition: payload.Partition, offset: payload.Offset})
+		c.marker = max(c.marker, e.CommitTs)
+		c.queueDML(&dmlTask{dml: e, partition: payload.Partition, offset: payload.Offset})
 	case *event.ResolvedEvent:
-		c.advanceWatermark(work.ResolvedTs, payload.Partition)
+		c.advanceWatermark(e.ResolvedTs, payload.Partition)
 	case *event.DDLEvent:
-		c.marker = max(c.marker, work.GetCommitTs())
-		if err := setDDLTableNames(work); err != nil {
+		c.marker = max(c.marker, e.GetCommitTs())
+		if err := setDDLTableNames(e); err != nil {
 			return err
 		}
 		if c.notifier != nil {
-			tables := []event.SchemaTableName{{SchemaName: work.SchemaName, TableName: work.TableName}}
-			if work.Type == byte(model.ActionRenameTable) && len(work.BlockedTableNames) > 0 {
-				tables = append(tables, work.BlockedTableNames[0])
+			if tables := ddlProcessedTables(e); len(tables) != 0 {
+				c.notifier.MarkProcessed(tables, e.GetCommitTs())
 			}
-			c.notifier.MarkProcessed(tables, work.GetCommitTs())
 		}
-		c.queueDDL(work)
+		c.queueDDL(e)
 	case nil:
 		// A source position becomes confirmable once all decoded events from
 		// this payload are registered, including idle resolved/skipped-DDL payloads.
@@ -198,10 +196,12 @@ func (c *Conductor) ddlReady(ddl *event.DDLEvent) bool {
 	if len(c.partitionWatermarks) == 0 || ddl.GetCommitTs() <= c.watermark {
 		return true
 	}
-	// Creating a schema or a table cannot depend on earlier rows.
+	// Creating a schema or standalone table cannot depend on earlier rows.
 	switch model.ActionType(ddl.Type) {
-	case model.ActionCreateSchema, model.ActionCreateTable:
+	case model.ActionCreateSchema:
 		return true
+	case model.ActionCreateTable:
+		return len(ddl.BlockedTableNames) == 0
 	}
 	return false
 }
@@ -382,7 +382,7 @@ func (c *Conductor) advanceWatermark(ts uint64, partition int32) {
 	c.schemas.ReleaseBefore(c.watermark)
 }
 
-// source.Payload progress can pass decoded work still awaiting delivery. Publish
+// source.Payload progress can pass decoded events still awaiting delivery. Publish
 // the earliest pending timestamp so the writer never checkpoints past it.
 func (c *Conductor) advanceWriter(w *writer.Writer) {
 	var pending uint64
@@ -499,13 +499,37 @@ func setDDLTableNames(ddl *event.DDLEvent) error {
 		case *ast.AlterTableStmt:
 			ddl.BlockedTableNames = appendDDLTableNames(ddl.BlockedTableNames, ddl.SchemaName, stmt.Table)
 			for _, spec := range stmt.Specs {
-				if spec.Tp == ast.AlterTableExchangePartition {
+				if spec.Tp == ast.AlterTableExchangePartition || spec.Tp == ast.AlterTableRenameTable {
 					ddl.BlockedTableNames = appendDDLTableNames(ddl.BlockedTableNames, ddl.SchemaName, spec.NewTable)
 				}
 			}
 		}
 	}
 	return nil
+}
+
+func ddlProcessedTables(ddlEvent *event.DDLEvent) []event.SchemaTableName {
+	var tables []event.SchemaTableName
+	add := func(schema, table string) {
+		if schema == "" && table == "" {
+			return
+		}
+		entry := event.SchemaTableName{SchemaName: schema, TableName: table}
+		if !slices.Contains(tables, entry) {
+			tables = append(tables, entry)
+		}
+	}
+	add(ddlEvent.SchemaName, ddlEvent.TableName)
+	add(ddlEvent.ExtraSchemaName, ddlEvent.ExtraTableName)
+	for _, name := range ddlEvent.BlockedTableNames {
+		add(name.SchemaName, name.TableName)
+	}
+	for _, info := range ddlEvent.MultipleTableInfos {
+		if info != nil {
+			add(info.GetSchemaName(), info.GetTableName())
+		}
+	}
+	return tables
 }
 
 func appendDDLTableNames(names []event.SchemaTableName, defaultSchema string, tables ...*ast.TableName) []event.SchemaTableName {
