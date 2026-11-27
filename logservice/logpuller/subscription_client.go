@@ -83,8 +83,8 @@ type rangeTask struct {
 	subscribedSpan *subscribedSpan
 	filterLoop     bool
 	priority       ScanPriorityLevel
-	// splitSubscription is set only on the initial planning task.
-	splitSubscription *splitSubscription
+	// pendingSubscription is set only on the initial planning task.
+	pendingSubscription *pendingSubscription
 }
 
 // upstreamHandle contains the stable TiKV and PD dependencies shared by the
@@ -144,7 +144,10 @@ type subscriptionClient struct {
 	memoryQuota *memoryQuotaController
 	// splitSubscriptions maps externally visible IDs to their internal spans.
 	splitSubscriptions sync.Map // SubscriptionID -> *splitSubscription
-	splitConfig        config.PullerSplitConfig
+	// pendingSubscriptions owns cancellation until the static split decision
+	// has installed either an ordinary span or a split subscription.
+	pendingSubscriptions sync.Map // SubscriptionID -> *pendingSubscription
+	splitConfig          config.PullerSplitConfig
 
 	// rangeTaskCh is used to receive range tasks.
 	// The tasks will be handled in `handleRangeTask` goroutine.
@@ -269,9 +272,9 @@ func (s *subscriptionClient) Subscribe(
 		priority:       rt.baseScanPriority,
 	}
 	if s.splitConfig.EnableSpanSplit {
-		group := newSplitSubscription(s, rt)
-		s.splitSubscriptions.Store(subID, group)
-		task.splitSubscription = group
+		pending := &pendingSubscription{span: rt}
+		s.pendingSubscriptions.Store(subID, pending)
+		task.pendingSubscription = pending
 	} else {
 		s.spanRegistry.Add(rt)
 		s.eventSink.AddPath(rt)
@@ -289,6 +292,10 @@ func (s *subscriptionClient) Subscribe(
 // Unsubscribe the given table span. All covered regions will be deregistered asynchronously.
 // NOTE: `span.TableID` must be set correctly.
 func (s *subscriptionClient) Unsubscribe(subID SubscriptionID) {
+	if value, ok := s.pendingSubscriptions.Load(subID); ok {
+		value.(*pendingSubscription).stop(s)
+		return
+	}
 	if value, ok := s.splitSubscriptions.Load(subID); ok {
 		value.(*splitSubscription).stop()
 		return
@@ -375,8 +382,8 @@ func (s *subscriptionClient) handleRangeTasks(ctx context.Context) error {
 			return ctx.Err()
 		case task := <-s.rangeTaskCh:
 			g.Go(func() error {
-				if task.splitSubscription != nil {
-					return task.splitSubscription.run(ctx)
+				if task.pendingSubscription != nil {
+					return task.pendingSubscription.run(ctx, s)
 				}
 				return s.divideSpanAndScheduleRegionRequests(ctx, task)
 			})

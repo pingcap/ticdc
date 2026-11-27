@@ -103,8 +103,18 @@ func newSplitSubscriptionForTest(
 }
 
 func TestSplitSubscriptionDiscovery(t *testing.T) {
-	for _, enabled := range []bool{false, true} {
-		t.Run(fmt.Sprint(enabled), func(t *testing.T) {
+	for _, test := range []struct {
+		name      string
+		enabled   bool
+		threshold int
+		split     bool
+	}{
+		{name: "disabled", threshold: 2},
+		{name: "belowThreshold", enabled: true, threshold: 4},
+		{name: "atThreshold", enabled: true, threshold: 3},
+		{name: "aboveThreshold", enabled: true, threshold: 2, split: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
 			client, group := newSplitSubscriptionForTest(t, func([]common.RawKVEntry, func()) bool { return false }, func(uint64) {})
 			_, cluster, pd, _ := testutils.NewMockTiKV("", mockcopr.NewCoprRPCHandler())
 			t.Cleanup(pd.Close)
@@ -115,19 +125,26 @@ func TestSplitSubscriptionDiscovery(t *testing.T) {
 			cache := tikv.NewRegionCache(pd)
 			t.Cleanup(cache.Close)
 			client.upstream.regionCache = cache
-			client.splitConfig.EnableSpanSplit = enabled
+			client.splitConfig.EnableSpanSplit = test.enabled
+			client.splitConfig.RegionThreshold = test.threshold
 			client.splitSubscriptions.Delete(group.parent.subID)
 			parent := group.parent
 			client.Subscribe(parent.subID, parent.span, parent.startTs, parent.consumeKVEvents,
 				parent.advanceResolvedTs, 0, true, ScanPriorityHigh)
 			task := <-client.rangeTaskCh
-			if enabled {
-				require.NotNil(t, task.splitSubscription)
-				require.NoError(t, task.splitSubscription.run(client.ctx))
+			if test.enabled {
+				require.NotNil(t, task.pendingSubscription)
+				_, exists := client.splitSubscriptions.Load(parent.subID)
+				require.False(t, exists, "planning must not create a split subscription")
+				require.NoError(t, task.pendingSubscription.run(client.ctx, client))
 			} else {
-				require.Nil(t, task.splitSubscription)
+				require.Nil(t, task.pendingSubscription)
 				require.NoError(t, client.divideSpanAndScheduleRegionRequests(client.ctx, task))
 			}
+			_, pending := client.pendingSubscriptions.Load(parent.subID)
+			require.False(t, pending)
+			_, split := client.splitSubscriptions.Load(parent.subID)
+			require.Equal(t, test.split, split)
 			regions := make([]regionInfo, 0, 3)
 			for {
 				task, ok := client.regionScheduler.taskQueue.TryPop()
@@ -141,7 +158,10 @@ func TestSplitSubscriptionDiscovery(t *testing.T) {
 				require.True(t, region.filterLoop)
 				require.Equal(t, ScanPriorityHigh, region.scanPriority)
 				require.Equal(t, uint64(10), region.resolvedTs())
-				if enabled {
+				if test.split {
+					require.NotEqual(t, parent.subID, region.subscribedSpan.subID)
+					require.Nil(t, client.spanRegistry.Get(parent.subID))
+					require.NotNil(t, region.subscribedSpan.splitSubscription)
 					require.Equal(t, region.span.StartKey, region.subscribedSpan.span.StartKey)
 					require.Equal(t, region.span.EndKey, region.subscribedSpan.span.EndKey)
 					if i > 0 {
@@ -149,6 +169,8 @@ func TestSplitSubscriptionDiscovery(t *testing.T) {
 					}
 				} else {
 					require.Equal(t, parent.subID, region.subscribedSpan.subID)
+					require.Same(t, task.subscribedSpan, region.subscribedSpan)
+					require.Nil(t, region.subscribedSpan.splitSubscription)
 				}
 			}
 			client.Unsubscribe(parent.subID)
@@ -178,7 +200,6 @@ func TestSplitSubscriptionAcknowledgedProgress(t *testing.T) {
 		{TableID: 1, StartKey: []byte("m"), EndKey: []byte("z")},
 	}
 	children := group.prepare(spans)
-	group.finishPlanning()
 	handler := &regionEventHandler{eventSink: client.eventSink}
 	states := make([]*regionFeedState, 2)
 	for i, child := range children {
@@ -238,7 +259,7 @@ func TestSplitSubscriptionAcknowledgedProgress(t *testing.T) {
 	require.Equal(t, []uint64{20, 35}, published)
 }
 
-func TestSplitSubscriptionConcurrentProgressAndCancelPlanning(t *testing.T) {
+func TestSplitSubscriptionConcurrentProgress(t *testing.T) {
 	var published []uint64
 	client, group := newSplitSubscriptionForTest(t, func(_ []common.RawKVEntry, done func()) bool {
 		done() // Inline acknowledgment must not deadlock with progress reporting.
@@ -265,11 +286,104 @@ func TestSplitSubscriptionConcurrentProgressAndCancelPlanning(t *testing.T) {
 	}
 	client.Unsubscribe(group.parent.subID)
 	_, exists := client.splitSubscriptions.Load(group.parent.subID)
-	require.True(t, exists, "planning still owns the public subscription")
-	require.Empty(t, group.prepare([]heartbeatpb.TableSpan{group.parent.span}))
-	group.finishPlanning()
-	_, exists = client.splitSubscriptions.Load(group.parent.subID)
 	require.False(t, exists)
+}
+
+func TestPendingSubscriptionCanceledBeforePlanning(t *testing.T) {
+	client, group := newSplitSubscriptionForTest(t, func([]common.RawKVEntry, func()) bool {
+		t.Fatal("a canceled planner must not deliver events")
+		return false
+	}, func(uint64) { t.Fatal("a canceled planner must not publish progress") })
+	parent := group.parent
+	client.splitSubscriptions.Delete(parent.subID)
+	client.Subscribe(parent.subID, parent.span, parent.startTs, parent.consumeKVEvents,
+		parent.advanceResolvedTs, 0, true, ScanPriorityHigh)
+	task := <-client.rangeTaskCh
+	require.NotNil(t, task.pendingSubscription)
+	client.Unsubscribe(parent.subID)
+	require.True(t, task.subscribedSpan.stopped.Load())
+	require.NoError(t, task.pendingSubscription.run(client.ctx, client))
+	_, pending := client.pendingSubscriptions.Load(parent.subID)
+	require.False(t, pending)
+	_, split := client.splitSubscriptions.Load(parent.subID)
+	require.False(t, split)
+	require.Empty(t, client.spanRegistry.spans)
+	require.Zero(t, client.regionScheduler.taskQueue.Len())
+}
+
+func TestPendingSubscriptionCancelAfterActivation(t *testing.T) {
+	for _, split := range []bool{false, true} {
+		t.Run(fmt.Sprint(split), func(t *testing.T) {
+			client, group := newSplitSubscriptionForTest(t, func([]common.RawKVEntry, func()) bool { return false }, func(uint64) {})
+			parent := group.parent
+			client.splitSubscriptions.Delete(parent.subID)
+			pending := &pendingSubscription{span: parent}
+			client.pendingSubscriptions.Store(parent.subID, pending)
+			spans := []heartbeatpb.TableSpan{parent.span}
+			if split {
+				spans = []heartbeatpb.TableSpan{
+					{TableID: 1, StartKey: []byte("a"), EndKey: []byte("m")},
+					{TableID: 1, StartKey: []byte("m"), EndKey: []byte("z")},
+				}
+			}
+			subscriptions := pending.activate(client, spans)
+			require.Len(t, subscriptions, len(spans))
+			_, exists := client.pendingSubscriptions.Load(parent.subID)
+			require.False(t, exists)
+			// Unsubscribe may have loaded this pending object just before the
+			// chosen implementation was published. Its cancellation must still
+			// reach the ordinary span or every internal child.
+			pending.stop(client)
+			for _, span := range subscriptions {
+				require.True(t, span.stopped.Load())
+			}
+			require.Empty(t, client.spanRegistry.spans)
+			_, exists = client.splitSubscriptions.Load(parent.subID)
+			require.False(t, exists)
+		})
+	}
+}
+
+func TestPendingSubscriptionConcurrentActivationAndCancel(t *testing.T) {
+	for _, split := range []bool{false, true} {
+		t.Run(fmt.Sprint(split), func(t *testing.T) {
+			for range 32 {
+				client, group := newSplitSubscriptionForTest(t, func([]common.RawKVEntry, func()) bool { return false }, func(uint64) {})
+				parent := group.parent
+				client.splitSubscriptions.Delete(parent.subID)
+				pending := &pendingSubscription{span: parent}
+				client.pendingSubscriptions.Store(parent.subID, pending)
+				spans := []heartbeatpb.TableSpan{parent.span}
+				if split {
+					spans = []heartbeatpb.TableSpan{
+						{TableID: 1, StartKey: []byte("a"), EndKey: []byte("m")},
+						{TableID: 1, StartKey: []byte("m"), EndKey: []byte("z")},
+					}
+				}
+				start := make(chan struct{})
+				var wg sync.WaitGroup
+				wg.Go(func() {
+					<-start
+					pending.activate(client, spans)
+				})
+				wg.Go(func() {
+					<-start
+					client.Unsubscribe(parent.subID)
+				})
+				close(start)
+				wg.Wait()
+				require.True(t, parent.stopped.Load())
+				// Let the canceled planning task finish; it must not recreate
+				// an ordinary subscription or children after the handoff race.
+				require.NoError(t, pending.run(client.ctx, client))
+				_, exists := client.pendingSubscriptions.Load(parent.subID)
+				require.False(t, exists)
+				_, exists = client.splitSubscriptions.Load(parent.subID)
+				require.False(t, exists)
+				require.Empty(t, client.spanRegistry.spans)
+			}
+		})
+	}
 }
 
 func TestSplitSubscriptionIndependentPaths(t *testing.T) {
@@ -289,7 +403,6 @@ func TestSplitSubscriptionIndependentPaths(t *testing.T) {
 		{TableID: 1, StartKey: []byte("a"), EndKey: []byte("m")},
 		{TableID: 1, StartKey: []byte("m"), EndKey: []byte("z")},
 	})
-	group.finishPlanning()
 	states := make([]*regionFeedState, 2)
 	for i, child := range children {
 		id := uint64(i + 1)

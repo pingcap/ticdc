@@ -67,6 +67,86 @@ func (p *spanSplitPlan) finish() []heartbeatpb.TableSpan {
 	return p.spans
 }
 
+// pendingSubscription owns only the asynchronous creation of a subscription.
+// Once the decision is installed, a caller already holding this object can
+// still cancel the selected implementation safely.
+type pendingSubscription struct {
+	mu     sync.Mutex
+	span   *subscribedSpan
+	active bool
+	split  *splitSubscription
+}
+
+func (p *pendingSubscription) run(ctx context.Context, client *subscriptionClient) error {
+	defer client.pendingSubscriptions.CompareAndDelete(p.span.subID, p)
+	plan := spanSplitPlan{
+		span:     p.span.span,
+		config:   client.splitConfig,
+		startKey: p.span.span.StartKey,
+	}
+	if err := client.forEachRegion(ctx, p.span.span, p.span, plan.addRegion); err != nil {
+		return err
+	}
+	spans := p.activate(client, plan.finish())
+	if len(spans) > 1 {
+		log.Info("split upstream subscription into internal spans",
+			zap.Uint64("subscriptionID", uint64(p.span.subID)),
+			zap.Int64("tableID", p.span.span.TableID),
+			zap.Int("regionCount", plan.regionCount),
+			zap.Int("spanCount", len(spans)))
+	}
+	for _, span := range spans {
+		if err := client.divideSpanAndScheduleRegionRequests(ctx, rangeTask{
+			span:           span.span,
+			subscribedSpan: span,
+			filterLoop:     span.filterLoop,
+			priority:       span.baseScanPriority,
+		}); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (p *pendingSubscription) activate(client *subscriptionClient, spans []heartbeatpb.TableSpan) []*subscribedSpan {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.span.stopped.Load() {
+		return nil
+	}
+	var subscriptions []*subscribedSpan
+	if len(spans) == 1 {
+		client.spanRegistry.Add(p.span)
+		client.eventSink.AddPath(p.span)
+		subscriptions = []*subscribedSpan{p.span}
+	} else {
+		p.split = newSplitSubscription(client, p.span)
+		subscriptions = p.split.prepare(spans)
+		client.splitSubscriptions.Store(p.span.subID, p.split)
+	}
+	p.active = true
+	// Publish the selected implementation before removing the pending entry.
+	// Unsubscribe can consequently find an owner throughout this handoff.
+	client.pendingSubscriptions.CompareAndDelete(p.span.subID, p)
+	return subscriptions
+}
+
+func (p *pendingSubscription) stop(client *subscriptionClient) {
+	p.mu.Lock()
+	if !p.active {
+		p.span.stopped.Store(true)
+		p.mu.Unlock()
+		return
+	}
+	split := p.split
+	p.mu.Unlock()
+	if split != nil {
+		split.stop()
+	} else {
+		client.setTableStopped(p.span)
+	}
+}
+
 type splitSubscriptionProgress struct {
 	span       *subscribedSpan
 	resolvedTs uint64
@@ -80,11 +160,10 @@ type splitSubscription struct {
 	client *subscriptionClient
 	parent *subscribedSpan
 
-	mu           sync.Mutex
-	children     map[SubscriptionID]*splitSubscriptionProgress
-	planningDone bool
-	resolvedTs   uint64
-	notified     bool
+	mu         sync.Mutex
+	children   map[SubscriptionID]*splitSubscriptionProgress
+	resolvedTs uint64
+	notified   bool
 
 	// Serialize consumer invocations without waiting for their acknowledgments.
 	// Progress has a separate lock because a consumer may acknowledge inline.
@@ -101,38 +180,6 @@ func newSplitSubscription(client *subscriptionClient, parent *subscribedSpan) *s
 	}
 }
 
-func (g *splitSubscription) run(ctx context.Context) error {
-	defer g.finishPlanning()
-	plan := spanSplitPlan{
-		span:     g.parent.span,
-		config:   g.client.splitConfig,
-		startKey: g.parent.span.StartKey,
-	}
-	if err := g.client.forEachRegion(ctx, g.parent.span, g.parent, plan.addRegion); err != nil {
-		return err
-	}
-	spans := plan.finish()
-	children := g.prepare(spans)
-	if len(children) > 1 {
-		log.Info("split upstream subscription into internal spans",
-			zap.Uint64("subscriptionID", uint64(g.parent.subID)),
-			zap.Int64("tableID", g.parent.span.TableID),
-			zap.Int("regionCount", plan.regionCount),
-			zap.Int("spanCount", len(children)))
-	}
-	for _, child := range children {
-		if err := g.client.divideSpanAndScheduleRegionRequests(ctx, rangeTask{
-			span:           child.span,
-			subscribedSpan: child,
-			filterLoop:     child.filterLoop,
-			priority:       child.baseScanPriority,
-		}); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
 // prepare registers every child at startTs before scheduling any Region. This
 // prevents a fast child from advancing past a not-yet-discovered tail.
 func (g *splitSubscription) prepare(spans []heartbeatpb.TableSpan) []*subscribedSpan {
@@ -142,11 +189,8 @@ func (g *splitSubscription) prepare(spans []heartbeatpb.TableSpan) []*subscribed
 		return nil
 	}
 	children := make([]*subscribedSpan, 0, len(spans))
-	for i, span := range spans {
-		id := g.parent.subID
-		if i != 0 {
-			id = g.client.AllocSubscriptionID()
-		}
+	for _, span := range spans {
+		id := g.client.AllocSubscriptionID()
 		child := newSubscribedSpan(
 			g.client.ctx, g.client.resolveLockRateLimiter, g.client.resolveLockTaskCh,
 			id, span, g.parent.startTs, g.consume,
@@ -229,17 +273,10 @@ func (g *splitSubscription) drained(id SubscriptionID) {
 	g.removeIfDrained()
 }
 
-func (g *splitSubscription) finishPlanning() {
-	g.mu.Lock()
-	defer g.mu.Unlock()
-	g.planningDone = true
-	g.removeIfDrained()
-}
-
-// removeIfDrained is called with mu held. A canceled planner must not remove
-// its public ID until it can no longer create children.
+// removeIfDrained is called with mu held. The child set is fixed before the
+// split subscription is published and can only shrink during teardown.
 func (g *splitSubscription) removeIfDrained() {
-	if g.planningDone && g.parent.stopped.Load() && len(g.children) == 0 {
-		g.client.splitSubscriptions.Delete(g.parent.subID)
+	if g.parent.stopped.Load() && len(g.children) == 0 {
+		g.client.splitSubscriptions.CompareAndDelete(g.parent.subID, g)
 	}
 }
