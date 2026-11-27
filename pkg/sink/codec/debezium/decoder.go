@@ -159,8 +159,8 @@ func (d *decoder) ShareTableInfo(cache *common.TableInfoProvider) {
 	d.cache = cache
 }
 
-// NextDMLMessage returns the next dml message if exists
-func (d *decoder) NextDMLMessage() *common.DMLMessage {
+// NextDMLEvent returns the next dml event if exists
+func (d *decoder) NextDMLEvent() *commonEvent.DMLEvent {
 	if len(d.valuePayload) == 0 {
 		log.Panic("next DML message failed, since value payload is empty")
 	}
@@ -174,34 +174,8 @@ func (d *decoder) NextDMLMessage() *common.DMLMessage {
 	keyPayload := d.keyPayload
 	valuePayload := d.valuePayload
 	valueSchema := d.valueSchema
-	commitTs := getCommitTsFromPayload(valuePayload)
-	schemaName := getSchemaNameFromPayload(valuePayload)
-	tableName := getTableNameFromPayload(valuePayload)
-	rowType := rowTypeFromPayload(valuePayload)
-	tableID := d.cache.AllocateTableID(schemaName, tableName)
 	d.clear()
-
-	return common.NewDMLMessage(tableID, schemaName, tableName, commitTs, rowType, func() *commonEvent.DMLEvent {
-		return d.assembleDMLEventFromPayload(keyPayload, valuePayload, valueSchema)
-	})
-}
-
-func rowTypeFromPayload(valuePayload map[string]any) commonType.RowType {
-	op, ok := valuePayload["op"]
-	if !ok {
-		log.Panic("DML message op not found")
-	}
-	switch op {
-	case "c":
-		return commonType.RowTypeInsert
-	case "u":
-		return commonType.RowTypeUpdate
-	case "d":
-		return commonType.RowTypeDelete
-	default:
-		log.Panic("unknown op for the DML message", zap.Any("op", op))
-	}
-	return commonType.RowTypeInsert
+	return d.assembleDMLEventFromPayload(keyPayload, valuePayload, valueSchema)
 }
 
 func (d *decoder) assembleDMLEventFromPayload(

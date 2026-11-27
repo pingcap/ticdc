@@ -44,9 +44,8 @@ EOF
 	fi
 	cdc_cli_changefeed create -c split-region --start-ts=$start_ts --sink-uri="$SINK_URI" --config $WORK_DIR/pulsar_test.toml >"$WORK_DIR/create-output.txt" 2>&1
 	case $SINK_TYPE in
-	kafka) run_kafka_consumer $WORK_DIR "kafka://127.0.0.1:9092/$TOPIC_NAME?protocol=open-protocol&partition-num=4&version=${KAFKA_VERSION}&max-message-bytes=10485760" $WORK_DIR/pulsar_test.toml ;;
-	storage) run_storage_consumer $WORK_DIR $SINK_URI $WORK_DIR/pulsar_test.toml "" ;;
-	pulsar) run_pulsar_consumer --upstream-uri $SINK_URI --config $WORK_DIR/pulsar_test.toml --oauth2-private-key ${WORK_DIR}/credential.json --oauth2-issuer-url "http://localhost:9096" --oauth2-client-id "1234" ;;
+	kafka) run_consumer $WORK_DIR "kafka://127.0.0.1:9092/$TOPIC_NAME?protocol=open-protocol&partition-num=4&version=${KAFKA_VERSION}&max-message-bytes=10485760" $WORK_DIR/pulsar_test.toml ;;
+	storage | pulsar) run_consumer "$WORK_DIR" "$SINK_URI" $WORK_DIR/pulsar_test.toml ;;
 	esac
 
 	# sync_diff can't check non-exist table, so we check expected tables are created in downstream first

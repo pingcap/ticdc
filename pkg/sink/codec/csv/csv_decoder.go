@@ -214,34 +214,17 @@ func (b *decoder) NextResolvedEvent() uint64 {
 	return 0
 }
 
-// NextDMLMessage implements the Decoder interface.
-func (b *decoder) NextDMLMessage() *common.DMLMessage {
+// NextDMLEvent implements the Decoder interface.
+func (b *decoder) NextDMLEvent() *commonEvent.DMLEvent {
 	if b.closed {
 		log.Panic("batch decoder is closed, cannot fetch the next DML event")
 	}
 
-	msg := *b.msg
-	msg.columns = append([]any(nil), b.msg.columns...)
-	msg.preColumns = append([]any(nil), b.msg.preColumns...)
-
-	rowType := commonType.RowTypeInsert
-	if msg.opType == operationDelete {
-		rowType = commonType.RowTypeDelete
+	e, err := csvMsg2RowChangedEvent(b.codecConfig, b.msg, b.tableInfo)
+	if err != nil {
+		log.Panic("convert message to event failed", zap.Error(err))
 	}
-
-	return common.NewDMLMessage(
-		b.tableInfo.TableName.TableID,
-		msg.schemaName,
-		msg.tableName,
-		msg.commitTs,
-		rowType,
-		func() *commonEvent.DMLEvent {
-			e, err := csvMsg2RowChangedEvent(b.codecConfig, &msg, b.tableInfo)
-			if err != nil {
-				log.Panic("convert message to event failed", zap.Error(err))
-			}
-			return e
-		})
+	return e
 }
 
 // NextDDLEvent implements the Decoder interface.

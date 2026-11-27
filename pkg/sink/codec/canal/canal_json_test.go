@@ -93,7 +93,7 @@ func TestIntegerContentCompatible(t *testing.T) {
 	require.True(t, hasNext)
 	require.Equal(t, common.MessageTypeRow, messageType)
 
-	decodedInsert := decoder.NextDMLMessage().ToDMLEvent()
+	decodedInsert := decoder.NextDMLEvent()
 	require.NotNil(t, decodedInsert)
 }
 
@@ -178,7 +178,7 @@ func TestIntegerTypes(t *testing.T) {
 			require.True(t, hasNext)
 			require.Equal(t, common.MessageTypeRow, messageType)
 
-			decoded := decoder.NextDMLMessage().ToDMLEvent()
+			decoded := decoder.NextDMLEvent()
 			if enableTiDBExtension {
 				require.Equal(t, event.CommitTs, decoded.GetCommitTs())
 			}
@@ -239,7 +239,7 @@ func TestFloatTypes(t *testing.T) {
 	require.True(t, hasNext)
 	require.Equal(t, common.MessageTypeRow, messageType)
 
-	event := decoder.NextDMLMessage().ToDMLEvent()
+	event := decoder.NextDMLEvent()
 	change, ok := event.GetNextRow()
 	require.True(t, ok)
 
@@ -288,7 +288,7 @@ func TestTimeTypes(t *testing.T) {
 	require.True(t, hasNext)
 	require.Equal(t, common.MessageTypeRow, messageType)
 
-	event := decoder.NextDMLMessage().ToDMLEvent()
+	event := decoder.NextDMLEvent()
 	change, ok := event.GetNextRow()
 	require.True(t, ok)
 
@@ -338,7 +338,7 @@ func TestStringTypes(t *testing.T) {
 	require.True(t, hasNext)
 	require.Equal(t, common.MessageTypeRow, messageType)
 
-	event := decoder.NextDMLMessage().ToDMLEvent()
+	event := decoder.NextDMLEvent()
 	change, ok := event.GetNextRow()
 	require.True(t, ok)
 
@@ -388,7 +388,7 @@ func TestBlobTypes(t *testing.T) {
 	require.True(t, hasNext)
 	require.Equal(t, common.MessageTypeRow, messageType)
 
-	event := decoder.NextDMLMessage().ToDMLEvent()
+	event := decoder.NextDMLEvent()
 	change, ok := event.GetNextRow()
 	require.True(t, ok)
 
@@ -438,7 +438,7 @@ func TestTextTypes(t *testing.T) {
 	require.True(t, hasNext)
 	require.Equal(t, common.MessageTypeRow, messageType)
 
-	event := decoder.NextDMLMessage().ToDMLEvent()
+	event := decoder.NextDMLEvent()
 	change, ok := event.GetNextRow()
 	require.True(t, ok)
 
@@ -497,7 +497,7 @@ func TestOtherTypes(t *testing.T) {
 	require.True(t, hasNext)
 	require.Equal(t, common.MessageTypeRow, messageType)
 
-	event := decoder.NextDMLMessage().ToDMLEvent()
+	event := decoder.NextDMLEvent()
 	change, ok := event.GetNextRow()
 	require.True(t, ok)
 
@@ -555,7 +555,7 @@ func TestDMLEventWithColumnSelector(t *testing.T) {
 	require.True(t, hasNext)
 	require.Equal(t, common.MessageTypeRow, messageType)
 
-	event := decoder.NextDMLMessage().ToDMLEvent()
+	event := decoder.NextDMLEvent()
 	change, ok := event.GetNextRow()
 	require.True(t, ok)
 
@@ -614,7 +614,7 @@ func TestDMLMultiplePK(t *testing.T) {
 	require.True(t, hasNext)
 	require.Equal(t, common.MessageTypeRow, messageType)
 
-	event := decoder.NextDMLMessage().ToDMLEvent()
+	event := decoder.NextDMLEvent()
 	change, ok := event.GetNextRow()
 	require.True(t, ok)
 
@@ -802,7 +802,7 @@ func TestLargeMessageClaimCheck(t *testing.T) {
 	require.True(t, hasNext)
 	require.Equal(t, common.MessageTypeRow, messageType)
 
-	decodedInsert := dec.NextDMLMessage().ToDMLEvent()
+	decodedInsert := dec.NextDMLEvent()
 	require.NotNil(t, decodedInsert)
 
 	change, ok := decodedInsert.GetNextRow()
@@ -893,7 +893,7 @@ func TestMessageLargeHandleKeyOnly(t *testing.T) {
 	require.True(t, hasNext)
 	require.Equal(t, common.MessageTypeRow, messageType)
 
-	event := decoder.NextDMLMessage().ToDMLEvent()
+	event := decoder.NextDMLEvent()
 	change, ok := event.GetNextRow()
 	require.True(t, ok)
 
@@ -984,7 +984,7 @@ func TestDMLTypeEvent(t *testing.T) {
 		require.True(t, hasNext)
 		require.Equal(t, common.MessageTypeRow, messageType)
 
-		decoded := decoder.NextDMLMessage().ToDMLEvent()
+		decoded := decoder.NextDMLEvent()
 		change, ok := decoded.GetNextRow()
 		require.True(t, ok)
 
@@ -1010,7 +1010,7 @@ func TestDMLTypeEvent(t *testing.T) {
 	require.True(t, hasNext)
 	require.Equal(t, common.MessageTypeRow, messageType)
 
-	decoded := decoder.NextDMLMessage().ToDMLEvent()
+	decoded := decoder.NextDMLEvent()
 	change, ok := decoded.GetNextRow()
 	require.True(t, ok)
 
@@ -1104,7 +1104,7 @@ func TestDDLSequence(t *testing.T) {
 	require.True(t, hasNext)
 	require.Equal(t, common.MessageTypeRow, messageType)
 
-	decodedInsert := dec.NextDMLMessage().ToDMLEvent()
+	decodedInsert := dec.NextDMLEvent()
 	require.NotZero(t, decodedInsert.GetTableID())
 
 	addColumn := helper.DDL2Event(`alter table t add column c int`)
@@ -1183,7 +1183,7 @@ func TestDecoderTableInfoCacheUsesDDLCommitTsAcrossColumnChanges(t *testing.T) {
 		messageType, hasNext := decoder.HasNext()
 		require.True(t, hasNext)
 		require.Equal(t, common.MessageTypeRow, messageType)
-		return decoder.NextDMLMessage().ToDMLEvent()
+		return decoder.NextDMLEvent()
 	}
 
 	columnNames := func(event *commonEvent.DMLEvent) []string {
@@ -1478,6 +1478,8 @@ func TestDDLInvalidatesCache(t *testing.T) {
 	require.Equal(t, common.MessageTypeDDL, tp)
 	_ = dec.NextDDLEvent()
 
+	_, before := provider.ReadAt("other", "t2", 120)
+	require.Same(t, t2, before)
 	_, afterT1 := provider.ReadAt("test", "t1", 121)
 	require.Nil(t, afterT1)
 	_, afterT2 := provider.ReadAt("other", "t2", 121)
@@ -1509,7 +1511,7 @@ func TestTxnTableInfo(t *testing.T) {
 			break
 		}
 		require.Equal(t, common.MessageTypeRow, tp)
-		dml := dec.NextDMLMessage().ToDMLEvent()
+		dml := dec.NextDMLEvent()
 		t.Cleanup(dml.PostFlush)
 		events = append(events, dml)
 	}
@@ -1583,7 +1585,7 @@ func TestColdDelete(t *testing.T) {
 	tp, hasNext := decA.HasNext()
 	require.True(t, hasNext)
 	require.Equal(t, common.MessageTypeRow, tp)
-	decodedDelete := decA.NextDMLMessage().ToDMLEvent()
+	decodedDelete := decA.NextDMLEvent()
 	t.Cleanup(decodedDelete.PostFlush)
 	require.Len(t, decodedDelete.TableInfo.GetColumns(), 1)
 	_, cachedAfterDelete := provider.ReadAt("test", "t1", 102)
@@ -1593,7 +1595,7 @@ func TestColdDelete(t *testing.T) {
 	tp, hasNext = decB.HasNext()
 	require.True(t, hasNext)
 	require.Equal(t, common.MessageTypeRow, tp)
-	decodedInsert := decB.NextDMLMessage().ToDMLEvent()
+	decodedInsert := decB.NextDMLEvent()
 	t.Cleanup(decodedInsert.PostFlush)
 	require.Len(t, decodedInsert.TableInfo.GetColumns(), 2)
 	row, ok := decodedInsert.GetNextRow()

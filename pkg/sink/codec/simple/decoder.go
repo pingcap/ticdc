@@ -55,19 +55,20 @@ type Decoder struct {
 
 	// cachedMessages is used to store the messages which does not have received corresponding table info yet.
 	cachedMessages *list.List
-	// CachedDMLMessages are messages just released from the cachedMessages.
-	CachedDMLMessages []*common.DMLMessage
+	// CachedRowChangedEvents are events just decoded from the cachedMessages.
+	CachedRowChangedEvents []*commonEvent.DMLEvent
 }
 
-// NewDecoder returns a simple decoder.
+// NewDecoder returns a simple decoder, reusing externalStorage when provided.
 func NewDecoder(
-	ctx context.Context, config *common.Config, db *sql.DB,
+	ctx context.Context, config *common.Config, db *sql.DB, externalStorage ...storeapi.Storage,
 ) (common.EventDecoder, error) {
-	var (
-		storage storeapi.Storage
-		err     error
-	)
-	if config.LargeMessageHandle.EnableClaimCheck() {
+	var storage storeapi.Storage
+	if len(externalStorage) > 0 {
+		storage = externalStorage[0]
+	}
+	var err error
+	if storage == nil && config.LargeMessageHandle.EnableClaimCheck() {
 		storageURI := config.LargeMessageHandle.ClaimCheckStorageURI
 		storage, err = util.GetExternalStorageWithDefaultTimeout(ctx, storageURI)
 		if err != nil {
@@ -149,8 +150,8 @@ func (d *Decoder) NextResolvedEvent() uint64 {
 	return ts
 }
 
-// NextDMLMessage returns the next dml message if exists
-func (d *Decoder) NextDMLMessage() *common.DMLMessage {
+// NextDMLEvent returns the next dml event if exists
+func (d *Decoder) NextDMLEvent() *commonEvent.DMLEvent {
 	if d.msg == nil || (d.msg.Data == nil && d.msg.Old == nil) {
 		log.Panic("invalid data for the DML event", zap.String("message", util.RedactAny(d.msg)))
 	}
@@ -164,6 +165,9 @@ func (d *Decoder) NextDMLMessage() *common.DMLMessage {
 
 	tableInfo := d.memo.Read(msg.Schema, msg.Table, msg.SchemaVersion)
 	if tableInfo == nil {
+		if released := d.memo.ReleasedWatermark(); released != 0 && msg.CommitTs <= released {
+			return nil
+		}
 		log.Debug("table info not found for the message, "+
 			"the consumer should cache this message temporarily, and update the tableInfo after it's received",
 			zap.String("schema", msg.Schema),
@@ -173,28 +177,8 @@ func (d *Decoder) NextDMLMessage() *common.DMLMessage {
 		return nil
 	}
 
-	return d.newDMLMessage(msg, tableInfo)
-}
-
-func (d *Decoder) newDMLMessage(msg *message, tableInfo *commonType.TableInfo) *common.DMLMessage {
 	d.memo.AddBlockTableID(msg.Schema, msg.Table, msg.TableID)
-	return common.NewDMLMessage(msg.TableID, msg.Schema, msg.Table, msg.CommitTs, rowTypeFromMessageType(msg.Type), func() *commonEvent.DMLEvent {
-		return d.assembleDMLEvent(msg, tableInfo)
-	})
-}
-
-func rowTypeFromMessageType(tp MessageType) commonType.RowType {
-	switch tp {
-	case DMLTypeInsert:
-		return commonType.RowTypeInsert
-	case DMLTypeUpdate:
-		return commonType.RowTypeUpdate
-	case DMLTypeDelete:
-		return commonType.RowTypeDelete
-	default:
-		log.Panic("unknown row type for the DML message", zap.Any("type", tp))
-	}
-	return commonType.RowTypeInsert
+	return d.assembleDMLEvent(msg, tableInfo)
 }
 
 func (d *Decoder) assembleDMLEvent(msg *message, tableInfo *commonType.TableInfo) *commonEvent.DMLEvent {
@@ -324,7 +308,8 @@ func (d *Decoder) NextDDLEvent() *commonEvent.DDLEvent {
 		next := ele.Next()
 		tableInfo := d.memo.Read(msg.Schema, msg.Table, msg.SchemaVersion)
 		if tableInfo != nil {
-			d.CachedDMLMessages = append(d.CachedDMLMessages, d.newDMLMessage(msg, tableInfo))
+			d.memo.AddBlockTableID(msg.Schema, msg.Table, msg.TableID)
+			d.CachedRowChangedEvents = append(d.CachedRowChangedEvents, d.assembleDMLEvent(msg, tableInfo))
 			d.cachedMessages.Remove(ele)
 		}
 		ele = next
@@ -332,10 +317,10 @@ func (d *Decoder) NextDDLEvent() *commonEvent.DDLEvent {
 	return ddl
 }
 
-// GetCachedMessages returns the cached messages.
-func (d *Decoder) GetCachedMessages() []*common.DMLMessage {
-	result := d.CachedDMLMessages
-	d.CachedDMLMessages = nil
+// GetCachedEvents returns the events decoded from the cached messages.
+func (d *Decoder) GetCachedEvents() []*commonEvent.DMLEvent {
+	result := d.CachedRowChangedEvents
+	d.CachedRowChangedEvents = nil
 	return result
 }
 

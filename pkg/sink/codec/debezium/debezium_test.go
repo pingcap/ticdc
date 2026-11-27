@@ -127,7 +127,7 @@ func TestEncodeRoutedDMLEventUsesTargetNames(t *testing.T) {
 	require.True(t, hasNext)
 	require.Equal(t, common.MessageTypeRow, messageType)
 
-	decoded := decoder.NextDMLMessage().ToDMLEvent()
+	decoded := decoder.NextDMLEvent()
 	require.Equal(t, "target_db", decoded.TableInfo.GetSchemaName())
 	require.Equal(t, "target_table", decoded.TableInfo.GetTableName())
 
@@ -216,7 +216,7 @@ func TestDebeziumNumericStringHandling(t *testing.T) {
 
 			decoder := NewDecoder(cfg, nil)
 			decoder.AddKeyValue(messages[0].Key, messages[0].Value)
-			decoded := decoder.NextDMLMessage().ToDMLEvent()
+			decoded := decoder.NextDMLEvent()
 			change, ok := decoded.GetNextRow()
 			require.True(t, ok)
 			common.CompareRow(t, row, helper.tableInfo, change, decoded.TableInfo)
@@ -247,6 +247,46 @@ func TestEncodeRoutedDDLEventUsesTargetNames(t *testing.T) {
 	require.Equal(t, "target_db", decoded.SchemaName)
 	require.Equal(t, "target_table", decoded.TableName)
 	require.Equal(t, routedDDL.Query, decoded.Query)
+}
+
+func TestDebeziumNextDDLEventInvalidatesSharedCache(t *testing.T) {
+	cfg := common.NewConfig(config.ProtocolDebezium)
+	cfg.EnableTiDBExtension = true
+	cfg.TimeZone = time.UTC
+
+	encoder := NewBatchEncoder(cfg, "dbserver1")
+	provider := common.NewTableInfoProvider()
+	dec := NewDecoder(cfg, nil).(*decoder)
+	dec.ShareTableInfo(provider)
+
+	t1 := commonType.WrapTableInfo("test", &model.TableInfo{ID: 1, Name: ast.NewCIStr("t1"), UpdateTS: 100})
+	t2 := commonType.WrapTableInfo("other", &model.TableInfo{ID: 2, Name: ast.NewCIStr("t2"), UpdateTS: 100})
+	provider.WriteTableInfo(t1, 0)
+	provider.WriteTableInfo(t2, 0)
+
+	msg, err := encoder.EncodeDDLEvent(&commonEvent.DDLEvent{
+		FinishedTs:      120,
+		Type:            byte(model.ActionExchangeTablePartition),
+		SchemaName:      "test",
+		TableName:       "t1",
+		ExtraSchemaName: "test",
+		ExtraTableName:  "t_normal",
+		TableInfo:       t1,
+		Query:           "ALTER TABLE test.t1 EXCHANGE PARTITION p0 WITH TABLE test.t_normal",
+	})
+	require.NoError(t, err)
+	dec.AddKeyValue(msg.Key, msg.Value)
+	tp, hasNext := dec.HasNext()
+	require.True(t, hasNext)
+	require.Equal(t, common.MessageTypeDDL, tp)
+	_ = dec.NextDDLEvent()
+
+	_, before := provider.ReadAt("other", "t2", 120)
+	require.Same(t, t2, before)
+	_, afterT1 := provider.ReadAt("test", "t1", 121)
+	require.Nil(t, afterT1)
+	_, afterT2 := provider.ReadAt("other", "t2", 121)
+	require.Nil(t, afterT2)
 }
 
 func TestDebeziumSuiteEnableSchema(t *testing.T) {
@@ -355,7 +395,7 @@ func TestEncodeStartTsInSource(t *testing.T) {
 	messageType, hasNext := decoder.HasNext()
 	require.True(t, hasNext)
 	require.Equal(t, common.MessageTypeRow, messageType)
-	decoded := decoder.NextDMLMessage().ToDMLEvent()
+	decoded := decoder.NextDMLEvent()
 	require.Equal(t, uint64(5), decoded.GetStartTs())
 }
 
@@ -392,7 +432,7 @@ func TestDecodeStartTsFallbackToCommitTs(t *testing.T) {
 	messageType, hasNext := decoder.HasNext()
 	require.True(t, hasNext)
 	require.Equal(t, common.MessageTypeRow, messageType)
-	decoded := decoder.NextDMLMessage().ToDMLEvent()
+	decoded := decoder.NextDMLEvent()
 	require.Equal(t, decoded.GetCommitTs(), decoded.GetStartTs())
 	require.NotEqual(t, uint64(5), decoded.GetStartTs())
 }
@@ -434,7 +474,7 @@ func TestDecodeNonPositiveStartTsFallbackToCommitTs(t *testing.T) {
 			messageType, hasNext := decoder.HasNext()
 			require.True(t, hasNext)
 			require.Equal(t, common.MessageTypeRow, messageType)
-			decoded := decoder.NextDMLMessage().ToDMLEvent()
+			decoded := decoder.NextDMLEvent()
 			require.Equal(t, decoded.GetCommitTs(), decoded.GetStartTs())
 		})
 	}
@@ -473,7 +513,7 @@ func TestDecodedTableInfoLocatesRowByPrimaryKey(t *testing.T) {
 	require.True(t, hasNext)
 	require.Equal(t, common.MessageTypeRow, messageType)
 
-	event := decoder.NextDMLMessage().ToDMLEvent()
+	event := decoder.NextDMLEvent()
 	common.RequireRowLocatorByPrimaryKey(t, event.TableInfo, "a", "b")
 }
 

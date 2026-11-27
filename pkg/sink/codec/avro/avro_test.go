@@ -361,10 +361,7 @@ func TestAvroEncodeIncludeBeforeValue(t *testing.T) {
 			require.True(t, exist)
 			require.Equal(t, common.MessageTypeRow, messageType)
 
-			message := decoder.NextDMLMessage()
-			require.Equal(t, tc.rowType, message.RowType)
-			require.Equal(t, tc.event.CommitTs, message.GetCommitTs())
-			decoded := message.ToDMLEvent()
+			decoded := decoder.NextDMLEvent()
 			require.NotNil(t, decoded)
 			require.Equal(t, tc.event.CommitTs, decoded.CommitTs)
 
@@ -513,7 +510,7 @@ func TestAvroEncodeDeleteEventWithWatermarkCarriesCommitTs(t *testing.T) {
 	require.True(t, exists)
 	require.Equal(t, common.MessageTypeRow, messageType)
 
-	decoded := decoder.NextDMLMessage().ToDMLEvent()
+	decoded := decoder.NextDMLEvent()
 	require.NotNil(t, decoded)
 	require.Equal(t, event.CommitTs, decoded.GetCommitTs())
 	require.Len(t, decoded.RowTypes, 1)
@@ -546,17 +543,15 @@ func TestAvroLegacyDeleteUsesCachedValueSchema(t *testing.T) {
 		t.Run("watermark="+strconv.FormatBool(withWatermark), func(t *testing.T) {
 			decoder := NewDecoder(codecConfig, encoder.schemaM, topic, nil)
 			decoder.AddKeyValue(insert.Key, insert.Value)
-			// The consumer may defer materialization until after receiving the delete.
-			insertMessage := decoder.NextDMLMessage()
+			insertEvent := decoder.NextDMLEvent()
+			t.Cleanup(insertEvent.PostFlush)
 			value := deleted.Value
 			if !withWatermark {
 				value = nil
 			}
 			decoder.AddKeyValue(deleted.Key, value)
-			deleteEvent := decoder.NextDMLMessage().ToDMLEvent()
+			deleteEvent := decoder.NextDMLEvent()
 			t.Cleanup(deleteEvent.PostFlush)
-			insertEvent := insertMessage.ToDMLEvent()
-			t.Cleanup(insertEvent.PostFlush)
 
 			require.Equal(t, insertEvent.TableInfo.GetColumns(), deleteEvent.TableInfo.GetColumns())
 			require.Equal(t, []commonType.RowType{commonType.RowTypeDelete}, deleteEvent.RowTypes)
@@ -599,7 +594,7 @@ func TestAvroDeleteSharesTableInfo(t *testing.T) {
 			d2.ShareTableInfo(provider)
 
 			d1.AddKeyValue(insert.Key, insert.Value)
-			insertEvent := d1.NextDMLMessage().ToDMLEvent()
+			insertEvent := d1.NextDMLEvent()
 			t.Cleanup(insertEvent.PostFlush)
 
 			value := deleted.Value
@@ -607,7 +602,7 @@ func TestAvroDeleteSharesTableInfo(t *testing.T) {
 				value = nil
 			}
 			d2.AddKeyValue(deleted.Key, value)
-			deleteEvent := d2.NextDMLMessage().ToDMLEvent()
+			deleteEvent := d2.NextDMLEvent()
 			t.Cleanup(deleteEvent.PostFlush)
 
 			require.Same(t, insertEvent.TableInfo, deleteEvent.TableInfo)
@@ -642,33 +637,60 @@ func TestAvroDeleteAfterDDL(t *testing.T) {
 		return encoder.Build()[0]
 	}
 
-	provider := common.NewTableInfoProvider()
-	d1 := NewDecoder(codecConfig, encoder.schemaM, topic, nil).(*decoder)
-	d2 := NewDecoder(codecConfig, encoder.schemaM, topic, nil).(*decoder)
-	d1.ShareTableInfo(provider)
-	d2.ShareTableInfo(provider)
+	for _, tc := range []struct {
+		name       string
+		invalidate func(provider *common.TableInfoProvider)
+	}{
+		{
+			name: "AddDDL",
+			invalidate: func(provider *common.TableInfoProvider) {
+				provider.AddDDL("test", "person", 1025)
+			},
+		},
+		{
+			name: "InvalidateAll",
+			invalidate: func(provider *common.TableInfoProvider) {
+				provider.InvalidateAll(1025)
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			provider := common.NewTableInfoProvider()
+			d1 := NewDecoder(codecConfig, encoder.schemaM, topic, nil).(*decoder)
+			d2 := NewDecoder(codecConfig, encoder.schemaM, topic, nil).(*decoder)
+			d1.ShareTableInfo(provider)
+			d2.ShareTableInfo(provider)
 
-	d1.AddKeyValue(insert.Key, insert.Value)
-	insertEvent := d1.NextDMLMessage().ToDMLEvent()
-	t.Cleanup(insertEvent.PostFlush)
+			d1.AddKeyValue(insert.Key, insert.Value)
+			insertEvent := d1.NextDMLEvent()
+			t.Cleanup(insertEvent.PostFlush)
 
-	provider.AddDDL("test", "person", 1025)
+			tc.invalidate(provider)
 
-	// A delete at the DDL commit ts still sees the pre-DDL full layout.
-	beforeDDL := encodeDelete(1025)
-	d2.AddKeyValue(beforeDDL.Key, beforeDDL.Value)
-	beforeEvent := d2.NextDMLMessage().ToDMLEvent()
-	t.Cleanup(beforeEvent.PostFlush)
-	require.Equal(t, 2, beforeEvent.Rows.NumCols())
+			// CommitTs == DDL ts still sees the pre-DDL full layout.
+			beforeDDL := encodeDelete(1025)
+			d2.AddKeyValue(beforeDDL.Key, beforeDDL.Value)
+			beforeEvent := d2.NextDMLEvent()
+			t.Cleanup(beforeEvent.PostFlush)
+			require.Equal(t, 2, beforeEvent.Rows.NumCols())
 
-	// After the DDL the delete falls back to the key-only layout without polluting the cache.
-	afterDDL := encodeDelete(1026)
-	d2.AddKeyValue(afterDDL.Key, afterDDL.Value)
-	afterEvent := d2.NextDMLMessage().ToDMLEvent()
-	t.Cleanup(afterEvent.PostFlush)
-	require.Equal(t, 1, afterEvent.Rows.NumCols())
-	_, cachedAfterDDL := provider.ReadAt("test", "person", 1026)
-	require.Nil(t, cachedAfterDDL)
+			// CommitTs > DDL ts falls back to key-only layout without polluting cache.
+			afterDDL := encodeDelete(1026)
+			d2.AddKeyValue(afterDDL.Key, afterDDL.Value)
+			afterEvent := d2.NextDMLEvent()
+			t.Cleanup(afterEvent.PostFlush)
+			require.Equal(t, 1, afterEvent.Rows.NumCols())
+
+			// Tombstone without watermark also avoids stale layout after a DDL.
+			d2.AddKeyValue(afterDDL.Key, nil)
+			tombstoneEvent := d2.NextDMLEvent()
+			t.Cleanup(tombstoneEvent.PostFlush)
+			require.Equal(t, 1, tombstoneEvent.Rows.NumCols())
+
+			_, cachedAfterDDL := provider.ReadAt("test", "person", 1026)
+			require.Nil(t, cachedAfterDDL)
+		})
+	}
 }
 
 func TestAvroEnvelope(t *testing.T) {

@@ -73,7 +73,7 @@ func TestDMLEventE2E(t *testing.T) {
 			require.True(t, exist)
 			require.Equal(t, common.MessageTypeRow, messageType)
 
-			decodedEvent := decoder.NextDMLMessage().ToDMLEvent()
+			decodedEvent := decoder.NextDMLEvent()
 			require.NotNil(t, decodedEvent)
 			require.NotZero(t, decodedEvent.GetTableID())
 
@@ -135,7 +135,7 @@ func TestEncodeRoutedDMLEventUsesTargetNames(t *testing.T) {
 	require.True(t, exists)
 	require.Equal(t, common.MessageTypeRow, messageType)
 
-	decoded := decoder.NextDMLMessage().ToDMLEvent()
+	decoded := decoder.NextDMLEvent()
 	require.Equal(t, "target_db", decoded.TableInfo.GetSchemaName())
 	require.Equal(t, "target_table", decoded.TableInfo.GetTableName())
 }

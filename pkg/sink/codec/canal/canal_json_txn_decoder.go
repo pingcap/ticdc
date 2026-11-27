@@ -103,7 +103,7 @@ func (d *txnDecoder) HasNext() (common.MessageType, bool) {
 	return d.msg.messageType(), true
 }
 
-func (d *txnDecoder) NextDMLMessage() *common.DMLMessage {
+func (d *txnDecoder) NextDMLEvent() *commonEvent.DMLEvent {
 	if d.msg == nil || d.msg.messageType() != common.MessageTypeRow {
 		messageType := common.MessageTypeUnknown
 		if d.msg != nil {
@@ -112,28 +112,9 @@ func (d *txnDecoder) NextDMLMessage() *common.DMLMessage {
 		log.Panic("message type is not row changed",
 			zap.Any("messageType", messageType), zap.Any("msg", d.msg))
 	}
-
 	msg := d.msg
 	d.msg = nil
-	schemaName := *msg.getSchema()
-	tableName := *msg.getTable()
-	tableID := d.cache.AllocateTableID(schemaName, tableName)
-
-	var rowType commonType.RowType
-	switch msg.eventType() {
-	case canal.EventType_DELETE:
-		rowType = commonType.RowTypeDelete
-	case canal.EventType_INSERT:
-		rowType = commonType.RowTypeInsert
-	case canal.EventType_UPDATE:
-		rowType = commonType.RowTypeUpdate
-	default:
-		log.Panic("unknown event type for the DML event", zap.Any("eventType", msg.eventType()))
-	}
-
-	return common.NewDMLMessage(tableID, schemaName, tableName, msg.getCommitTs(), rowType, func() *commonEvent.DMLEvent {
-		return d.canalJSONMessage2RowChange(msg)
-	})
+	return d.canalJSONMessage2RowChange(msg)
 }
 
 func (d *txnDecoder) canalJSONMessage2RowChange(msg canalJSONMessageInterface) *commonEvent.DMLEvent {

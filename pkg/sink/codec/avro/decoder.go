@@ -18,7 +18,6 @@ import (
 	"database/sql"
 	"encoding/binary"
 	"encoding/json"
-	"maps"
 	"math"
 	"math/big"
 	"strconv"
@@ -53,9 +52,6 @@ type decoder struct {
 	upstreamTiDB *sql.DB
 	cache        *common.TableInfoProvider
 
-	// valueSchemas supplies the column layout for subsequent key-only deletes.
-	valueSchemas map[[2]string]map[string]any
-
 	schemaM schemamanager.SchemaManager
 	codecs  *lru.Cache
 
@@ -78,7 +74,6 @@ func NewDecoder(
 		codecs:       codecs,
 		upstreamTiDB: db,
 		cache:        common.NewTableInfoProvider(),
-		valueSchemas: make(map[[2]string]map[string]any),
 	}
 }
 
@@ -130,24 +125,10 @@ func (d *decoder) NextResolvedEvent() uint64 {
 	return ts
 }
 
-// NextDMLMessage returns the next row changed message if exists
-func (d *decoder) NextDMLMessage() *common.DMLMessage {
+// NextDMLEvent returns the next row changed event if exists
+func (d *decoder) NextDMLEvent() *commonEvent.DMLEvent {
 	keyMap, valueMap, valueSchema, isDelete, hasValue, deleteCommitTs := d.decodeDMLPayload()
-	schemaName, tableName := schemaAndTableName(valueSchema)
-	commitTs := deleteCommitTs
-	if hasValue {
-		commitTs = uint64(valueMap[tidbCommitTs].(int64))
-	}
-	rowType := commonType.RowTypeInsert
-	if isDelete {
-		rowType = commonType.RowTypeDelete
-	} else if operation, ok := valueMap[tidbOp]; ok && operation == updateOperation {
-		rowType = commonType.RowTypeUpdate
-	}
-	tableID := d.cache.AllocateTableID(schemaName, tableName)
-	return common.NewDMLMessage(tableID, schemaName, tableName, commitTs, rowType, func() *commonEvent.DMLEvent {
-		return d.assembleDMLEventFromDecoded(keyMap, valueMap, valueSchema, isDelete, hasValue, deleteCommitTs)
-	})
+	return d.assembleDMLEventFromDecoded(keyMap, valueMap, valueSchema, isDelete, hasValue, deleteCommitTs)
 }
 
 func (d *decoder) decodeDMLPayload() (
@@ -174,33 +155,17 @@ func (d *decoder) decodeDMLPayload() (
 	isDelete = !hasValue
 	if !hasValue {
 		// Legacy delete event only has the key payload or a delete marker value.
-		// Reuse the last value schema to preserve the full column layout.
+		// Its full column layout is resolved from the shared TableInfoProvider.
 		if isDeleteValue {
 			deleteCommitTs = d.decodeDeleteCommitTs()
 		}
 		valueMap = keyMap
 		valueSchema = keySchema
-		schemaName, tableName := schemaAndTableName(keySchema)
-		if cached := d.valueSchemas[[2]string{schemaName, tableName}]; cached != nil {
-			valueSchema = cached
-			valueMap = maps.Clone(keyMap)
-			for _, field := range cached["fields"].([]any) {
-				name := field.(map[string]any)["name"].(string)
-				if isAvroExtensionField(name) {
-					break
-				}
-				if _, ok := valueMap[name]; !ok {
-					valueMap[name] = nil
-				}
-			}
-		}
 	} else {
 		valueMap, valueSchema, err = d.decodeValue(ctx)
 		if err != nil {
 			log.Panic("decode value failed", zap.Error(err))
 		}
-		schemaName, tableName := schemaAndTableName(valueSchema)
-		d.valueSchemas[[2]string{schemaName, tableName}] = valueSchema
 		if operation, ok := valueMap[tidbOp]; ok {
 			isDelete = operation == deleteOperation
 		}
@@ -292,7 +257,7 @@ func (d *decoder) decodeDeleteCommitTs() uint64 {
 // assembleEvent return a row changed event
 // keyMap hold primary key or unique key columns
 // valueMap holds all columns for insert/update and before-value delete.
-// Legacy deletes use key values with NULLs for non-key columns from the cached schema.
+// Legacy deletes pass key columns and resolve the full layout from TableInfoProvider.
 // schema is corresponding to the valueMap, it can be used to decode the valueMap to construct columns.
 func assembleEvent(
 	cache *common.TableInfoProvider, keyMap, valueMap, schema map[string]any,
@@ -356,7 +321,6 @@ func assembleEvent(
 		}
 		commitTs = o.(int64)
 	}
-
 	if !hasValue {
 		commitTs = int64(deleteCommitTs)
 	}

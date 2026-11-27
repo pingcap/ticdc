@@ -24,9 +24,9 @@ import (
 
 	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/phayes/freeport"
-	"github.com/pingcap/ticdc/cmd/util"
 	dmysql "github.com/pingcap/ticdc/downstreamadapter/sink/mysql"
 	"github.com/pingcap/ticdc/downstreamadapter/sink/statistics"
+	"github.com/pingcap/ticdc/pkg/applier/message"
 	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
@@ -176,12 +176,12 @@ func TestApplyRowSpill(t *testing.T) {
 	rows[0].Columns[0].Value = int64(99)
 
 	group := ap.eventsGroup[42]
-	limit := util.ResolveLimit{MaxMessages: 1, MaxBytes: 1}
+	limit := message.ResolveLimit{MaxMessages: 1, MaxBytes: 1}
 	batch, hasMore, err := group.PrepareResolve(120, limit)
 	require.NoError(t, err)
 	require.True(t, hasMore)
 	require.Len(t, batch.Messages, 1)
-	events := util.DMLMessagesToEvents(batch.Messages)
+	events := message.DMLMessagesToEvents(batch.Messages)
 	require.Len(t, events, 1)
 	row, ok := events[0].GetNextRow()
 	require.True(t, ok)
@@ -194,7 +194,7 @@ func TestApplyRowSpill(t *testing.T) {
 	require.NoError(t, err)
 	require.False(t, hasMore)
 	require.Len(t, batch.Messages, 2, "one transaction must remain intact despite batch limits")
-	events = util.DMLMessagesToEvents(batch.Messages)
+	events = message.DMLMessagesToEvents(batch.Messages)
 	require.Len(t, events, 1)
 	require.Equal(t, uint64(120), events[0].CommitTs)
 	require.Equal(t, uint64(115), events[0].StartTs)

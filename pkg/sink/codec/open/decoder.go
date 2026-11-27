@@ -56,15 +56,16 @@ type decoder struct {
 	upstreamTiDB *sql.DB
 }
 
-// NewDecoder creates a new decoder.
+// NewDecoder creates a new decoder, reusing externalStorage when provided.
 func NewDecoder(
-	ctx context.Context, config *common.Config, db *sql.DB,
+	ctx context.Context, config *common.Config, db *sql.DB, externalStorage ...storeapi.Storage,
 ) (common.EventDecoder, error) {
-	var (
-		storage storeapi.Storage
-		err     error
-	)
-	if config.LargeMessageHandle.EnableClaimCheck() {
+	var storage storeapi.Storage
+	if len(externalStorage) > 0 {
+		storage = externalStorage[0]
+	}
+	var err error
+	if storage == nil && config.LargeMessageHandle.EnableClaimCheck() {
 		storageURI := config.LargeMessageHandle.ClaimCheckStorageURI
 		storage, err = util.GetExternalStorageWithDefaultTimeout(ctx, storageURI)
 		if err != nil {
@@ -187,8 +188,8 @@ func (b *decoder) NextDDLEvent() *commonEvent.DDLEvent {
 	return result
 }
 
-// NextDMLMessage implements the Decoder interface
-func (b *decoder) NextDMLMessage() *common.DMLMessage {
+// NextDMLEvent implements the Decoder interface
+func (b *decoder) NextDMLEvent() *commonEvent.DMLEvent {
 	if b.nextKey.Type != common.MessageTypeRow {
 		log.Panic("message type is not row", zap.Any("messageType", b.nextKey.Type))
 	}
@@ -196,15 +197,7 @@ func (b *decoder) NextDMLMessage() *common.DMLMessage {
 	key := *b.nextKey
 	value := b.nextDMLValue()
 	b.nextKey = nil
-
-	rowType := commonType.RowTypeInsert
-	if key.ClaimCheckLocation == "" {
-		rowType = b.rowTypeFromDMLValue(value)
-	}
-	tableID := b.cache.AllocateTableID(key.Schema, key.Table)
-	return common.NewDMLMessage(tableID, key.Schema, key.Table, key.Ts, rowType, func() *commonEvent.DMLEvent {
-		return b.decodeDMLMessage(&key, value)
-	})
+	return b.decodeDMLMessage(&key, value)
 }
 
 func (b *decoder) nextDMLValue() []byte {
@@ -212,33 +205,6 @@ func (b *decoder) nextDMLValue() []byte {
 	value := b.valueBytes[8 : valueLen+8]
 	b.valueBytes = b.valueBytes[valueLen+8:]
 	return append([]byte(nil), value...)
-}
-
-func (b *decoder) rowTypeFromDMLValue(value []byte) commonType.RowType {
-	value, err := common.Decompress(b.config.LargeMessageHandle.LargeMessageHandleCompression, value)
-	if err != nil {
-		log.Panic("decompress failed",
-			zap.String("compression", b.config.LargeMessageHandle.LargeMessageHandleCompression),
-			zap.Any("value", util.RedactAny(value)), zap.Error(err))
-	}
-
-	nextRow := new(messageRow)
-	nextRow.decode(value)
-	return rowTypeFromMessageRow(nextRow)
-}
-
-func rowTypeFromMessageRow(row *messageRow) commonType.RowType {
-	if len(row.Delete) != 0 {
-		return commonType.RowTypeDelete
-	}
-	if len(row.Update) != 0 && len(row.PreColumns) != 0 {
-		return commonType.RowTypeUpdate
-	}
-	if len(row.Update) != 0 {
-		return commonType.RowTypeInsert
-	}
-	log.Panic("unknown event type")
-	return commonType.RowTypeInsert
 }
 
 func (b *decoder) decodeDMLMessage(key *messageKey, value []byte) *commonEvent.DMLEvent {
@@ -325,6 +291,24 @@ func (b *decoder) snapshotColumns(ctx context.Context, key *messageKey, ts uint6
 	return result
 }
 
+// A row at a DDL commit ts still reads the previous version: it is flushed
+// before that DDL.
+func isEnumOrSet(col *timodel.ColumnInfo) bool {
+	return col.GetType() == mysql.TypeEnum || col.GetType() == mysql.TypeSet
+}
+
+func projection(info *commonType.TableInfo) string {
+	names := make([]string, 0, len(info.GetColumns()))
+	for _, col := range info.GetColumns() {
+		name := commonType.QuoteName(col.Name.O)
+		if isEnumOrSet(col) {
+			name = "CAST(" + name + " AS UNSIGNED) AS " + name
+		}
+		names = append(names, name)
+	}
+	return strings.Join(names, ",")
+}
+
 func (b *decoder) assembleHandleKeyOnlyDMLEvent(ctx context.Context, key *messageKey, row *messageRow) *commonEvent.DMLEvent {
 	commitTs := key.Ts
 	conditions := make(map[string]interface{}, 1)
@@ -386,24 +370,6 @@ func (b *decoder) assembleEventFromClaimCheckStorage(ctx context.Context, key *m
 	rowMsg.decode(value)
 
 	return b.assembleDMLEvent(msgKey, rowMsg)
-}
-
-// A row at a DDL commit ts still reads the previous version: it is flushed
-// before that DDL.
-func isEnumOrSet(col *timodel.ColumnInfo) bool {
-	return col.GetType() == mysql.TypeEnum || col.GetType() == mysql.TypeSet
-}
-
-func projection(info *commonType.TableInfo) string {
-	names := make([]string, 0, len(info.GetColumns()))
-	for _, col := range info.GetColumns() {
-		name := commonType.QuoteName(col.Name.O)
-		if isEnumOrSet(col) {
-			name = "CAST(" + name + " AS UNSIGNED) AS " + name
-		}
-		names = append(names, name)
-	}
-	return strings.Join(names, ",")
 }
 
 // ShareTableInfo reads table info through the cache shared by all partitions.

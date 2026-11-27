@@ -108,7 +108,7 @@ func TestEncodeStartTsInSimpleJSON(t *testing.T) {
 	messageType, hasNext := dec.HasNext()
 	require.True(t, hasNext)
 	require.Equal(t, common.MessageTypeRow, messageType)
-	decoded := dec.NextDMLMessage().ToDMLEvent()
+	decoded := dec.NextDMLEvent()
 	require.Equal(t, testStartTs, decoded.GetStartTs())
 	require.Equal(t, testCommitTs, decoded.GetCommitTs())
 }
@@ -168,7 +168,7 @@ func TestDecodeStartTsFallbackToCommitTs(t *testing.T) {
 	dec.AddKeyValue(messages[0].Key, messages[0].Value)
 	_, hasNext := dec.HasNext()
 	require.True(t, hasNext)
-	decoded := dec.NextDMLMessage().ToDMLEvent()
+	decoded := dec.NextDMLEvent()
 	require.Equal(t, decoded.GetCommitTs(), decoded.GetStartTs())
 	require.Equal(t, testCommitTs, decoded.GetStartTs())
 	require.NotEqual(t, testStartTs, decoded.GetStartTs())
@@ -191,7 +191,7 @@ func TestDecodeZeroStartTsFallbackToCommitTs(t *testing.T) {
 	dec.AddKeyValue(messages[0].Key, messages[0].Value)
 	_, hasNext := dec.HasNext()
 	require.True(t, hasNext)
-	decoded := dec.NextDMLMessage().ToDMLEvent()
+	decoded := dec.NextDMLEvent()
 	require.Equal(t, testCommitTs, decoded.GetStartTs())
 }
 
@@ -217,7 +217,7 @@ func TestDecodeExplicitZeroStartTsFallbackToCommitTs(t *testing.T) {
 	dec.AddKeyValue(messages[0].Key, patched)
 	_, hasNext := dec.HasNext()
 	require.True(t, hasNext)
-	decoded := dec.NextDMLMessage().ToDMLEvent()
+	decoded := dec.NextDMLEvent()
 	require.Equal(t, testCommitTs, decoded.GetStartTs())
 }
 

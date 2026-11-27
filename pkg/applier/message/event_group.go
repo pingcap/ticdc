@@ -11,7 +11,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package util
+package message
 
 import (
 	"bytes"
@@ -128,7 +128,7 @@ type spillSegment struct {
 }
 
 type registeredRestorer struct {
-	decode func([]byte) ([]*codeccommon.DMLMessage, error)
+	decode func([]byte) ([]*DMLMessage, error)
 	refs   int64
 }
 
@@ -139,7 +139,7 @@ type payloadCacheKey struct {
 
 type payloadCacheEntry struct {
 	key      payloadCacheKey
-	messages []*codeccommon.DMLMessage
+	messages []*DMLMessage
 	bytes    int64
 	pins     int
 	element  *list.Element
@@ -287,7 +287,7 @@ type EventsGroup struct {
 	lastAppendedTs uint64
 	resolvedTs     uint64
 	appliedTs      uint64
-	postRestore    func(*codeccommon.DMLMessage, int64) *codeccommon.DMLMessage
+	postRestore    func(*DMLMessage, int64) *DMLMessage
 	HighWatermark  uint64
 
 	// indexCursor is the first logical key not acknowledged by the downstream.
@@ -324,7 +324,7 @@ func NewEventsGroup(partition int32, tableID int64, stores ...*SpillStore) *Even
 // must be applied after lazy decoding. Unlike the old per-input closure, this
 // hook does not grow with the backlog.
 func (g *EventsGroup) SetPostRestore(
-	restore func(*codeccommon.DMLMessage, int64) *codeccommon.DMLMessage,
+	restore func(*DMLMessage, int64) *DMLMessage,
 ) {
 	g.postRestore = restore
 }
@@ -427,7 +427,7 @@ func appendMessageData(file *spill.RecordFile, key, value []byte) (spill.Handle,
 	return file.AppendChunks(keyLen[:], key, valueLen[:], value)
 }
 
-func (s *SpillStore) acquirePayload(data *codeccommon.DMLMessageData) (payloadLocation, error) {
+func (s *SpillStore) acquirePayload(data *DMLMessageData) (payloadLocation, error) {
 	if segmentID, offset, length, ok := data.SpillLocation(s.id); ok {
 		if _, exists := s.segments[segmentID]; exists {
 			return payloadLocation{
@@ -804,7 +804,7 @@ func (s *SpillStore) Cleanup() error {
 // not call DMLMessage.ToDMLEvent; the restored message remains lazy until the
 // consumer flushes it against a watermark or DDL barrier.
 func (g *EventsGroup) AppendMessage(
-	message *codeccommon.DMLMessage,
+	message *DMLMessage,
 ) error {
 	if message == nil {
 		return errors.ErrSpillFileOp.FastGenByArgs("cannot spill nil DML message")
@@ -853,7 +853,7 @@ func (g *EventsGroup) AppendMessage(
 
 // ResolveBatch owns a prepared group prefix until the downstream confirms it.
 type ResolveBatch struct {
-	Messages      []*codeccommon.DMLMessage
+	Messages      []*DMLMessage
 	ResolvedBytes int64
 	group         *EventsGroup
 	entries       []spilledMessage
@@ -968,7 +968,7 @@ func (g *EventsGroup) PrepareResolve(
 		g.outOfOrder = false
 	}
 	batch := &ResolveBatch{
-		Messages: make([]*codeccommon.DMLMessage, 0, len(entries)),
+		Messages: make([]*DMLMessage, 0, len(entries)),
 		group:    g,
 		entries:  entries,
 	}
@@ -1072,8 +1072,8 @@ func (s *SpillStore) loadAndPinPayload(message spilledMessage) (*payloadCacheEnt
 
 // ResolveInto appends all messages with CommitTs <= resolve into dst in commit-ts order.
 func (g *EventsGroup) ResolveInto(
-	resolve uint64, dst []*codeccommon.DMLMessage,
-) ([]*codeccommon.DMLMessage, error) {
+	resolve uint64, dst []*DMLMessage,
+) ([]*DMLMessage, error) {
 	dst, _, _, err := g.ResolveIntoBatch(resolve, dst, ResolveLimit{})
 	return dst, err
 }
@@ -1081,8 +1081,8 @@ func (g *EventsGroup) ResolveInto(
 // ResolveIntoBatch appends one bounded batch of messages with CommitTs <= resolve into dst in commit-ts order.
 // A single commit-ts group can exceed the limits so that one transaction is never split.
 func (g *EventsGroup) ResolveIntoBatch(
-	resolve uint64, dst []*codeccommon.DMLMessage, limit ResolveLimit,
-) ([]*codeccommon.DMLMessage, bool, int64, error) {
+	resolve uint64, dst []*DMLMessage, limit ResolveLimit,
+) ([]*DMLMessage, bool, int64, error) {
 	batch, hasMore, err := g.PrepareResolve(resolve, limit)
 	if err != nil || batch == nil {
 		return dst, hasMore, 0, err
@@ -1138,11 +1138,6 @@ func (g *EventsGroup) ack(batch *ResolveBatch) error {
 	return nil
 }
 
-// GetAllMessages gets all messages.
-func (g *EventsGroup) GetAllMessages() ([]*codeccommon.DMLMessage, error) {
-	return g.ResolveInto(math.MaxUint64, nil)
-}
-
 // Cleanup removes pending spill records when the consumer is stopping.
 func (g *EventsGroup) Cleanup() error {
 	if g.batchPending {
@@ -1181,7 +1176,7 @@ func (g *EventsGroup) Cleanup() error {
 
 // DMLMessagesToEvents materializes messages and merges compatible adjacent
 // messages before they are handed to the downstream sink.
-func DMLMessagesToEvents(messages []*codeccommon.DMLMessage) []*commonEvent.DMLEvent {
+func DMLMessagesToEvents(messages []*DMLMessage) []*commonEvent.DMLEvent {
 	events := make([]*commonEvent.DMLEvent, 0, len(messages))
 	for _, message := range messages {
 		events = appendOrMergeDMLEvent(events, message.ToDMLEvent())
@@ -1222,21 +1217,14 @@ func appendOptionalDMLValues[T any](last, row []T, lastRowTypeCount, rowRowTypeC
 	return append(last, row...)
 }
 
-// NewDMLMessageData preserves one original codec input. The decoder is used
-// only during ResolveInto, after the DDL or watermark barrier selects schema.
-func NewDMLMessageData(decoder codeccommon.Decoder, key, value []byte) *codeccommon.DMLMessageData {
-	return NewDMLMessageDataWithDecoderFactory(key, value,
-		func([]byte, []byte) (codeccommon.Decoder, error) { return decoder, nil })
-}
-
 // NewDMLMessageDataWithDecoderFactory is for decoders such as CSV whose
 // input is supplied during construction rather than through AddKeyValue.
 func NewDMLMessageDataWithDecoderFactory(
 	key, value []byte,
 	decoderFactory func([]byte, []byte) (codeccommon.Decoder, error),
-) *codeccommon.DMLMessageData {
-	return codeccommon.NewDMLMessageData(key, value,
-		func(data []byte) ([]*codeccommon.DMLMessage, error) {
+) *DMLMessageData {
+	return NewDMLMessageDataWithRestorer(key, value, NewDMLMessageRestorer(
+		func(data []byte) ([]*DMLMessage, error) {
 			key, value, err := UnmarshalDMLMessageData(data)
 			if err != nil {
 				return nil, err
@@ -1246,14 +1234,14 @@ func NewDMLMessageDataWithDecoderFactory(
 				return nil, errors.WrapError(errors.ErrSpillFileOp, err, "create DML spill decoder")
 			}
 			return restoreDMLMessages(decoder, key, value)
-		})
+		}))
 }
 
 func restoreDMLMessages(
 	decoder codeccommon.Decoder, key, value []byte,
-) ([]*codeccommon.DMLMessage, error) {
+) ([]*DMLMessage, error) {
 	decoder.AddKeyValue(key, value)
-	messages := make([]*codeccommon.DMLMessage, 0, 1)
+	messages := make([]*DMLMessage, 0, 1)
 	for {
 		messageType, hasNext := decoder.HasNext()
 		if !hasNext {
@@ -1265,11 +1253,11 @@ func restoreDMLMessages(
 		if messageType != codeccommon.MessageTypeRow {
 			return nil, errors.ErrSpillFileOp.FastGenByArgs("DML spill payload contains a non-DML message")
 		}
-		message := decoder.NextDMLMessage()
-		if message == nil {
+		dml := decoder.NextDMLEvent()
+		if dml == nil {
 			return nil, errors.ErrSpillFileOp.FastGenByArgs("DML spill payload cannot be restored")
 		}
-		messages = append(messages, message)
+		messages = append(messages, NewDMLMessageFromEvent(dml))
 	}
 }
 

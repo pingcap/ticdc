@@ -89,15 +89,16 @@ type decoder struct {
 	cache        *common.TableInfoProvider
 }
 
-// NewDecoder returns a canal-json decoder.
+// NewDecoder returns a canal-json decoder, reusing externalStorage when provided.
 func NewDecoder(
-	ctx context.Context, codecConfig *common.Config, db *sql.DB,
+	ctx context.Context, codecConfig *common.Config, db *sql.DB, externalStorage ...storeapi.Storage,
 ) (common.EventDecoder, error) {
-	var (
-		storage storeapi.Storage
-		err     error
-	)
-	if codecConfig.LargeMessageHandle.EnableClaimCheck() {
+	var storage storeapi.Storage
+	if len(externalStorage) > 0 {
+		storage = externalStorage[0]
+	}
+	var err error
+	if storage == nil && codecConfig.LargeMessageHandle.EnableClaimCheck() {
 		storageURI := codecConfig.LargeMessageHandle.ClaimCheckStorageURI
 		storage, err = util.GetExternalStorageWithDefaultTimeout(ctx, storageURI)
 		if err != nil {
@@ -186,6 +187,7 @@ func (d *decoder) assembleClaimCheckDMLEvent(
 		log.Panic("unmarshal claim check message failed", zap.Any("value", util.RedactAny(value)), zap.Error(err))
 	}
 
+	d.msg = message
 	return d.decodeDMLMessage(message)
 }
 
@@ -289,9 +291,9 @@ func (d *decoder) assembleHandleKeyOnlyDMLEvent(
 	return d.canalJSONMessage2DMLEvent(result, false)
 }
 
-// NextDMLMessage implements the Decoder interface
+// NextDMLEvent implements the Decoder interface
 // `HasNext` should be called before this.
-func (d *decoder) NextDMLMessage() *common.DMLMessage {
+func (d *decoder) NextDMLEvent() *commonEvent.DMLEvent {
 	if d.msg == nil || d.msg.messageType() != common.MessageTypeRow {
 		messageType := common.MessageTypeUnknown
 		if d.msg != nil {
@@ -301,27 +303,7 @@ func (d *decoder) NextDMLMessage() *common.DMLMessage {
 			zap.Any("messageType", messageType), zap.Any("msg", d.msg))
 	}
 
-	msg := d.msg
-	schemaName := *msg.getSchema()
-	tableName := *msg.getTable()
-	tableID := d.cache.AllocateTableID(schemaName, tableName)
-	d.cache.AddBlockTableID(schemaName, tableName, tableID)
-
-	var rowType commonType.RowType
-	switch msg.eventType() {
-	case canal.EventType_DELETE:
-		rowType = commonType.RowTypeDelete
-	case canal.EventType_INSERT:
-		rowType = commonType.RowTypeInsert
-	case canal.EventType_UPDATE:
-		rowType = commonType.RowTypeUpdate
-	default:
-		log.Panic("unknown event type for the DML event", zap.Any("eventType", msg.eventType()))
-	}
-
-	return common.NewDMLMessage(tableID, schemaName, tableName, msg.getCommitTs(), rowType, func() *commonEvent.DMLEvent {
-		return d.decodeDMLMessage(msg)
-	})
+	return d.decodeDMLMessage(d.msg)
 }
 
 func (d *decoder) decodeDMLMessage(msg canalJSONMessageInterface) *commonEvent.DMLEvent {
@@ -400,6 +382,8 @@ func (d *decoder) NextDDLEvent() *commonEvent.DDLEvent {
 	d.cache.AddBlockTableID(result.SchemaName, result.TableName, d.cache.AllocateTableID(result.SchemaName, result.TableName))
 
 	result.BlockedTables = common.GetBlockedTables(d.cache, result)
+	// Rows after this DDL carry its commit ts, so they read the new table info;
+	// rows buffered before it keep reading the cached older version.
 	d.cache.RecordDDL(result)
 	return result
 }
