@@ -39,6 +39,7 @@ func NewScheduleController(changefeedID common.ChangeFeedID,
 	drainState *scheduler.DrainState,
 	balanceMoveBatchSize int,
 ) *pkgscheduler.Controller {
+	trafficBalance := scheduler.NewTrafficBalanceState(balanceInterval)
 	schedulers := map[string]pkgscheduler.Scheduler{
 		pkgscheduler.BasicScheduler: scheduler.NewBasicScheduler(
 			changefeedID,
@@ -66,6 +67,7 @@ func NewScheduleController(changefeedID common.ChangeFeedID,
 			common.DefaultMode,
 			drainState,
 			balanceMoveBatchSize,
+			trafficBalance,
 		),
 	}
 	if splitter != nil {
@@ -106,6 +108,7 @@ func NewScheduleController(changefeedID common.ChangeFeedID,
 			common.RedoMode,
 			drainState,
 			balanceMoveBatchSize,
+			trafficBalance,
 		)
 		if splitter != nil {
 			schedulers[pkgscheduler.RedoBalanceSplitScheduler] = scheduler.NewBalanceSplitsScheduler(

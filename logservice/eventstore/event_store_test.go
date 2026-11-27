@@ -35,6 +35,7 @@ import (
 	cerrors "github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/pdutil"
+	"github.com/pingcap/ticdc/pkg/scheduler/resource"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/require"
@@ -152,7 +153,7 @@ func newEventStoreForTest(path string) (logpuller.SubscriptionClient, EventStore
 	mc := messaging.NewMockMessageCenter()
 	appcontext.SetService(appcontext.MessageCenter, mc)
 	subClient := NewMockSubscriptionClient()
-	store := New(path, subClient)
+	store := New(path, subClient, resource.NewNodeStats())
 	return subClient, store
 }
 
@@ -1658,6 +1659,11 @@ func TestEventStoreCompressionAndIterDecodeBufferReuse(t *testing.T) {
 	}}
 
 	beforeMetric := testutil.ToFloat64(eventStoreCompressedRowsCount)
+	sampleTime := time.Now()
+	beforeLoad, valid := resource.Counters(store.nodeStats.Snapshot(sampleTime))
+	require.True(t, valid)
+	beforeWrite := beforeLoad[resource.EventStoreWrite]
+	beforeWriteMetric := testutil.ToFloat64(eventStoreWriteBytes)
 
 	encoder, err := zstd.NewWriter(nil)
 	require.NoError(t, err)
@@ -1668,11 +1674,19 @@ func TestEventStoreCompressionAndIterDecodeBufferReuse(t *testing.T) {
 	require.NoError(t, err)
 	afterMetric := testutil.ToFloat64(eventStoreCompressedRowsCount)
 	require.InDelta(t, float64(len(expectedValues)), afterMetric-beforeMetric, 1e-9)
+	require.Equal(t, uint64(testutil.ToFloat64(eventStoreWriteBytes)-beforeWriteMetric), eventStoreLoad(t, store.nodeStats, sampleTime.Add(resource.SampleInterval), resource.EventStoreWrite)-beforeWrite)
 
 	innerIter, err := store.dbs[0].NewIter(&pebble.IterOptions{})
 	require.NoError(t, err)
+	var encodedBytes uint64
+	for innerIter.First(); innerIter.Valid(); innerIter.Next() {
+		encodedBytes += uint64(len(innerIter.Key()) + len(innerIter.Value()))
+	}
+	sampleTime = sampleTime.Add(2 * resource.SampleInterval)
+	beforeRead := eventStoreLoad(t, store.nodeStats, sampleTime, resource.EventStoreRead)
 	decoder := store.decoderPool.Get().(*zstd.Decoder)
 	iter := &eventStoreIter{
+		readLoad: store.readLoad.Recorder(),
 		tableSpan: &heartbeatpb.TableSpan{
 			TableID:  1,
 			StartKey: []byte{},
@@ -1684,6 +1698,7 @@ func TestEventStoreCompressionAndIterDecodeBufferReuse(t *testing.T) {
 		decoderPool:   store.decoderPool,
 	}
 	require.True(t, iter.innerIter.First())
+	firstReadBytes := uint64(len(iter.innerIter.Key()) + len(iter.innerIter.Value()))
 
 	type readRecord struct {
 		entry    *common.RawKVEntry
@@ -1694,6 +1709,11 @@ func TestEventStoreCompressionAndIterDecodeBufferReuse(t *testing.T) {
 		raw, ok := iter.Next()
 		if !ok {
 			break
+		}
+		if len(records) == 0 {
+			require.Equal(t, firstReadBytes,
+				eventStoreLoad(t, store.nodeStats, sampleTime.Add(resource.SampleInterval), resource.EventStoreRead)-beforeRead,
+				"a returned row must be visible without waiting for iterator close")
 		}
 		for key, rec := range records {
 			require.Equal(t, rec.expected, rec.entry.Value, "value mutated for %s", key)
@@ -1708,9 +1728,95 @@ func TestEventStoreCompressionAndIterDecodeBufferReuse(t *testing.T) {
 		}
 	}
 	require.Len(t, records, len(expectedValues))
+	require.Equal(t, encodedBytes, eventStoreLoad(t, store.nodeStats, sampleTime.Add(2*resource.SampleInterval), resource.EventStoreRead)-beforeRead, "read load must use compressed stored bytes")
 	rowCount, err := iter.Close()
 	require.NoError(t, err)
 	require.Equal(t, int64(len(expectedValues)), rowCount)
+
+	// A shared subscription can scan rows outside the dispatcher's span.
+	// That work still contributes to EventStore read load.
+	iter.innerIter, err = store.dbs[0].NewIter(&pebble.IterOptions{})
+	require.NoError(t, err)
+	iter.decoder = store.decoderPool.Get().(*zstd.Decoder)
+	iter.needCheckSpan = true
+	iter.tableSpan.StartKey, iter.tableSpan.EndKey = []byte{0xFF}, []byte{0xFF, 0xFF}
+	require.True(t, iter.innerIter.First())
+	sampleTime = sampleTime.Add(3 * resource.SampleInterval)
+	beforeRead = eventStoreLoad(t, store.nodeStats, sampleTime, resource.EventStoreRead)
+	entry, _ := iter.Next()
+	require.Nil(t, entry)
+	require.Equal(t, encodedBytes, eventStoreLoad(t, store.nodeStats, sampleTime.Add(resource.SampleInterval), resource.EventStoreRead)-beforeRead)
+	_, err = iter.Close()
+	require.NoError(t, err)
+}
+
+func TestEventStoreReadLoadBatchAndClose(t *testing.T) {
+	stats := resource.NewNodeStats()
+	counter := stats.NewCounter(resource.EventStoreRead)
+	iter := &eventStoreIter{readLoad: counter.Recorder(), tableSpan: &heartbeatpb.TableSpan{}}
+	now := time.Now()
+	for range 63 {
+		iter.recordReadLoad(1024)
+	}
+	require.Zero(t, eventStoreLoad(t, stats, now, resource.EventStoreRead))
+	iter.recordReadLoad(1024)
+	now = now.Add(resource.SampleInterval)
+	require.Equal(t, uint64(64<<10), eventStoreLoad(t, stats, now, resource.EventStoreRead))
+	iter.recordReadLoad(123)
+	_, err := iter.Close()
+	require.NoError(t, err)
+	_, err = iter.Close()
+	require.NoError(t, err)
+	counter.Close()
+	now = now.Add(resource.SampleInterval)
+	require.Equal(t, uint64(64<<10)+123, eventStoreLoad(t, stats, now, resource.EventStoreRead))
+}
+
+func TestEventStoreFailedWriteDoesNotRecordLoad(t *testing.T) {
+	dir := t.TempDir()
+	db, err := pebble.Open(dir, &pebble.Options{})
+	require.NoError(t, err)
+	require.NoError(t, db.Close())
+	db, err = pebble.Open(dir, &pebble.Options{ReadOnly: true})
+	require.NoError(t, err)
+	defer db.Close()
+	encoder, err := zstd.NewWriter(nil)
+	require.NoError(t, err)
+	defer encoder.Close()
+	stats := resource.NewNodeStats()
+	store := &eventStore{writeLoad: stats.NewCounter(resource.EventStoreWrite)}
+	err = store.writeEvents(db, []eventWithCallback{{subID: 1, tableID: 1, kvs: []common.RawKVEntry{
+		{OpType: common.OpTypePut, StartTs: 1, CRTs: 2, Key: []byte("key"), Value: []byte("value")},
+	}}}, encoder, nil, nil)
+	require.ErrorIs(t, err, pebble.ErrReadOnly)
+	require.Zero(t, eventStoreLoad(t, stats, time.Now(), resource.EventStoreWrite))
+}
+
+func TestEventStoreLargeBatchWriteLoad(t *testing.T) {
+	// A small memtable exercises Pebble's flushable-batch path without a
+	// production-sized allocation. Commit transfers ownership of batch data.
+	db, err := pebble.Open(t.TempDir(), &pebble.Options{MemTableSize: 64 << 10})
+	require.NoError(t, err)
+	defer db.Close()
+	entry := common.RawKVEntry{
+		OpType: common.OpTypePut, StartTs: 1, CRTs: 2,
+		Key: []byte("k"), Value: bytes.Repeat([]byte("v"), 40<<10),
+	}
+	batch := db.NewBatch()
+	require.NoError(t, batch.Set(EncodeKey(1, 1, &entry, CompressionNone), entry.Encode(), pebble.NoSync))
+	expectedBytes := uint64(batch.Len())
+	require.Greater(t, expectedBytes, uint64(40<<10))
+	require.NoError(t, batch.Close())
+
+	encoder, err := zstd.NewWriter(nil)
+	require.NoError(t, err)
+	defer encoder.Close()
+	stats := resource.NewNodeStats()
+	store := &eventStore{writeLoad: stats.NewCounter(resource.EventStoreWrite)}
+	require.NoError(t, store.writeEvents(db, []eventWithCallback{{
+		subID: 1, tableID: 1, kvs: []common.RawKVEntry{entry},
+	}}, encoder, nil, nil))
+	require.Equal(t, expectedBytes, eventStoreLoad(t, stats, time.Now(), resource.EventStoreWrite))
 }
 
 func TestEventStoreKVEntryCount(t *testing.T) {
@@ -1786,6 +1892,7 @@ func TestEventStoreIterReadsLegacyCompressedValuesWithEncryptionManager(t *testi
 	require.NoError(t, err)
 	decoder := store.decoderPool.Get().(*zstd.Decoder)
 	iter := &eventStoreIter{
+		readLoad: store.readLoad.Recorder(),
 		tableSpan: &heartbeatpb.TableSpan{
 			TableID:  1,
 			StartKey: []byte{},
@@ -2165,4 +2272,11 @@ func TestEventStoreIter_NextWithFiltering(t *testing.T) {
 		require.NoError(t, db.Close())
 		require.NoError(t, os.RemoveAll(dir))
 	}
+}
+
+func eventStoreLoad(t *testing.T, stats *resource.NodeStats, now time.Time, kind resource.Type) uint64 {
+	t.Helper()
+	counters, valid := resource.Counters(stats.Snapshot(now))
+	require.True(t, valid)
+	return counters[kind]
 }

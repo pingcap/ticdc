@@ -42,6 +42,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/ticdc/pkg/pdutil"
+	"github.com/pingcap/ticdc/pkg/scheduler/resource"
 	"github.com/pingcap/ticdc/pkg/security"
 	tiserver "github.com/pingcap/ticdc/pkg/server"
 	"github.com/pingcap/ticdc/pkg/tcpserver"
@@ -215,7 +216,8 @@ func (c *server) initialize(ctx context.Context) error {
 		txnutil.NewLockerResolver(),
 		c.security,
 	)
-	eventStore := eventstore.New(conf.DataDir, subscriptionClient)
+	eventStore := eventstore.New(conf.DataDir, subscriptionClient,
+		appctx.GetService[*resource.NodeStats](appctx.NodeResourceStats))
 	eventService := eventservice.New(eventStore, schemaStore, &c.liveness)
 	c.upstreamManager = upstream.NewManager(ctx, upstream.NodeTopologyCfg{
 		Info:        c.info,
@@ -262,6 +264,7 @@ func (c *server) initialize(ctx context.Context) error {
 func (c *server) setPreServices(ctx context.Context) error {
 	// Set ID to Global Context
 	appctx.SetID(c.info.ID.String())
+	appctx.SetService(appctx.NodeResourceStats, resource.NewNodeStats())
 
 	c.writeGate = writelease.NewGate()
 	appctx.SetService(appctx.CaptureWriteGate, c.writeGate)

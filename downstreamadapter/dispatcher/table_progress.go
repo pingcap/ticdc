@@ -20,6 +20,7 @@ import (
 
 	"github.com/pingcap/log"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
+	"github.com/pingcap/ticdc/pkg/scheduler/resource"
 	"go.uber.org/zap"
 )
 
@@ -44,6 +45,7 @@ type TableProgress struct {
 	// cumulate dml event size for a period of time,
 	// it will be cleared after once query
 	cumulateEventSize int64
+	sinkLoad          *resource.Recorder
 	// it used to calculate the sum-dml-event-size/s for each dispatcher
 	lastQueryTime time.Time
 }
@@ -132,6 +134,9 @@ func (p *TableProgress) remove(ts Ts, size int64) {
 		}
 	}
 	p.cumulateEventSize += size
+	if size > 0 {
+		p.sinkLoad.Add(uint64(size))
+	}
 }
 
 // Empty checks if the TableProgress is empty.
@@ -199,8 +204,8 @@ func (p *TableProgress) GetEventSizePerSecond() float32 {
 	p.lastQueryTime = time.Now()
 
 	if eventSizePerSecond == 0 {
-		// The event size will only send to maintainer once per second.
-		// So if no data is write, we use a tiny value instead of 0 to distinguish it from the status without eventSize
+		// Use a tiny value for idle dispatchers to distinguish a complete traffic
+		// sample from a status-only heartbeat without eventSize.
 		return 1
 	}
 

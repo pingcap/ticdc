@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/pingcap/failpoint"
+	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/maintainer/operator"
 	"github.com/pingcap/ticdc/maintainer/replica"
 	"github.com/pingcap/ticdc/maintainer/span"
@@ -34,7 +35,7 @@ import (
 
 // balanceScheduler mainly focus on two types of operations:
 // 1. Split operations: splits the one large span for the whole table into smaller ones.
-// 2. Move operations: distributes spans across nodes for balance the span count in each node.
+// 2. Move operations: balances node traffic and span counts without splitting tables.
 type balanceScheduler struct {
 	changefeedID common.ChangeFeedID
 	batchSize    int
@@ -52,6 +53,7 @@ type balanceScheduler struct {
 	drainState *DrainState
 
 	drainBalanceBlockedUntil time.Time
+	trafficBalance           *TrafficBalanceState
 }
 
 func NewBalanceScheduler(
@@ -63,7 +65,11 @@ func NewBalanceScheduler(
 	mode int64,
 	drainState *DrainState,
 	moveBatchSize int,
+	trafficBalance *TrafficBalanceState,
 ) *balanceScheduler {
+	if trafficBalance == nil {
+		trafficBalance = NewTrafficBalanceState(checkBalanceInterval)
+	}
 	return &balanceScheduler{
 		changefeedID:         changefeedID,
 		batchSize:            moveBatchSize,
@@ -75,12 +81,18 @@ func NewBalanceScheduler(
 		checkBalanceInterval: checkBalanceInterval,
 		mode:                 mode,
 		drainState:           drainState,
+		trafficBalance:       trafficBalance,
 	}
 }
 
 func (s *balanceScheduler) Execute() time.Time {
 	now := time.Now()
 	nextCheckTime := now.Add(s.checkBalanceInterval)
+	if s.spanController.NodeLoadTracker() != nil && s.checkBalanceInterval > 0 {
+		// Independent maintainers should not repeatedly act on the same sample
+		// at the same time after bootstrap or a cluster-wide workload change.
+		nextCheckTime = nextCheckTime.Add(time.Duration(s.random.Int63n(int64(s.checkBalanceInterval/2) + 1)))
+	}
 	failpoint.Inject("StopBalanceScheduler", func() {
 		failpoint.Return(nextCheckTime)
 	})
@@ -90,13 +102,11 @@ func (s *balanceScheduler) Execute() time.Time {
 		// and keep a cooldown window after drain completion to avoid churn.
 		return nextCheckTime
 	}
-
 	// TODO: consider to ignore split tables' dispatcher basic schedule operator to decide whether we can make balance schedule
 	if s.operatorController.OperatorSize() > 0 || s.spanController.GetAbsentSize() > 0 {
 		// not in stable schedule state, skip balance
 		return nextCheckTime
 	}
-
 	// 1. check whether we have spans in defaultGroupID need to be splitted.
 	//    we only consider the not splitted span here.
 	checkResults := s.spanController.CheckByGroup(pkgReplica.DefaultGroupID, s.batchSize)
@@ -126,19 +136,106 @@ func (s *balanceScheduler) schedulerDefaultGroup(
 	maxSize int,
 	state drainStateSnapshot,
 ) int {
+	now := time.Now()
+	if maxSize <= 0 || !s.trafficBalance.ready(now) {
+		return 0
+	}
 	nodes := s.nodeManager.GetAliveNodes()
 	nodes = filterAliveNodesByDrainTarget(nodes, state)
-	if len(nodes) == 0 {
+	if len(nodes) < 2 {
 		return 0
 	}
 	group := pkgreplica.DefaultGroupID
-	// fast path, check the balance status
+	loads, status := s.spanController.NodeLoadTracker().Snapshot(nodes, now)
+	if status == heartbeatpb.NodeLoadStatus_LOAD_INCOMPLETE {
+		return 0
+	}
 	moveSize := pkgScheduler.CheckBalanceStatus(s.spanController.GetTaskSizePerNodeByGroup(group), nodes)
-	if moveSize <= 0 {
+	var loadView *resourceLoadView
+	overloaded := false
+	if status == heartbeatpb.NodeLoadStatus_LOAD_AVAILABLE {
+		loadView = newResourceLoadView(loads, nodes)
+		for id := range nodes {
+			if loadView.sinkOverloaded(id) {
+				overloaded = true
+				break
+			}
+		}
+	}
+	if moveSize <= 0 && !overloaded {
+		// The common balanced or idle case must not scan every dispatcher.
 		return 0
 	}
 	replicas := s.spanController.GetReplicatingByGroup(group)
-	return pkgScheduler.Balance(maxSize, s.random, nodes, replicas, s.doMove)
+	if status == heartbeatpb.NodeLoadStatus_LOAD_AVAILABLE {
+		// Project only this maintainer's accepted moves. Other maintainers keep
+		// using the coordinator snapshot until the next node sample arrives.
+		if overloaded && s.balanceTraffic(nodes, replicas, loadView, now) {
+			s.trafficBalance.pending = s.operatorController
+			return 1
+		}
+	}
+	// fast path, check the balance status
+	if moveSize <= 0 {
+		return 0
+	}
+	return pkgScheduler.Balance(maxSize, s.random, nodes, replicas, func(r *replica.SpanReplication, target node.ID) bool {
+		if status == heartbeatpb.NodeLoadStatus_LOAD_AVAILABLE {
+			source := r.GetNodeID()
+			rate := r.TrafficRate(now)
+			if rate == 0 {
+				return false
+			}
+			if rate == 1 {
+				rate = 0 // The idle sentinel contributes no actual traffic.
+			}
+			if !loadView.canMove(source, target, rate) {
+				return false
+			}
+			if !s.doMove(r, target) {
+				return false
+			}
+			loadView.project(source, target, rate)
+			return true
+		}
+		return s.doMove(r, target)
+	})
+}
+
+func (s *balanceScheduler) balanceTraffic(
+	nodes map[node.ID]*node.Info,
+	replicas []*replica.SpanReplication,
+	loads *resourceLoadView,
+	now time.Time,
+) bool {
+	// Randomize both dispatcher and destination choice so independent
+	// maintainers can spread their moves across eligible idle nodes.
+	s.random.Shuffle(len(replicas), func(i, j int) { replicas[i], replicas[j] = replicas[j], replicas[i] })
+	for _, r := range replicas {
+		source := r.GetNodeID()
+		if _, alive := nodes[source]; !alive || !r.IsWorking() || !loads.sinkOverloaded(source) {
+			continue
+		}
+		rate := r.TrafficRate(now)
+		if rate <= 1 {
+			continue
+		}
+		var target node.ID
+		candidates := 0
+		for id := range nodes {
+			if id == source || !loads.sinkUnderloaded(id) || !loads.canMove(source, id, rate) {
+				continue
+			}
+			candidates++
+			if s.random.Intn(candidates) == 0 {
+				target = id
+			}
+		}
+		if candidates > 0 && s.doMove(r, target) {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *balanceScheduler) doSplit(results pkgReplica.GroupCheckResult) int {

@@ -280,6 +280,7 @@ func NewBasicDispatcher(
 	if dispatcher.IsTableTriggerDispatcher() {
 		dispatcher.addTableCheckpointBlocker = newCheckpointBlocker()
 	}
+	dispatcher.tableProgress.sinkLoad = sharedInfo.SinkLoad.Recorder()
 	dispatcher.resolvedTs.Store(startTs)
 
 	return dispatcher

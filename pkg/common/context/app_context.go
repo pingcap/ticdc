@@ -40,6 +40,7 @@ const (
 	RegionCache             = "RegionCache"
 	KeyspaceManager         = "keyspaceManager"
 	CaptureWriteGate        = "CaptureWriteGate"
+	NodeResourceStats       = "NodeResourceStats"
 )
 
 // Put all the global instances here.

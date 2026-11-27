@@ -47,6 +47,8 @@ func TestNodeHeartbeatResponseRemoteRoundTrip(t *testing.T) {
 		TargetNodeEpoch:    11,
 		RequestSeq:         12,
 		LeaseDurationMs:    5000,
+		NodeLoads:          []*heartbeatpb.NodeLoad{{NodeId: "capture", BytesPerSecond: 1234.5}},
+		NodeLoadStatus:     heartbeatpb.NodeLoadStatus_LOAD_AVAILABLE,
 	}
 	require.NoError(t, sender.SendCommand(
 		NewSingleTargetMessage(receiver.id, MaintainerManagerTopic, response),
@@ -69,6 +71,8 @@ func TestNodeHeartbeatResponseIOTypeRoundTrip(t *testing.T) {
 		TargetNodeEpoch:    11,
 		RequestSeq:         12,
 		LeaseDurationMs:    5000,
+		NodeLoads:          []*heartbeatpb.NodeLoad{{NodeId: "capture", BytesPerSecond: 1234.5}},
+		NodeLoadStatus:     heartbeatpb.NodeLoadStatus_LOAD_AVAILABLE,
 		WitnessChallenge: &heartbeatpb.WriteLeaseWitnessChallenge{
 			CoordinatorVersion:   10,
 			CoordinatorNodeEpoch: 11,
@@ -85,6 +89,16 @@ func TestNodeHeartbeatResponseIOTypeRoundTrip(t *testing.T) {
 	decoded, err := decodeIOType(TypeNodeHeartbeatResponse, data)
 	require.NoError(t, err)
 	require.Equal(t, response, decoded)
+
+	heartbeat := &heartbeatpb.NodeHeartbeat{
+		NodeEpoch: 11,
+		NodeLoad:  &heartbeatpb.NodeLoad{FlushedEventBytes: 12345},
+	}
+	data, err = heartbeat.Marshal()
+	require.NoError(t, err)
+	decoded, err = decodeIOType(TypeNodeHeartbeatRequest, data)
+	require.NoError(t, err)
+	require.Equal(t, heartbeat, decoded)
 }
 
 func TestEventBrokerDispatcherCountIOTypeRoundTrip(t *testing.T) {

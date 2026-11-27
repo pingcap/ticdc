@@ -82,6 +82,8 @@ type Controller struct {
 	enableSplittableCheck  bool
 
 	keyspaceID uint32
+	// nodeLoadTracker is shared by local maintainers and set before scheduling starts.
+	nodeLoadTracker *replica.NodeLoadTracker
 
 	// maintainerCommittedCheckpointTs is the controller owned monotonic scheduling baseline.
 	// Any created dispatcher in this mode must start from at least this checkpoint.
@@ -126,6 +128,15 @@ func (c *Controller) doWithRLock(action func()) {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	action()
+}
+
+// SetNodeLoadTracker wires the shared view before this controller is started.
+func (c *Controller) SetNodeLoadTracker(tracker *replica.NodeLoadTracker) {
+	c.nodeLoadTracker = tracker
+}
+
+func (c *Controller) NodeLoadTracker() *replica.NodeLoadTracker {
+	return c.nodeLoadTracker
 }
 
 // ShouldEnableSplit returns whether split is allowed for a table given its splittable flag and controller config.

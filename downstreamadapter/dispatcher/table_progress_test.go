@@ -15,10 +15,14 @@ package dispatcher
 
 import (
 	"testing"
+	"time"
 
+	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
+	"github.com/pingcap/ticdc/pkg/scheduler/resource"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestTableProgress(t *testing.T) {
@@ -193,4 +197,43 @@ func TestMultiSameCommitTsStartTsPair(t *testing.T) {
 	assert.Equal(t, uint64(3), checkpointTs)
 	assert.True(t, isEmpty)
 	assert.Equal(t, 0, tp.Len())
+}
+
+func TestResourceCountersPreserveDispatcherSamples(t *testing.T) {
+	stats := resource.NewNodeStats()
+	counter := stats.NewCounter(resource.Sink)
+	now := time.Now()
+	a, b := NewTableProgress(), NewTableProgress()
+	a.sinkLoad, b.sinkLoad = counter.Recorder(), counter.Recorder()
+	first := &commonEvent.DMLEvent{StartTs: 1, CommitTs: 2, ApproximateSize: 100}
+	second := &commonEvent.DMLEvent{StartTs: 1, CommitTs: 3, ApproximateSize: 200}
+	a.Add(first)
+	b.Add(second)
+	require.Zero(t, stats.Snapshot(now).FlushedEventBytes)
+	first.PostFlush()
+	second.PostFlush()
+	require.Equal(t, uint64(300), stats.Snapshot(now.Add(resource.SampleInterval)).FlushedEventBytes)
+	// Node-level reads never consume the per-dispatcher traffic samples.
+	a.lastQueryTime = time.Now().Add(-time.Second)
+	b.lastQueryTime = a.lastQueryTime
+	require.InDelta(t, float64(100), a.GetEventSizePerSecond(), 1)
+	require.InDelta(t, float64(200), b.GetEventSizePerSecond(), 1)
+	require.Equal(t, uint64(300), stats.Snapshot(now.Add(resource.SampleInterval)).FlushedEventBytes)
+}
+
+func TestDispatcherModesShareComponentResourceCounter(t *testing.T) {
+	stats := resource.NewNodeStats()
+	shared := newTestSharedInfo(false, false, nil)
+	defer shared.Close()
+	shared.SinkLoad = stats.NewCounter(resource.Sink)
+	testSink := newDispatcherTestSink(t, common.KafkaSinkType)
+	for _, mode := range []int64{common.DefaultMode, common.RedoMode} {
+		d := NewBasicDispatcher(common.NewDispatcherID(), &heartbeatpb.TableSpan{TableID: 1},
+			0, 0, NewSchemaIDToDispatchers(), false, false, 0, 0, 0, mode, testSink.Sink(), shared)
+		event := &commonEvent.DMLEvent{StartTs: 1, CommitTs: 2, ApproximateSize: 100}
+		d.tableProgress.Add(event)
+		event.PostFlush()
+	}
+	shared.SinkLoad.Close()
+	require.Equal(t, uint64(200), stats.Snapshot(time.Now()).FlushedEventBytes)
 }

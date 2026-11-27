@@ -40,6 +40,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/ticdc/pkg/pdutil"
+	"github.com/pingcap/ticdc/pkg/scheduler/resource"
 	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/ticdc/utils/chann"
 	"github.com/pingcap/ticdc/utils/heap"
@@ -246,6 +247,9 @@ type eventStore struct {
 	tableCache     *pebble.TableCache
 	chs            []*chann.UnlimitedChannel[eventWithCallback, uint64]
 	writeTaskPools []*writeTaskPool
+	writeLoad      *resource.Counter
+	readLoad       *resource.Counter
+	nodeStats      *resource.NodeStats
 
 	gcManager *gcManager
 
@@ -291,6 +295,7 @@ const (
 func New(
 	root string,
 	subClient logpuller.SubscriptionClient,
+	nodeStats *resource.NodeStats,
 ) EventStore {
 	dbPath := fmt.Sprintf("%s/%s", root, dataDir)
 
@@ -306,6 +311,9 @@ func New(
 	store := &eventStore{
 		pdClock:   appcontext.GetService[pdutil.Clock](appcontext.DefaultPDClock),
 		subClient: subClient,
+		writeLoad: nodeStats.NewCounter(resource.EventStoreWrite),
+		readLoad:  nodeStats.NewCounter(resource.EventStoreRead),
+		nodeStats: nodeStats,
 
 		dbs:            dbs,
 		pebbleCache:    pebbleCache,
@@ -366,6 +374,7 @@ func (p *writeTaskPool) run(ctx context.Context) {
 	for i := 0; i < p.workerNum; i++ {
 		go func(workerID int) {
 			defer p.store.wg.Done()
+			writeLoad := p.store.writeLoad.Recorder()
 			var compressionBuf []byte
 			var rawValueBuf []byte
 			encodeOpt := zstd.WithEncoderLevel(zstd.SpeedFastest)
@@ -393,7 +402,7 @@ func (p *writeTaskPool) run(ctx context.Context) {
 						queueDuration.Observe(float64(time.Now().UnixNano()-events[0].enqueueTimeNano) / float64(time.Second))
 					}
 					start := time.Now()
-					if err = p.store.writeEvents(p.db, events, encoder, &compressionBuf, &rawValueBuf); err != nil {
+					if err = p.store.writeEvents(p.db, events, encoder, &compressionBuf, &rawValueBuf, writeLoad); err != nil {
 						log.Panic("write events failed", zap.Error(err))
 					}
 					ioWriteDuration.Observe(time.Since(start).Seconds())
@@ -464,6 +473,8 @@ func (e *eventStore) Close(_ context.Context) error {
 	defer log.Info("event store closed")
 
 	e.closed.Store(true)
+	defer e.writeLoad.Close()
+	defer e.readLoad.Close()
 
 	for _, db := range e.dbs {
 		if err := db.Close(); err != nil {
@@ -1015,6 +1026,7 @@ func (e *eventStore) GetIterator(dispatcherID common.DispatcherID, request ScanR
 	needCheckSpan := !stat.tableSpan.Equal(subStat.tableSpan)
 
 	return &eventStoreIter{
+		readLoad:          e.readLoad.Recorder(),
 		dispatcherID:      dispatcherID,
 		tableSpan:         stat.tableSpan,
 		needCheckSpan:     needCheckSpan,
@@ -1395,6 +1407,7 @@ func (e *eventStore) writeEvents(
 	encoder *zstd.Encoder,
 	compressionBuf *[]byte,
 	rawValueBuf *[]byte,
+	writeLoad ...*resource.Recorder,
 ) error {
 	eventStoreWriteRequestsCount.Inc()
 	prepareStart := time.Now()
@@ -1516,15 +1529,26 @@ func (e *eventStore) writeEvents(
 	insertKVEntryCount.Add(float64(insertCount))
 	updateKVEntryCount.Add(float64(updateCount))
 	deleteKVEntryCount.Add(float64(deleteCount))
+	// A large Pebble commit transfers ownership and clears the batch data.
+	batchBytes := batch.Len()
 	eventStoreWriteBatchEventsCountHist.Observe(float64(kvCount))
-	eventStoreWriteBatchSizeHist.Observe(float64(batch.Len()))
-	eventStoreWriteBytes.Add(float64(batch.Len()))
+	eventStoreWriteBatchSizeHist.Observe(float64(batchBytes))
+	eventStoreWriteBytes.Add(float64(batchBytes))
 	if totalValueBytesAfter > 0 {
 		eventStoreCompressionRatioHistogram.Observe(float64(totalValueBytesBefore) / float64(totalValueBytesAfter))
 	}
 	eventStoreWritePrepareDurationHistogram.Observe(time.Since(prepareStart).Seconds())
 	start := time.Now()
 	err := batch.Commit(pebble.NoSync)
+	if err == nil {
+		var recorder *resource.Recorder
+		if len(writeLoad) > 0 {
+			recorder = writeLoad[0]
+		} else {
+			recorder = e.writeLoad.Recorder()
+		}
+		recorder.Add(uint64(batchBytes))
+	}
 	eventStoreWriteDurationHistogram.Observe(time.Since(start).Seconds())
 	return err
 }
@@ -1584,8 +1608,10 @@ func encodeDeferredEventKey(
 }
 
 type eventStoreIter struct {
-	dispatcherID common.DispatcherID
-	tableSpan    *heartbeatpb.TableSpan
+	readLoad         *resource.Recorder
+	pendingReadBytes uint64
+	dispatcherID     common.DispatcherID
+	tableSpan        *heartbeatpb.TableSpan
 	// true when need check whether data from `innerIter` is in `tableSpan`
 	// (e.g. subscription span is not the same as dispatcher span)
 	needCheckSpan bool
@@ -1616,10 +1642,12 @@ func (iter *eventStoreIter) NextWithScanPosition() (*common.RawKVEntry, ScanPosi
 	var scanPosition ScanPosition
 	for {
 		if !iter.innerIter.Valid() {
+			iter.flushReadLoad()
 			return nil, nil, false
 		}
 		key := iter.innerIter.Key()
 		value := iter.innerIter.Value()
+		iter.recordReadLoad(uint64(len(key)) + uint64(len(value)))
 
 		if KeyUsesEncryptionLayer(key) {
 			if iter.encryptionManager == nil {
@@ -1687,10 +1715,34 @@ func (iter *eventStoreIter) NextWithScanPosition() (*common.RawKVEntry, ScanPosi
 	startTime := time.Now()
 	iter.innerIter.Next()
 	metricEventStoreNextReadDurationHistogram.Observe(time.Since(startTime).Seconds())
+	iter.flushReadLoad()
 	return rawKV, scanPosition, isNewTxn
 }
 
+// Batch read accounting locally; do not contend on a node-wide atomic per row.
+// The remainder is bounded below 64 KiB and flushed when Next returns or closes.
+func (iter *eventStoreIter) recordReadLoad(bytes uint64) {
+	const batchBytes = 64 << 10
+	if bytes >= batchBytes {
+		iter.flushReadLoad()
+		iter.readLoad.Add(bytes)
+		return
+	}
+	iter.pendingReadBytes += bytes // Both operands are below batchBytes.
+	if iter.pendingReadBytes >= batchBytes {
+		iter.flushReadLoad()
+	}
+}
+
+func (iter *eventStoreIter) flushReadLoad() {
+	if iter.pendingReadBytes != 0 {
+		iter.readLoad.Add(iter.pendingReadBytes)
+		iter.pendingReadBytes = 0
+	}
+}
+
 func (iter *eventStoreIter) Close() (int64, error) {
+	iter.flushReadLoad()
 	if iter.innerIter == nil {
 		log.Info("event store close nil iter",
 			zap.Uint64("tableID", uint64(iter.tableSpan.TableID)),

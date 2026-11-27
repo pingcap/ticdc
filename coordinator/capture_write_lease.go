@@ -33,6 +33,7 @@ const (
 type captureLeaseNodeState struct {
 	nodeEpoch      uint64
 	lastRequestSeq uint64
+	load           nodeLoadState
 }
 
 type pendingWitnessChallenge struct {
@@ -53,6 +54,7 @@ type captureWriteLeaseController struct {
 	nonce              func([]byte) (int, error)
 
 	nodes            map[node.ID]*captureLeaseNodeState
+	activeNodes      []node.ID
 	p2pCapableNodes  map[node.ID]struct{}
 	p2pLeaseEnabled  bool
 	pendingWitness   *pendingWitnessChallenge
@@ -81,6 +83,7 @@ func (c *captureWriteLeaseController) observeNodeCapability(id node.ID, version 
 // updateClusterMode enables P2P only when every active capture has reported
 // support for the current protocol. A missing capability is treated as legacy.
 func (c *captureWriteLeaseController) updateClusterMode(activeNodes []node.ID) {
+	c.activeNodes = slices.Clone(activeNodes)
 	p2pEnabled := len(activeNodes) > 0
 	for _, id := range activeNodes {
 		if _, ok := c.p2pCapableNodes[id]; !ok {
@@ -119,6 +122,7 @@ func (c *captureWriteLeaseController) handleHeartbeat(
 		return nil
 	}
 	state.lastRequestSeq = heartbeat.GetWriteLeaseRequestSeq()
+	state.load.observe(heartbeat.GetNodeLoad(), c.now())
 
 	messages := c.handleWitnessAck(from, heartbeat)
 	if from != c.selfNodeID {
@@ -247,6 +251,7 @@ func (c *captureWriteLeaseController) newGrant(
 	if c.p2pLeaseEnabled {
 		leaseDurationMs = uint64(writelease.P2PLeaseDuration.Milliseconds())
 	}
+	loads, loadStatus := c.nodeLoadSnapshot()
 	return messaging.NewSingleTargetMessage(
 		target,
 		messaging.MaintainerManagerTopic,
@@ -255,12 +260,15 @@ func (c *captureWriteLeaseController) newGrant(
 			TargetNodeEpoch:    targetNodeEpoch,
 			RequestSeq:         requestSeq,
 			LeaseDurationMs:    leaseDurationMs,
+			NodeLoads:          loads,
+			NodeLoadStatus:     loadStatus,
 		},
 	)
 }
 
 func (c *captureWriteLeaseController) removeNode(id node.ID) {
 	delete(c.nodes, id)
+	c.activeNodes = slices.DeleteFunc(c.activeNodes, func(active node.ID) bool { return active == id })
 	delete(c.p2pCapableNodes, id)
 	if c.pendingWitness != nil &&
 		(c.pendingWitness.witnessNodeID == id || id == c.selfNodeID) {

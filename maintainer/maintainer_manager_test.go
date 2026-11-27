@@ -27,6 +27,7 @@ import (
 	"github.com/pingcap/kvproto/pkg/keyspacepb"
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/heartbeatpb"
+	"github.com/pingcap/ticdc/maintainer/replica"
 	"github.com/pingcap/ticdc/maintainer/testutil"
 	"github.com/pingcap/ticdc/pkg/common"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
@@ -234,6 +235,7 @@ func cleanupMaintainerMetricsForTest(t *testing.T, cfID common.ChangeFeedID) {
 
 func TestManagerMaintainerSet_AddMaintainerRejectsLiveNewerEpoch(t *testing.T) {
 	maintainers := newManagerMaintainerSetForAddTest(t)
+	maintainers.nodeLoads = replica.NewNodeLoadTracker()
 	cfID := common.NewChangeFeedIDWithName("reject-live-newer-epoch", common.DefaultKeyspaceName)
 	cleanupMaintainerMetricsForTest(t, cfID)
 	noDrainTarget := func() (node.ID, uint64) { return "", 0 }
@@ -242,6 +244,7 @@ func TestManagerMaintainerSet_AddMaintainerRejectsLiveNewerEpoch(t *testing.T) {
 	maintainers.handleAddMaintainer(newAddMaintainerRequestForEpoch(t, cfID, 1, 1), noDrainTarget)
 	oldMaintainer, ok := maintainers.getMaintainer(cfID)
 	require.True(t, ok)
+	require.Same(t, maintainers.nodeLoads, oldMaintainer.controller.spanController.NodeLoadTracker())
 	require.Equal(t, uint64(1), oldMaintainer.currentMaintainerEpoch())
 	require.Equal(t, float64(1), promtestutil.ToFloat64(maintainerGauge.WithLabelValues(keyspace, changefeed)))
 

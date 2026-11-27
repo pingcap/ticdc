@@ -37,6 +37,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/ticdc/pkg/pdutil"
 	"github.com/pingcap/ticdc/pkg/routing"
+	"github.com/pingcap/ticdc/pkg/scheduler/resource"
 	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/ticdc/pkg/writelease"
 	"github.com/pingcap/ticdc/utils/threadpool"
@@ -85,6 +86,7 @@ Architecture:
 - Each DispatcherManager has exactly one backend sink
 */
 type DispatcherManager struct {
+	sinkLoad     *resource.Counter
 	ctx          context.Context
 	changefeedID common.ChangeFeedID
 	keyspaceID   uint32
@@ -263,6 +265,9 @@ func NewDispatcherManager(
 		metricRedoEventDispatcherCount:        eventDispatcherGauge.WithLabelValues(changefeedID.Keyspace(), changefeedID.Name(), "redoDispatcher"),
 		metricRedoCreateDispatcherDuration:    createDispatcherDuration.WithLabelValues(changefeedID.Keyspace(), changefeedID.Name(), "redoDispatcher"),
 	}
+	if stats, ok := appcontext.TryGetService[*resource.NodeStats](appcontext.NodeResourceStats); ok {
+		manager.sinkLoad = stats.NewCounter(resource.Sink)
+	}
 
 	// Trust only the explicit request maintainer epoch for receiver fencing. The
 	// config epoch may be newer than an old rolling-upgrade request and must not
@@ -364,6 +369,7 @@ func NewDispatcherManager(
 		sharedInfo.Close()
 		return nil, newWritePathClosedError()
 	}
+	sharedInfo.SinkLoad = manager.sinkLoad
 	manager.sharedInfo = sharedInfo
 	manager.writePathMu.Unlock()
 
@@ -1203,6 +1209,7 @@ func (e *DispatcherManager) finishClose() {
 	if !e.closed.CompareAndSwap(false, true) {
 		return
 	}
+	e.sinkLoad.Close()
 
 	e.removeTaskHandles.Range(func(key, value interface{}) bool {
 		handle := value.(*threadpool.TaskHandle)
