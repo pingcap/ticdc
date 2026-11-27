@@ -188,10 +188,7 @@ func (c *storageReader) walkStorage(
 				files[cloudstorage.NewSchemaFileDMLPathKey(key)] = nil
 			}
 		case strings.HasSuffix(normalized, ".index"):
-			if err := c.addIndex(ctx, normalized, files); err != nil {
-				if errors.ErrStorageSinkInvalidFileName.Equal(err) {
-					return nil
-				}
+			if _, err := c.addIndex(ctx, normalized, files); err != nil {
 				return err
 			}
 		}
@@ -233,12 +230,19 @@ func (c *storageReader) discoverDir(
 			}
 		}
 		if len(indices) > 0 {
+			matched := false
 			for _, indexPath := range indices {
-				if err := c.addIndex(ctx, indexPath, files); err != nil {
+				ok, err := c.addIndex(ctx, indexPath, files)
+				if err != nil {
 					return err
 				}
+				if ok {
+					matched = true
+				}
 			}
-			return nil
+			if matched {
+				return nil
+			}
 		}
 		// Keep descending into "meta" when it is a table under a database (depth == 1 with
 		// subdirs) or a database at root (depth == 0); skip pure metadata directories.
@@ -261,18 +265,18 @@ func (c *storageReader) discoverDir(
 func (c *storageReader) addIndex(
 	ctx context.Context, indexPath string,
 	files map[cloudstorage.DMLPathKey]map[cloudstorage.FileIndexKey]storageIndexRange,
-) error {
+) (bool, error) {
 	var key cloudstorage.DMLPathKey
 	if err := key.ParseIndexFilePath(c.dateSeparator, indexPath); err != nil {
-		return errors.WrapError(errors.ErrStorageSinkInvalidFileName, err, "parse Storage index path")
+		return false, nil
 	}
 	if (c.sourceCheckpoint > 0 && key.TableVersion > c.sourceCheckpoint) ||
 		key.TableVersion < c.schemaWatermark(key.SchemaPathKey, c.schemas[key.SchemaPathKey]) {
-		return nil
+		return true, nil
 	}
 	index, err := c.readIndex(ctx, indexPath)
 	if err != nil {
-		return err
+		return false, err
 	}
 	indices := c.fileIndices[key]
 	if indices == nil {
@@ -290,7 +294,7 @@ func (c *storageReader) addIndex(
 			end:   index.Idx,
 		}
 	}
-	return nil
+	return true, nil
 }
 
 // listEntries returns the immediate child directories and files of dir.
@@ -301,7 +305,7 @@ func (c *storageReader) listEntries(ctx context.Context, dir string) ([]string, 
 			return nil, nil, nil
 		}
 		if err != nil {
-			return nil, nil, errors.WrapError(errors.ErrExternalStorageAPI, err, "list Storage directory")
+			return nil, nil, errors.WrapError(errors.ErrExternalStorageAPI, err)
 		}
 		dirs := make([]string, 0, len(entries))
 		files := make([]string, 0, len(entries))
@@ -326,7 +330,7 @@ func (c *storageReader) listEntries(ctx context.Context, dir string) ([]string, 
 	for {
 		output, err := c.s3Client.ListObjectsV2(ctx, request)
 		if err != nil {
-			return nil, nil, errors.WrapError(errors.ErrExternalStorageAPI, err, "list Storage directory")
+			return nil, nil, errors.WrapError(errors.ErrExternalStorageAPI, err)
 		}
 		for _, commonPrefix := range output.CommonPrefixes {
 			name := strings.Trim(strings.TrimPrefix(aws.ToString(commonPrefix.Prefix), prefix), "/")
@@ -361,7 +365,7 @@ func (c *storageReader) s3Prefix(dir string) string {
 func (c *storageReader) readIndex(ctx context.Context, path string) (cloudstorage.FileIndex, error) {
 	data, err := c.storage.ReadFile(ctx, path)
 	if err != nil {
-		return cloudstorage.FileIndex{}, errors.WrapError(errors.ErrExternalStorageAPI, err, "read Storage index")
+		return cloudstorage.FileIndex{}, err
 	}
 	return cloudstorage.ParseFileIndexFromFileName(strings.TrimSuffix(string(data), "\n"), c.fileExtension)
 }
@@ -374,19 +378,19 @@ func (c *storageReader) readSchema(ctx context.Context, path string) (cloudstora
 	}
 	data, err := c.storage.ReadFile(ctx, path)
 	if err != nil {
-		return key, false, errors.WrapError(errors.ErrExternalStorageAPI, err, "read Storage schema")
+		return key, false, err
 	}
 	var file cloudstorage.SchemaFile
 	if err := json.Unmarshal(data, &file); err != nil {
-		return key, false, errors.WrapError(errors.ErrCodecDecode, err, "decode Storage schema")
+		return key, false, errors.WrapError(errors.ErrCodecDecode, err)
 	}
 	checksumText := strings.TrimSuffix(path[strings.LastIndex(path, "_")+1:], ".json")
 	checksum, err := strconv.ParseUint(checksumText, 10, 32)
 	if err != nil {
-		return key, false, errors.WrapError(errors.ErrStorageSinkInvalidFileName, err, "parse Storage schema checksum")
+		return key, false, errors.WrapError(errors.ErrStorageSinkInvalidFileName, err)
 	}
 	if file.Checksum() != uint32(checksum) || key.TableVersion != file.TableVersion {
-		return key, false, errors.ErrCodecDecode.FastGenByArgs("Storage schema checksum or table version does not match its path")
+		return key, false, errors.ErrCodecDecode.FastGen("Storage schema checksum or table version does not match its path")
 	}
 	if file.Schema != "" {
 		if realKey := common.QuoteSchema(file.Schema, file.Table); realKey != key.GetKey() {
@@ -476,16 +480,16 @@ func (c *storageReader) scanInputs(ctx context.Context) error {
 	c.scanned = true
 	exists, err := c.storage.FileExists(ctx, "metadata")
 	if err != nil {
-		return errors.WrapError(errors.ErrExternalStorageAPI, err, "check Storage metadata")
+		return err
 	}
 	if exists {
 		data, err := c.storage.ReadFile(ctx, "metadata")
 		if err != nil {
-			return errors.WrapError(errors.ErrExternalStorageAPI, err, "read Storage metadata")
+			return err
 		}
 		var metadata storageMetadata
 		if err := json.Unmarshal(data, &metadata); err != nil {
-			return errors.WrapError(errors.ErrCodecDecode, err, "decode Storage metadata")
+			return errors.WrapError(errors.ErrCodecDecode, err)
 		}
 		c.sourceCheckpoint = max(c.sourceCheckpoint, metadata.CheckpointTs)
 	}
@@ -517,7 +521,7 @@ func (c *storageReader) readDMLFile(ctx context.Context, item storageRange, sche
 	path := item.key.GenerateDMLFilePath(&item.index, c.fileExtension, c.fileIndexWidth)
 	data, err := c.storage.ReadFile(ctx, path)
 	if err != nil {
-		return nil, errors.WrapError(errors.ErrExternalStorageAPI, err, "read Storage DML file")
+		return nil, err
 	}
 	c.fileIndices[item.key][item.index.FileIndexKey] = item.index.Idx
 	return &Payload{

@@ -549,8 +549,7 @@ func ParseFileIndexFromFileName(fileName string, extension string) (FileIndex, e
 	}
 	idx, err := strconv.ParseUint(idxStr, 10, 64)
 	if err != nil {
-		return FileIndex{}, errors.WrapError(
-			errors.ErrStorageSinkInvalidFileName, err, "cannot match dml path pattern for %q", fileName)
+		return FileIndex{}, errors.WrapError(errors.ErrStorageSinkInvalidFileName, err)
 	}
 	return FileIndex{
 		FileIndexKey: FileIndexKey{

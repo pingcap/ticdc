@@ -658,7 +658,7 @@ func setDDLTableNames(ddl *event.DDLEvent) error {
 	case model.ActionRenameTable, model.ActionRenameTables, model.ActionExchangeTablePartition, model.ActionCreateTable:
 		stmt, err := parser.New().ParseOneStmt(ddl.Query, "", "")
 		if err != nil {
-			return errors.WrapError(errors.ErrCodecDecode, err, "read consumer DDL scope")
+			return errors.WrapError(errors.ErrCodecDecode, err)
 		}
 		switch stmt := stmt.(type) {
 		case *ast.CreateTableStmt:

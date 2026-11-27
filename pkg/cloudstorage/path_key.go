@@ -278,7 +278,7 @@ func (d *DMLPathKey) parseDMLDataDir(
 	if tableID != "" {
 		tableIDNum, err := strconv.ParseInt(tableID, 10, 64)
 		if err != nil {
-			return invalidDMLPathWrapError(err, filePath)
+			return errors.WrapError(errors.ErrStorageSinkInvalidFileName, err)
 		}
 		key.UseTableIDAsPath = true
 		key.TableID = tableIDNum
@@ -286,13 +286,13 @@ func (d *DMLPathKey) parseDMLDataDir(
 	if partition != "" {
 		partitionNum, err := strconv.ParseInt(partition, 10, 64)
 		if err != nil {
-			return invalidDMLPathWrapError(err, filePath)
+			return errors.WrapError(errors.ErrStorageSinkInvalidFileName, err)
 		}
 		key.PartitionNum = partitionNum
 	}
 	tableVersion, err := strconv.ParseUint(version, 10, 64)
 	if err != nil {
-		return invalidDMLPathWrapError(err, filePath)
+		return errors.WrapError(errors.ErrStorageSinkInvalidFileName, err)
 	}
 	key.TableVersion = tableVersion
 	*d = key
@@ -334,11 +334,5 @@ func (d *DMLPathKey) ParseDMLFilePath(
 
 func invalidDMLPathError(filePath string) error {
 	return errors.ErrStorageSinkInvalidFileName.GenWithStack(
-		"cannot match dml path pattern for %q", filePath)
-}
-
-func invalidDMLPathWrapError(err error, filePath string) error {
-	return errors.WrapError(
-		errors.ErrStorageSinkInvalidFileName, err,
 		"cannot match dml path pattern for %q", filePath)
 }

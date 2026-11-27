@@ -510,13 +510,13 @@ func (d *Group) decodeStorage(ctx context.Context, future *Future) error {
 		var err error
 		decoder, err = csv.NewDecoderWithColumnSelector(ctx, d.codecConfig, table, payload.Value, d.selectors.GetForTableInfo(table))
 		if err != nil {
-			return errors.WrapError(errors.ErrCodecDecode, err, "create CSV decoder")
+			return errors.WrapError(errors.ErrCodecDecode, err)
 		}
 	case config.ProtocolCanalJSON:
 		decoder = canal.NewTxnDecoder(d.codecConfig)
 		decoder.AddKeyValue(nil, payload.Value)
 	default:
-		return errors.ErrCodecDecode.GenWithStackByArgs("storage consumer protocol is unsupported")
+		return errors.ErrCodecDecode.GenWithStack("storage consumer protocol is unsupported")
 	}
 	for {
 		if err := context.Cause(ctx); err != nil {

@@ -19,7 +19,6 @@ import (
 	"context"
 	"crypto/tls"
 	"crypto/x509"
-	"math"
 	"os"
 	"strings"
 	"time"
@@ -37,12 +36,11 @@ import (
 )
 
 type kafkaReader struct {
-	protocol        config.Protocol
-	router          *eventrouter.EventRouter
-	maxMessageBytes int
-	client          *kgo.Client
-	topic           string
-	partitions      int32
+	protocol   config.Protocol
+	router     *eventrouter.EventRouter
+	client     *kgo.Client
+	topic      string
+	partitions int32
 }
 
 func newKafkaReader(ctx context.Context, opts Options) *kafkaReader {
@@ -71,10 +69,6 @@ func newKafkaReader(ctx context.Context, opts Options) *kafkaReader {
 		kgo.BrokerMaxReadBytes(32 << 20),
 	}
 	query := upstreamURI.Query()
-	maxMessageBytes := math.MaxInt
-	if query.Has("max-message-bytes") {
-		maxMessageBytes = codecConfig.MaxMessageBytes
-	}
 	ca, cert, key := query.Get("ca"), query.Get("cert"), query.Get("key")
 	if upstreamURI.Scheme == config.KafkaSSLScheme || cmp.Or(ca, cert, key) != "" {
 		tlsConfig := &tls.Config{
@@ -117,12 +111,11 @@ func newKafkaReader(ctx context.Context, opts Options) *kafkaReader {
 
 	partitions := int32(len(topicMetadata.Partitions))
 	return &kafkaReader{
-		protocol:        codecConfig.Protocol,
-		router:          router,
-		maxMessageBytes: maxMessageBytes,
-		client:          client,
-		topic:           topic,
-		partitions:      partitions,
+		protocol:   codecConfig.Protocol,
+		router:     router,
+		client:     client,
+		topic:      topic,
+		partitions: partitions,
 	}
 }
 
@@ -140,11 +133,6 @@ func (c *kafkaReader) Read(ctx context.Context) ([]*Payload, error) {
 	var batch []*Payload
 	for iterator := fetches.RecordIter(); !iterator.Done(); {
 		record := iterator.Next()
-		if size := len(record.Key) + len(record.Value); size > c.maxMessageBytes {
-			log.Panic("kafka message size limit exceeded", zap.String("topic", c.topic),
-				zap.Int32("partition", record.Partition), zap.Int64("offset", record.Offset),
-				zap.Int("maxMessageBytes", c.maxMessageBytes), zap.Int("recordBytes", size))
-		}
 		// CommitRecords reads only these fields. Copying them keeps the fetch
 		// buffer, which Key and Value alias, out of the acknowledgement closure.
 		position := kgo.Record{
