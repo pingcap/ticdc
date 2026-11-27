@@ -29,9 +29,9 @@ func TestRecordDDL(t *testing.T) {
 	t1 := commonType.WrapTableInfo("test", &timodel.TableInfo{ID: 1, Name: ast.NewCIStr("t1"), UpdateTS: 100})
 	t2 := commonType.WrapTableInfo("test", &timodel.TableInfo{ID: 2, Name: ast.NewCIStr("t2"), UpdateTS: 100})
 	t3 := commonType.WrapTableInfo("other", &timodel.TableInfo{ID: 3, Name: ast.NewCIStr("t3"), UpdateTS: 100})
-	provider.WriteTableInfo(t1)
-	provider.WriteTableInfo(t2)
-	provider.WriteTableInfo(t3)
+	provider.WriteTableInfo(t1, 0)
+	provider.WriteTableInfo(t2, 0)
+	provider.WriteTableInfo(t3, 0)
 
 	// Normal DDL invalidates only its target table.
 	provider.RecordDDL(&commonEvent.DDLEvent{
@@ -54,9 +54,9 @@ func TestRecordDDL(t *testing.T) {
 	} {
 		t.Run(action.String(), func(t *testing.T) {
 			p := NewTableInfoProvider()
-			p.WriteTableInfo(t1)
-			p.WriteTableInfo(t2)
-			p.WriteTableInfo(t3)
+			p.WriteTableInfo(t1, 0)
+			p.WriteTableInfo(t2, 0)
+			p.WriteTableInfo(t3, 0)
 
 			p.RecordDDL(&commonEvent.DDLEvent{
 				FinishedTs: 120,
@@ -95,9 +95,9 @@ func TestReleaseBefore(t *testing.T) {
 	// A resumed decoder can report a lower version than one already seen.
 	newT1 := commonType.WrapTableInfo("test", &timodel.TableInfo{ID: 3, Name: ast.NewCIStr("t1"), UpdateTS: 50})
 
-	provider.WriteTableInfoAt(oldestT1, 20)
-	provider.WriteTableInfoAt(oldT1, 100)
-	provider.WriteTableInfoAt(newT1, 300)
+	provider.WriteTableInfo(oldestT1, 20)
+	provider.WriteTableInfo(oldT1, 100)
+	provider.WriteTableInfo(newT1, 300)
 
 	// Retention follows effectiveTs while ReadAt resolves by version, so both
 	// floors stay: newT1 survives a watermark above its version, and ReadAt at a

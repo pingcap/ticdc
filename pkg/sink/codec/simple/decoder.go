@@ -59,16 +59,15 @@ type Decoder struct {
 	CachedDMLMessages []*common.DMLMessage
 }
 
-// NewDecoder returns a simple decoder, reusing externalStorage when provided.
+// NewDecoder returns a simple decoder.
 func NewDecoder(
-	ctx context.Context, config *common.Config, db *sql.DB, externalStorage ...storeapi.Storage,
+	ctx context.Context, config *common.Config, db *sql.DB,
 ) (common.EventDecoder, error) {
-	var storage storeapi.Storage
-	if len(externalStorage) > 0 {
-		storage = externalStorage[0]
-	}
-	var err error
-	if storage == nil && config.LargeMessageHandle.EnableClaimCheck() {
+	var (
+		storage storeapi.Storage
+		err     error
+	)
+	if config.LargeMessageHandle.EnableClaimCheck() {
 		storageURI := config.LargeMessageHandle.ClaimCheckStorageURI
 		storage, err = util.GetExternalStorageWithDefaultTimeout(ctx, storageURI)
 		if err != nil {
@@ -313,12 +312,12 @@ func (d *Decoder) NextDDLEvent() *commonEvent.DDLEvent {
 		ddl.BlockedTables = common.GetBlockedTables(d.memo, ddl)
 	}
 
-	if !ddl.IsBootstrap && ddl.FinishedTs != 0 {
-		d.memo.WriteTableInfoAt(ddl.TableInfo, ddl.FinishedTs)
-	} else {
-		d.memo.WriteTableInfo(ddl.TableInfo)
+	var effectiveTs uint64
+	if !ddl.IsBootstrap {
+		effectiveTs = ddl.FinishedTs
 	}
-	d.memo.WriteTableInfo(ddl.MultipleTableInfos[1])
+	d.memo.WriteTableInfo(ddl.TableInfo, effectiveTs)
+	d.memo.WriteTableInfo(ddl.MultipleTableInfos[1], 0)
 
 	for ele := d.cachedMessages.Front(); ele != nil; {
 		msg := ele.Value.(*message)

@@ -170,7 +170,7 @@ func GetBlockedTables(
 		}
 		switch s := stmt.(type) {
 		case *ast.RenameTableStmt:
-			if action == timodel.ActionRenameTable && len(s.TableToTables) > 0 && s.TableToTables[0].OldTable != nil {
+			if action == timodel.ActionRenameTable {
 				oldTable := s.TableToTables[0].OldTable
 				ddl.ExtraSchemaName = cmp.Or(oldTable.Schema.O, ddl.SchemaName)
 				ddl.ExtraTableName = oldTable.Name.O
@@ -180,7 +180,7 @@ func GetBlockedTables(
 				blockedTableIDs = appendBlockedTableIDs(accessor, blockedTableIDs, ddl.SchemaName, pair.NewTable)
 			}
 		case *ast.AlterTableStmt:
-			if action == timodel.ActionRenameTable && s.Table != nil {
+			if action == timodel.ActionRenameTable {
 				ddl.ExtraSchemaName = cmp.Or(s.Table.Schema.O, ddl.SchemaName)
 				ddl.ExtraTableName = s.Table.Name.O
 			}
