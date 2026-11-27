@@ -1033,3 +1033,42 @@ func IsSplitable(tableInfo *common.TableInfo) bool {
 
 	return common.IsSplitable(tableInfo.HasClusteredPrimaryKey(), tableInfo.GetIndices())
 }
+
+// FixRenameTablesQuery takes a multi-statement rename query, and converts it into
+// a single statement, for atomicity.
+//
+// A DDLEvent may have a blank query in two cases: (1) every renaming table is
+// discarded by the table filter, or (2) every rename SQL is ignored by the
+// event filter. The first case never reaches here because schema storage
+// suppresses the event. The second case still reaches here, executing it will
+// cause ER_EMPTY_QUERY(1065), so we return skip=true tells the caller to skip it.
+func FixRenameTablesQuery(d *DDLEvent) (string, bool, error) {
+	if timodel.ActionType(d.Type) != timodel.ActionRenameTables {
+		return d.Query, false, nil
+	}
+
+	if strings.TrimSpace(d.Query) == "" {
+		return "", true, nil
+	}
+
+	p := parser.New()
+	stmts, _, err := p.ParseSQL(d.Query)
+	if err != nil {
+		return "", false, err
+	}
+
+	rename := &ast.RenameTableStmt{}
+	for _, stmt := range stmts {
+		current, ok := stmt.(*ast.RenameTableStmt)
+		if !ok {
+			return "", false, errors.New("unexpected statement in rename-tables event")
+		}
+		rename.TableToTables = append(
+			rename.TableToTables,
+			current.TableToTables...,
+		)
+	}
+
+	query, err := Restore(rename)
+	return query, false, err
+}

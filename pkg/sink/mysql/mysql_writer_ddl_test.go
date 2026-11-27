@@ -15,6 +15,7 @@
 package mysql
 
 import (
+	"context"
 	"fmt"
 	"strings"
 	"testing"
@@ -192,9 +193,72 @@ func TestFlushDDLEventPreservesRenameTables(t *testing.T) {
 		WillReturnRows(sqlmock.NewRows([]string{"@ticdc_ts"}))
 	mock.ExpectBegin()
 	mock.ExpectExec("USE `test`;").WillReturnResult(sqlmock.NewResult(0, 0))
-	expectDDLExec(mock, event, writer.cfg.Timezone)
+	mock.ExpectExec("SET TIMESTAMP = DEFAULT").WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectExec("RENAME TABLE `t1` TO `t2`, `t3` TO `t4`").WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectCommit()
 
 	require.NoError(t, writer.FlushDDLEvent(event))
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestExecDDLRebuildsRenameTablesAtomic(t *testing.T) {
+	writer, db, mock := newTestMysqlWriter(t)
+	defer db.Close()
+	writer.cfg.EnableDDLTs = false
+
+	event := &commonEvent.DDLEvent{
+		Type:       byte(model.ActionRenameTables),
+		SchemaName: "test",
+		Query:      "RENAME TABLE `test`.`t1` TO `test`.`t2`;RENAME TABLE `test`.`t3` TO `test`.`t4`;",
+	}
+
+	mock.ExpectQuery("BEGIN; SET @ticdc_ts := TIDB_PARSE_TSO(@@tidb_current_ts); ROLLBACK; SELECT @ticdc_ts; SET @ticdc_ts=NULL;").
+		WillReturnRows(sqlmock.NewRows([]string{"@ticdc_ts"}))
+	mock.ExpectBegin()
+	mock.ExpectExec("USE `test`;").WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectExec("SET TIMESTAMP = DEFAULT").WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectExec("RENAME TABLE `test`.`t1` TO `test`.`t2`, `test`.`t3` TO `test`.`t4`").WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectCommit()
+
+	require.NoError(t, writer.FlushDDLEvent(event))
+	require.NoError(t, mock.ExpectationsWereMet())
+
+	// The event.Query stay untouched.
+	require.Equal(t, event.Query, "RENAME TABLE `test`.`t1` TO `test`.`t2`;RENAME TABLE `test`.`t3` TO `test`.`t4`;")
+}
+
+func TestFlushDDLEventSkipsBlankRenameTablesQuery(t *testing.T) {
+	writer, db, mock := newTestMysqlWriter(t)
+	defer db.Close()
+	writer.cfg.EnableDDLTs = false
+	event := &commonEvent.DDLEvent{
+		Type:       byte(model.ActionRenameTables),
+		SchemaName: "test",
+		Query:      "",
+	}
+
+	// The event is skipped before opening a transaction, so no downstream SQL
+	// or transaction lifecycle is expected.
+	require.NoError(t, writer.FlushDDLEvent(event))
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestWaitDDLDoneUsesExecutedRenameTablesQuery(t *testing.T) {
+	writer, db, mock := newTestMysqlWriterForTiDB(t)
+	defer db.Close()
+	writer.ddlPollInterval = time.Millisecond
+
+	event := &commonEvent.DDLEvent{
+		Type:  byte(model.ActionRenameTables),
+		Query: "RENAME TABLE `test`.`t1` TO `test`.`t2`;RENAME TABLE `test`.`t3` TO `test`.`t4`;",
+	}
+	executedQuery := "RENAME TABLE `test`.`t1` TO `test`.`t2`, `test`.`t3` TO `test`.`t4`"
+	createTime := "2026-11-24 12:00:00.000000"
+	mock.ExpectQuery(checkRunningSQL).
+		WithArgs(createTime, executedQuery).
+		WillReturnRows(sqlmock.NewRows([]string{"QUERY", "STATE", "JOB_ID", "JOB_TYPE", "SCHEMA_STATE"}).
+			AddRow(executedQuery, "synced", "1", "rename tables", "public"))
+
+	require.NoError(t, writer.waitDDLDone(context.Background(), event, createTime))
 	require.NoError(t, mock.ExpectationsWereMet())
 }
