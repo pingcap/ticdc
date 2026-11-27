@@ -697,6 +697,14 @@ var (
 		"external storage api",
 		errors.RFCCodeText("CDC:ErrS3StorageAPI"),
 	)
+	ErrMeteringReporterClosed = errors.Normalize(
+		"metering reporter is closed",
+		errors.RFCCodeText("CDC:ErrMeteringReporterClosed"),
+	)
+	ErrMeteringInvalidBatch = errors.Normalize(
+		"invalid metering batch: %s",
+		errors.RFCCodeText("CDC:ErrMeteringInvalidBatch"),
+	)
 	ErrConsistentStorage = errors.Normalize(
 		"consistent storage (%s) not support",
 		errors.RFCCodeText("CDC:ErrConsistentStorage"),

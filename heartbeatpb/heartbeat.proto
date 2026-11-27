@@ -17,6 +17,10 @@ message HeartBeatRequest {
     repeated TableSpanStatus statuses = 4;
     bool compeleteStatus = 5;  // Whether includes all table spans in the changefeed?
     RunningError err = 6;
+    uint64 metering_epoch = 7;
+    uint64 metering_seq = 8;
+    uint64 metering_bytes = 9;
+    bool metering_supported = 10;
 }
 
 message Watermark {
@@ -74,11 +78,15 @@ message HeartBeatResponse {
     int64 mode = 3;
     // maintainer_epoch fences barrier decisions from stale maintainers.
     uint64 maintainer_epoch = 4;
+    uint64 metering_epoch = 5;
+    uint64 metering_seq = 6;
 }
 
 message CheckpointTsMessage {
     ChangefeedID changefeedID = 1;
     uint64 checkpointTs = 2;
+    uint64 metering_epoch = 3;
+    uint64 metering_acked_seq = 4;
 }
 
 // RedoMetaMessage used to send unflushed ts to update redo meta
@@ -181,6 +189,9 @@ message MaintainerStatus {
     // Nil means no active dispatcher drain target.
     DrainProgress drain_progress = 8;
     uint64 maintainer_epoch = 9;
+    uint64 metering_epoch = 10;
+    uint64 metering_seq = 11;
+    uint64 metering_bytes = 12;
 }
 
 // NodeLiveness is node-reported liveness.
@@ -259,6 +270,7 @@ message CoordinatorBootstrapRequest {
     // Zero keeps the peer in legacy mode. A non-zero version activates the
     // capture P2P write lease only on peers that understand this protocol.
     uint32 write_lease_protocol_version = 2;
+    bool metering_enabled = 3;
 }
 
 message CoordinatorBootstrapResponse {
@@ -284,6 +296,8 @@ message AddMaintainerRequest {
     bool is_new_changefeed = 4;  // only true when the changefeed is new created or resumed with overwriteCheckpointTs
     uint32 keyspace_id = 5;
     uint64 maintainer_epoch = 6;
+    uint64 metering_epoch = 7;
+    uint64 metering_last_seq = 8;
 }
 
 message RemoveMaintainerRequest {
@@ -325,6 +339,7 @@ message MaintainerBootstrapResponse {
     uint64 maintainer_epoch = 7;
     // merge_operators contains in-flight merge dispatcher requests for bootstrap recovery.
     repeated MergeDispatcherRequest merge_operators = 8;
+    bool metering_supported = 9;
 }
 
 message MaintainerPostBootstrapRequest {

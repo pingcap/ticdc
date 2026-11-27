@@ -818,9 +818,10 @@ func createBootstrapResponse(
 	startTs, redoStartTs uint64,
 ) *heartbeatpb.MaintainerBootstrapResponse {
 	response := &heartbeatpb.MaintainerBootstrapResponse{
-		ChangefeedID:    changefeedID,
-		Spans:           make([]*heartbeatpb.BootstrapTableSpan, 0, manager.GetDispatcherMap().Len()),
-		MaintainerEpoch: manager.GetMaintainerEpoch(),
+		ChangefeedID:      changefeedID,
+		Spans:             make([]*heartbeatpb.BootstrapTableSpan, 0, manager.GetDispatcherMap().Len()),
+		MaintainerEpoch:   manager.GetMaintainerEpoch(),
+		MeteringSupported: manager.IsTrafficMeteringEnabled(),
 	}
 
 	// table trigger event dispatcher startTs

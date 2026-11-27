@@ -320,6 +320,12 @@ func (m *Manager) onCoordinatorBootstrapRequest(msg *messaging.TargetMessage) {
 	m.coordinatorID = msg.From
 	m.coordinatorVersion = req.Version
 
+	var meteringEpoch uint64
+	if req.GetMeteringEnabled() && req.Version > 0 {
+		meteringEpoch = uint64(req.Version)
+	}
+	m.maintainers.applyMeteringEpoch(meteringEpoch)
+
 	response := m.maintainers.buildBootstrapResponse()
 	drainTarget, drainEpoch := m.getDispatcherDrainTarget()
 	response.DispatcherDrainTargetNodeId = drainTarget.String()

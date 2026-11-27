@@ -37,8 +37,9 @@ type ChangefeedDB struct {
 	replica.ReplicationDB[common.ChangeFeedID, *Changefeed]
 
 	// stopped changefeeds that failed, stopped or finished
-	stopped map[common.ChangeFeedID]*Changefeed
-	lock    sync.RWMutex
+	stopped       map[common.ChangeFeedID]*Changefeed
+	meteringEpoch uint64
+	lock          sync.RWMutex
 }
 
 func NewChangefeedDB(version int64) *ChangefeedDB {
@@ -61,8 +62,19 @@ func (db *ChangefeedDB) Init(allChangefeeds map[common.ChangeFeedID]*Changefeed)
 	defer db.lock.Unlock()
 	// Only add the changefeed to the changefeedDB and do nothing
 	for _, cf := range allChangefeeds {
+		cf.SetMeteringEpoch(db.meteringEpoch)
 		db.changefeeds[cf.ID] = cf
 		db.changefeedDisplayNames[cf.ID.DisplayName] = cf.ID
+	}
+}
+
+// SetMeteringEpoch updates the coordinator metering epoch shared by all changefeeds in this DB.
+func (db *ChangefeedDB) SetMeteringEpoch(epoch uint64) {
+	db.lock.Lock()
+	defer db.lock.Unlock()
+	db.meteringEpoch = epoch
+	for _, cf := range db.changefeeds {
+		cf.SetMeteringEpoch(epoch)
 	}
 }
 
@@ -79,6 +91,7 @@ func (db *ChangefeedDB) AddAbsentChangefeed(tasks ...*Changefeed) {
 	defer db.lock.Unlock()
 
 	for _, task := range tasks {
+		task.SetMeteringEpoch(db.meteringEpoch)
 		db.changefeeds[task.ID] = task
 		db.changefeedDisplayNames[task.ID.DisplayName] = task.ID
 		db.AddAbsentWithoutLock(task)
@@ -90,6 +103,7 @@ func (db *ChangefeedDB) AddStoppedChangefeed(task *Changefeed) {
 	db.lock.Lock()
 	defer db.lock.Unlock()
 
+	task.SetMeteringEpoch(db.meteringEpoch)
 	db.changefeeds[task.ID] = task
 	db.changefeedDisplayNames[task.ID.DisplayName] = task.ID
 	db.stopped[task.ID] = task
@@ -100,6 +114,7 @@ func (db *ChangefeedDB) AddReplicatingMaintainer(task *Changefeed, nodeID node.I
 	db.lock.Lock()
 	defer db.lock.Unlock()
 
+	task.SetMeteringEpoch(db.meteringEpoch)
 	task.SetNodeID(nodeID)
 	log.Info("add an replicating maintainer",
 		zap.String("nodeID", nodeID.String()),
@@ -387,6 +402,8 @@ func (db *ChangefeedDB) ReplaceStoppedChangefeed(cf *config.ChangeFeedInfo) {
 	}
 	// todo: not create a new changefeed here?
 	newCf := NewChangefeed(cf.ChangefeedID, cf, oldCf.GetStatus().CheckpointTs, false)
+	newCf.SetMeteringEpoch(db.meteringEpoch)
+	newCf.SetMeteringLastSeq(oldCf.GetMeteringLastSeq())
 	db.stopped[cf.ChangefeedID] = newCf
 	db.changefeeds[cf.ChangefeedID] = newCf
 	db.changefeedDisplayNames[cf.ChangefeedID.DisplayName] = newCf.ID

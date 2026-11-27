@@ -191,6 +191,8 @@ type DispatcherManager struct {
 	// Shared info for all dispatchers
 	sharedInfo *dispatcher.SharedInfo
 
+	metering meteringSealer
+
 	metricTableTriggerEventDispatcherCount prometheus.Gauge
 	metricEventDispatcherCount             prometheus.Gauge
 	metricCreateDispatcherDuration         prometheus.Observer
@@ -358,6 +360,15 @@ func NewDispatcherManager(
 		blockStatusBufferSize,
 		make(chan error, 1),
 	)
+	if serverCfg := config.GetGlobalServerConfig(); serverCfg != nil &&
+		serverCfg.Metering != nil && serverCfg.Metering.Type != "" {
+		var meteringSelectorFn func(*common.TableInfo) commonEvent.Selector
+		meteringSelectorFn, err = newMeteringColumnSelector(sinkType, manager.config)
+		if err != nil {
+			return nil, err
+		}
+		sharedInfo.SetTrafficMetering(meteringSelectorFn, manager.metering.Add)
+	}
 	manager.writePathMu.Lock()
 	if manager.writePathClosed.Load() {
 		manager.writePathMu.Unlock()
@@ -998,7 +1009,15 @@ func (e *DispatcherManager) aggregateDispatcherHeartbeats(needCompleteStatus boo
 	e.metricCheckpointTsLag.Set(float64(oracle.GetPhysical(pdTime)-phyCheckpointTs) / 1e3)
 	e.metricResolvedTsLag.Set(float64(oracle.GetPhysical(pdTime)-phyResolvedTs) / 1e3)
 
+	message.MeteringSupported = e.IsTrafficMeteringEnabled()
+	message.MeteringEpoch, message.MeteringSeq, message.MeteringBytes = e.metering.Sealed()
+
 	return &message
+}
+
+// IsTrafficMeteringEnabled reports whether local traffic metering collection is attached.
+func (e *DispatcherManager) IsTrafficMeteringEnabled() bool {
+	return e.sharedInfo.IsTrafficMeteringEnabled()
 }
 
 func (e *DispatcherManager) MergeDispatcher(dispatcherIDs []common.DispatcherID, mergedDispatcherID common.DispatcherID, mode int64) *MergeCheckTask {

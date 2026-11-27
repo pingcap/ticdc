@@ -20,6 +20,7 @@ import (
 	"testing"
 
 	"github.com/gin-gonic/gin"
+	meteringconfig "github.com/pingcap/metering_sdk/config"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/prometheus/client_golang/prometheus"
@@ -36,6 +37,9 @@ func TestRegisterRoutesConfig(t *testing.T) {
 
 	testConfig := originalConfig.Clone()
 	testConfig.DataDir = "/tmp/codex-test-data-dir"
+	testConfig.Metering = meteringconfig.NewMeteringConfig().WithAWSConfig(&meteringconfig.MeteringAWSConfig{
+		AccessKey: "metering-access", SecretAccessKey: "metering-secret", SessionToken: "metering-token",
+	})
 	testConfig.Encryption.KMS.AWS.AccessKey = "aws-access-secret"
 	testConfig.Encryption.KMS.AWS.SecretAccessKey = "aws-private-secret"
 	testConfig.Encryption.KMS.AWS.SessionToken = "aws-session-secret"
@@ -64,7 +68,9 @@ func TestRegisterRoutesConfig(t *testing.T) {
 			var payload map[string]any
 			require.NoError(t, json.Unmarshal(resp.Body.Bytes(), &payload))
 			require.Equal(t, testConfig.DataDir, payload["data-dir"])
+			require.NotContains(t, payload, "metering")
 			for _, secret := range []string{
+				"metering-access", "metering-secret", "metering-token",
 				"aws-access-secret", "aws-private-secret", "aws-session-secret",
 				"aws-endpoint-password", "aws-endpoint-token", "aws-authorization-secret",
 				"gcp-private-secret", "gcp-endpoint-password", "gcp-endpoint-token",
@@ -80,6 +86,7 @@ func TestRegisterRoutesConfig(t *testing.T) {
 			require.Equal(t, "xxxxx", gcp["credentials_json"])
 		})
 	}
+	require.Equal(t, "metering-secret", config.GetGlobalServerConfig().Metering.AWS.SecretAccessKey)
 	require.Equal(t, "aws-private-secret", testConfig.Encryption.KMS.AWS.SecretAccessKey)
 	require.Equal(t, `{"private_key":"gcp-private-secret"}`, testConfig.Encryption.KMS.GCP.CredentialsJSON)
 }

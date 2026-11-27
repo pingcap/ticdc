@@ -171,6 +171,8 @@ type Maintainer struct {
 	tableCountGauge     prometheus.Gauge
 	handleEventDuration prometheus.Observer
 
+	metering meteringCollector
+
 	redoScheduledTaskGauge prometheus.Gauge
 	redoSpanCountGauge     prometheus.Gauge
 	redoTableCountGauge    prometheus.Gauge
@@ -404,6 +406,11 @@ func (m *Maintainer) GetMaintainerStatus() *heartbeatpb.MaintainerStatus {
 		LastSyncedTs:    m.getWatermark().LastSyncedTs,
 		MaintainerEpoch: m.currentMaintainerEpoch(),
 	}
+	if epoch, seq, bytes := m.metering.CompletedRound(); epoch > 0 {
+		status.MeteringEpoch = epoch
+		status.MeteringSeq = seq
+		status.MeteringBytes = bytes
+	}
 	drainTarget, drainEpoch := m.controller.getDispatcherDrainTarget()
 	if !drainTarget.IsEmpty() && drainEpoch > 0 {
 		// Report drain progress against the controller snapshot that all local
@@ -444,6 +451,30 @@ func clampIntToUint32(v int) uint32 {
 func (m *Maintainer) SetDispatcherDrainTarget(target node.ID, epoch uint64) {
 	m.controller.SetDispatcherDrainTarget(target, epoch)
 	m.markStatusChanged()
+}
+
+// SetMeteringInitialState initializes traffic metering state inherited from Coordinator.
+func (m *Maintainer) SetMeteringInitialState(epoch, lastSeq uint64) {
+	m.metering.SetInitialState(epoch, lastSeq)
+}
+
+// SetMeteringEpoch switches the traffic metering epoch when Coordinator changes.
+func (m *Maintainer) SetMeteringEpoch(epoch uint64) {
+	m.metering.SetEpoch(epoch)
+}
+
+func (m *Maintainer) activeMeteringNodes() []node.ID {
+	if m.bootstrapper == nil || m.controller == nil || m.controller.spanController == nil {
+		return nil
+	}
+	allNodes := m.bootstrapper.GetAllNodeIDs()
+	active := make([]node.ID, 0, len(allNodes))
+	for _, id := range allNodes {
+		if (m.selfNode != nil && id == m.selfNode.ID) || m.controller.spanController.GetTaskSizeByNodeID(id) > 0 {
+			active = append(active, id)
+		}
+	}
+	return active
 }
 
 func (m *Maintainer) initialize() error {
@@ -601,6 +632,14 @@ func (m *Maintainer) onRemoveMaintainer(cascade, changefeedRemoved bool) {
 // which is co-located on the same node as the maintainer. The dispatcher will propagate
 // the watermark information to downstream sinks.
 func (m *Maintainer) onCheckpointTsPersisted(msg *heartbeatpb.CheckpointTsMessage) {
+	if msg.MeteringEpoch > 0 {
+		m.metering.OnAck(msg.MeteringEpoch, msg.MeteringAckedSeq, time.Now())
+	}
+	// CheckpointTs == 0 denotes a metering-only ACK from Coordinator and must not
+	// be forwarded downstream to the table trigger dispatcher.
+	if msg.CheckpointTs == 0 {
+		return
+	}
 	m.sendMessages([]*messaging.TargetMessage{
 		messaging.NewSingleTargetMessage(m.selfNode.ID, messaging.HeartbeatCollectorTopic, msg),
 	})
@@ -635,6 +674,9 @@ func (m *Maintainer) onNodeChanged() {
 		m.controller.RemoveNode(id)
 		m.checkpointTsByCapture.Delete(id)
 		m.redoTsByCapture.Delete(id)
+		if m.metering.RemoveNode(id, m.activeMeteringNodes()) {
+			m.markStatusChanged()
+		}
 	}
 
 	m.sendMessages(requests)
@@ -986,6 +1028,41 @@ func (m *Maintainer) onHeartbeatRequest(msg *messaging.TargetMessage) {
 	if watermarkUpdated {
 		m.notifyCheckpointUpdate()
 	}
+	res := m.metering.OnHeartbeat(
+		msg.From,
+		req.MeteringSupported,
+		req.MeteringEpoch,
+		req.MeteringSeq,
+		req.MeteringBytes,
+		m.activeMeteringNodes,
+		time.Now(),
+	)
+	if len(res.missingNodes) > 0 {
+		meteringRoundStalledCounter.Inc()
+		log.Warn("traffic metering round stalled waiting for dispatcher managers",
+			zap.Stringer("changefeedID", m.changefeedID),
+			zap.Uint64("targetSeq", res.targetSeq),
+			zap.Duration("stalledFor", res.stalledFor),
+			zap.Any("missingNodes", res.missingNodes))
+	}
+	if res.cmdEpoch > 0 {
+		m.sendMessages([]*messaging.TargetMessage{
+			messaging.NewSingleTargetMessage(
+				msg.From,
+				messaging.HeartbeatCollectorTopic,
+				&heartbeatpb.HeartBeatResponse{
+					ChangefeedID:    m.changefeedID.ToPB(),
+					Mode:            common.DefaultMode,
+					MaintainerEpoch: m.currentMaintainerEpoch(),
+					MeteringEpoch:   res.cmdEpoch,
+					MeteringSeq:     res.cmdSeq,
+				},
+			),
+		})
+	}
+	if res.roundCompleted {
+		m.markStatusChanged()
+	}
 }
 
 func (m *Maintainer) notifyCheckpointUpdate() {
@@ -1077,6 +1154,9 @@ func (m *Maintainer) onMaintainerBootstrapResponse(msg *messaging.TargetMessage)
 			zap.String("error", resp.Err.Message))
 		m.onError(msg.From, resp.Err)
 		return
+	}
+	if resp.MeteringSupported {
+		m.metering.MarkNodeSupported(msg.From)
 	}
 
 	responses := m.bootstrapper.HandleBootstrapResponse(msg.From, resp)

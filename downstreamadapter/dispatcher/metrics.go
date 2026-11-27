@@ -30,7 +30,16 @@ var handleDDLHistogram = prometheus.NewHistogramVec(
 		Buckets:   prometheus.ExponentialBuckets(0.01, 2, 18),
 	}, []string{metrics.GetKeyspaceLabel(), "changefeed"})
 
+var meteringMeasureErrorCounter = prometheus.NewCounterVec(
+	prometheus.CounterOpts{
+		Namespace: "ticdc",
+		Subsystem: "metering",
+		Name:      "measure_error_total",
+		Help:      "Total number of DML events with traffic metering measurement errors by reason.",
+	}, []string{"reason"})
+
 // RegisterMetrics registers the metrics owned by this package.
 func RegisterMetrics(registry *prometheus.Registry) {
 	registry.MustRegister(handleDDLHistogram)
+	registry.MustRegister(meteringMeasureErrorCounter)
 }

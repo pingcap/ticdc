@@ -28,6 +28,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/config/kerneltype"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/messaging"
+	"github.com/pingcap/ticdc/pkg/metering"
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/ticdc/pkg/pdutil"
 	"github.com/pingcap/ticdc/pkg/server"
@@ -84,6 +85,10 @@ type coordinator struct {
 	pdClient pd.Client
 	pdClock  pdutil.Clock
 
+	// metering belongs to this coordinator term and is never shared with
+	// followers or the next coordinator instance.
+	metering *meteringReporter
+
 	// eventCh is used to receive the event from message center, basically these messages
 	// are from maintainer.
 	eventCh *chann.DrainableChann[*Event]
@@ -124,6 +129,11 @@ func New(node *node.Info,
 	}
 	// handle messages from message center
 	mc.RegisterHandler(messaging.CoordinatorTopic, c.recvMessages)
+	reporter := createMeteringReporter()
+	var accumulator *meteringAccumulator
+	if reporter != nil {
+		accumulator = newMeteringAccumulator()
+	}
 	c.controller = NewController(
 		c.version,
 		c.nodeInfo,
@@ -133,7 +143,11 @@ func New(node *node.Info,
 		batchSize,
 		balanceCheckInterval,
 		c.pdClient,
+		accumulator,
 	)
+	if reporter != nil {
+		c.metering = newMeteringReporter(reporter, accumulator)
+	}
 
 	nodeManager := appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName)
 	nodeManager.RegisterOwnerChangeHandler(
@@ -171,6 +185,14 @@ func (c *coordinator) recvMessages(ctx context.Context, msg *messaging.TargetMes
 func (c *coordinator) Run(ctx context.Context) error {
 	ctx, cancel := context.WithCancel(ctx)
 	c.cancel = cancel
+	defer cancel()
+	if c.metering != nil {
+		meteringEnabledGauge.Set(1)
+		defer func() {
+			meteringEnabledGauge.Set(0)
+			c.metering.Close()
+		}()
+	}
 
 	eg, ctx := errgroup.WithContext(ctx)
 	eg.Go(func() error {
@@ -186,8 +208,32 @@ func (c *coordinator) Run(ctx context.Context) error {
 	eg.Go(func() error {
 		return c.controller.collectMetrics(ctx)
 	})
+	if c.metering != nil {
+		eg.Go(func() error {
+			return c.metering.Run(ctx)
+		})
+	}
 
-	return eg.Wait()
+	err := eg.Wait()
+	if c.metering != nil {
+		c.metering.FlushOnShutdown()
+	}
+	return err
+}
+
+func createMeteringReporter() *metering.Reporter {
+	serverCfg := config.GetGlobalServerConfig()
+	if serverCfg == nil || serverCfg.Metering == nil || serverCfg.Metering.Type == "" {
+		return nil
+	}
+	reporter, err := metering.NewReporter(serverCfg.Metering, serverCfg.ClusterID)
+	if err != nil {
+		meteringEnabledGauge.Set(0)
+		log.Error("failed to initialize traffic metering reporter; disabling metering for this coordinator term",
+			zap.Error(err))
+		return nil
+	}
+	return reporter
 }
 
 // run handles the following:

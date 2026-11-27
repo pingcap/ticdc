@@ -1,0 +1,242 @@
+// Copyright 2026 PingCAP, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+package maintainer
+
+import (
+	"slices"
+	"sync"
+	"time"
+
+	"github.com/pingcap/ticdc/pkg/node"
+)
+
+const (
+	defaultMeteringRoundInterval  = time.Second
+	meteringRoundStallThreshold   = 30 * time.Second
+	meteringRoundStallLogInterval = 60 * time.Second
+)
+
+type meteringHeartbeatResult struct {
+	cmdEpoch       uint64
+	cmdSeq         uint64
+	roundCompleted bool
+	targetSeq      uint64
+	stalledFor     time.Duration
+	missingNodes   []node.ID
+}
+
+// meteringCollector coordinates sealed round collection across DispatcherManagers
+// for one changefeed within a single Coordinator metering_epoch.
+type meteringCollector struct {
+	mu             sync.Mutex
+	epoch          uint64
+	targetSeq      uint64
+	completedSeq   uint64
+	completedBytes uint64
+	supportedNodes map[node.ID]struct{}
+	roundBytes     map[node.ID]uint64
+	nextRoundAt    time.Time
+	roundStartedAt time.Time
+	lastStallLogAt time.Time
+}
+
+func (m *meteringCollector) SetInitialState(epoch, lastSeq uint64) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.resetLocked(epoch, lastSeq)
+}
+
+func (m *meteringCollector) SetEpoch(epoch uint64) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	// Reject stale epochs to match DispatcherManager's monotonic sealing, while allowing 0 to disable metering.
+	if epoch == m.epoch || (epoch > 0 && epoch < m.epoch) {
+		return
+	}
+	m.resetLocked(epoch, 0)
+}
+
+func (m *meteringCollector) resetLocked(epoch, lastSeq uint64) {
+	m.epoch = epoch
+	m.targetSeq = 0
+	if epoch > 0 {
+		m.targetSeq = lastSeq + 1
+	}
+	m.completedSeq = 0
+	m.completedBytes = 0
+	clear(m.roundBytes)
+	m.nextRoundAt = time.Time{}
+	m.roundStartedAt = time.Time{}
+	m.lastStallLogAt = time.Time{}
+}
+
+// MarkNodeSupported records bootstrap-time metering capability before heartbeats
+// arrive so Maintainer failover does not prematurely complete rounds without
+// waiting for other surviving DispatcherManagers.
+func (m *meteringCollector) MarkNodeSupported(id node.ID) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.supportedNodes == nil {
+		m.supportedNodes = make(map[node.ID]struct{})
+	}
+	m.supportedNodes[id] = struct{}{}
+}
+
+func (m *meteringCollector) RemoveNode(id node.ID, activeNodes []node.ID) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	delete(m.supportedNodes, id)
+	if m.epoch == 0 || m.completedSeq > 0 {
+		return false
+	}
+	return m.tryCompleteRoundLocked(activeNodes)
+}
+
+// roundBlockedLocked reports whether a heartbeat must not start or advance a
+// metering round. m.mu must be held.
+func (m *meteringCollector) roundBlockedLocked(now time.Time) bool {
+	return m.epoch == 0 || m.completedSeq > 0 ||
+		(!m.nextRoundAt.IsZero() && now.Before(m.nextRoundAt))
+}
+
+func (m *meteringCollector) OnHeartbeat(
+	from node.ID,
+	supported bool,
+	msgEpoch, msgSeq, msgBytes uint64,
+	getActiveNodes func() []node.ID,
+	now time.Time,
+) meteringHeartbeatResult {
+	m.mu.Lock()
+	if supported {
+		if m.supportedNodes == nil {
+			m.supportedNodes = make(map[node.ID]struct{})
+		}
+		m.supportedNodes[from] = struct{}{}
+	}
+	if m.roundBlockedLocked(now) {
+		m.mu.Unlock()
+		return meteringHeartbeatResult{}
+	}
+	if m.roundStartedAt.IsZero() {
+		m.roundStartedAt = now
+	}
+	if msgEpoch == m.epoch && msgSeq == m.targetSeq {
+		if m.roundBytes == nil {
+			m.roundBytes = make(map[node.ID]uint64)
+		}
+		m.roundBytes[from] = msgBytes
+	}
+	// Collecting active nodes takes the bootstrapper and span controller locks,
+	// so it must run without m.mu held.
+	m.mu.Unlock()
+
+	var activeNodes []node.ID
+	if getActiveNodes != nil {
+		activeNodes = getActiveNodes()
+	}
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.roundBlockedLocked(now) {
+		return meteringHeartbeatResult{}
+	}
+	if m.tryCompleteRoundLocked(activeNodes) {
+		return meteringHeartbeatResult{roundCompleted: true}
+	}
+
+	var res meteringHeartbeatResult
+	if stalledFor := now.Sub(m.roundStartedAt); stalledFor >= meteringRoundStallThreshold &&
+		(m.lastStallLogAt.IsZero() || now.Sub(m.lastStallLogAt) >= meteringRoundStallLogInterval) {
+		if missing := m.missingSupportedNodesLocked(activeNodes); len(missing) > 0 {
+			m.lastStallLogAt = now
+			res.targetSeq = m.targetSeq
+			res.stalledFor = stalledFor
+			res.missingNodes = missing
+		}
+	}
+
+	if _, ok := m.supportedNodes[from]; ok && (msgEpoch != m.epoch || msgSeq != m.targetSeq) {
+		res.cmdEpoch = m.epoch
+		res.cmdSeq = m.targetSeq
+	}
+	return res
+}
+
+func (m *meteringCollector) missingSupportedNodesLocked(activeNodes []node.ID) []node.ID {
+	var missing []node.ID
+	for _, id := range activeNodes {
+		if _, ok := m.supportedNodes[id]; !ok {
+			continue
+		}
+		if _, reported := m.roundBytes[id]; !reported {
+			missing = append(missing, id)
+		}
+	}
+	slices.Sort(missing)
+	return missing
+}
+
+func (m *meteringCollector) tryCompleteRoundLocked(activeNodes []node.ID) bool {
+	supportedActiveCount := 0
+	for _, id := range activeNodes {
+		if _, ok := m.supportedNodes[id]; !ok {
+			// Skip legacy nodes that have not declared metering support yet during rolling upgrade.
+			continue
+		}
+		supportedActiveCount++
+		if _, reported := m.roundBytes[id]; !reported {
+			return false
+		}
+	}
+	if supportedActiveCount == 0 {
+		return false
+	}
+	var sum uint64
+	for _, n := range m.roundBytes {
+		sum += n
+	}
+	m.completedSeq = m.targetSeq
+	m.completedBytes = sum
+	clear(m.roundBytes)
+	m.roundStartedAt = time.Time{}
+	m.lastStallLogAt = time.Time{}
+	return true
+}
+
+func (m *meteringCollector) CompletedRound() (epoch, seq, bytes uint64) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.epoch == 0 || m.completedSeq == 0 {
+		return 0, 0, 0
+	}
+	return m.epoch, m.completedSeq, m.completedBytes
+}
+
+func (m *meteringCollector) OnAck(epoch, ackedSeq uint64, now time.Time) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.epoch == 0 || epoch != m.epoch || ackedSeq < m.targetSeq {
+		return
+	}
+	if m.completedSeq > 0 && ackedSeq >= m.completedSeq {
+		m.completedSeq = 0
+		m.completedBytes = 0
+		m.nextRoundAt = now.Add(defaultMeteringRoundInterval)
+	}
+	clear(m.roundBytes)
+	m.roundStartedAt = time.Time{}
+	m.lastStallLogAt = time.Time{}
+	m.targetSeq = ackedSeq + 1
+}
