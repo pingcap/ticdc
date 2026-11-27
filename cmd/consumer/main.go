@@ -47,13 +47,16 @@ func main() {
 func run() int {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+
 	if err := newCommand().ExecuteContext(ctx); err != nil {
 		if ctx.Err() != nil {
 			return 0
 		}
+
 		log.Error("consumer command failed", zap.Error(err))
 		return 1
 	}
+
 	return 0
 }
 
@@ -78,18 +81,23 @@ func newCommand() *cobra.Command {
 					}
 				}()
 			}
+
 			return newConsumer(ctx, options).start(ctx)
 		},
 	}
+
 	command.SetFlagErrorFunc(func(_ *cobra.Command, err error) error {
 		return errors.WrapError(errors.ErrInvalidReplicaConfig, err, "parse consumer flags")
 	})
+
 	flags := command.Flags()
 	flags.StringVar(&options.upstreamURI, "upstream-uri", "", "Kafka, Pulsar, or Storage source URI")
 	flags.StringVar(&options.downstreamURI, "downstream-uri", "", "downstream sink URI")
 	flags.StringVar(&options.configFile, "config", "", "consumer configuration file")
-	flags.StringVar(&options.consumerID, "consumer-id", "", "Kafka group ID or Pulsar subscription name (random if omitted)")
+	flags.StringVar(&options.consumerID, "consumer-id", "",
+		"Kafka group ID or Pulsar subscription name (random if omitted)")
 	flags.StringVar(&options.logFile, "log-file", "cdc_consumer.log", "log file path")
 	flags.BoolVar(&options.enableProfiling, "enable-profiling", false, "enable pprof on "+profileAddress)
+
 	return command
 }

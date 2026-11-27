@@ -48,6 +48,7 @@ func BlocksTable(ddl *event.DDLEvent, dml *event.DMLEvent) bool {
 	if dml.TableInfo == nil {
 		return true
 	}
+
 	return blocksIdentity(ddl, dml.PhysicalTableID, dml.TableInfo.GetSchemaName(), dml.TableInfo.GetTableName())
 }
 
@@ -57,27 +58,35 @@ func blocksIdentity(ddl *event.DDLEvent, tableID int64, schema, table string) bo
 	if ddl.SchemaName == "" || (ddl.BlockedTables != nil && ddl.BlockedTables.InfluenceType == event.InfluenceTypeAll) {
 		return true
 	}
-	if (ddl.Type == byte(model.ActionRenameTables) || ddl.Type == byte(model.ActionExchangeTablePartition)) && len(ddl.BlockedTableNames) == 0 && len(ddl.MultipleTableInfos) == 0 {
+
+	if (ddl.Type == byte(model.ActionRenameTables) || ddl.Type == byte(model.ActionExchangeTablePartition)) &&
+		len(ddl.BlockedTableNames) == 0 && len(ddl.MultipleTableInfos) == 0 {
 		return true
 	}
+
 	if sameTable(schema, table, ddl.SchemaName, ddl.TableName) ||
 		sameTable(schema, table, ddl.ExtraSchemaName, ddl.ExtraTableName) {
 		return true
 	}
+
 	for _, name := range ddl.BlockedTableNames {
 		if sameTable(schema, table, name.SchemaName, name.TableName) {
 			return true
 		}
 	}
+
 	for _, info := range ddl.MultipleTableInfos {
 		if info != nil && sameTable(schema, table, info.GetSchemaName(), info.GetTableName()) {
 			return true
 		}
 	}
+
 	if ddl.BlockedTables != nil && slices.Contains(ddl.BlockedTables.TableIDs, tableID) {
 		return true
 	}
-	return (ddl.TableName == "" || (ddl.BlockedTables != nil && ddl.BlockedTables.InfluenceType == event.InfluenceTypeDB)) &&
+
+	return (ddl.TableName == "" ||
+		(ddl.BlockedTables != nil && ddl.BlockedTables.InfluenceType == event.InfluenceTypeDB)) &&
 		strings.EqualFold(schema, ddl.SchemaName)
 }
 

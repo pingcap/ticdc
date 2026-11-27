@@ -8,7 +8,6 @@
 //
 // Unless required by applicable law or agreed to in writing, software
 // distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
@@ -148,6 +147,7 @@ func NewGroup(ctx context.Context, opts Options) *Group {
 	topic := strings.Trim(opts.UpstreamURI.Path, "/")
 	codecConfig := opts.CodecConfig
 	upstreamDB := newUpstreamDB(ctx, opts.UpstreamURI)
+
 	group := &Group{
 		kind:        kind,
 		codecConfig: codecConfig,
@@ -162,6 +162,7 @@ func NewGroup(ctx context.Context, opts Options) *Group {
 	for i := range group.queues {
 		group.queues[i] = make(chan *Future, decoderQueueSize)
 	}
+
 	if codecConfig.Protocol == config.ProtocolCsv {
 		selectors, err := columnselector.New(opts.ReplicaConfig.Sink, util.GetOrZero(opts.ReplicaConfig.CaseSensitive))
 		if err != nil {
@@ -169,11 +170,13 @@ func NewGroup(ctx context.Context, opts Options) *Group {
 		}
 		group.selectors = selectors
 	}
+
 	// Storage decodes each file with a decoder built from that file's schema,
 	// so pipelines need no long-lived protocol decoder instance.
 	if kind == source.KindStorage {
 		return group
 	}
+
 	if codecConfig.LargeMessageHandle.EnableClaimCheck() {
 		switch codecConfig.Protocol {
 		case config.ProtocolOpen, config.ProtocolDefault, config.ProtocolCanalJSON, config.ProtocolSimple:
@@ -184,6 +187,7 @@ func NewGroup(ctx context.Context, opts Options) *Group {
 			group.claimCheckStorage = storage
 		}
 	}
+
 	if codecConfig.Protocol == config.ProtocolAvro || codecConfig.Protocol == config.ProtocolDebeziumAvro {
 		schemaM, err := schemamanager.NewConfluentSchemaManager(ctx, codecConfig.AvroConfluentSchemaRegistry, nil)
 		if err != nil {
@@ -191,21 +195,26 @@ func NewGroup(ctx context.Context, opts Options) *Group {
 		}
 		group.schemaManager = schemaM
 	}
+
 	for i := range group.decoders {
 		item, err := codec.NewEventDecoder(ctx, codecConfig, topic, upstreamDB, group.claimCheckStorage, group.schemaManager)
 		if err != nil {
 			log.Panic("consumer event decoder initialization failed", zap.String("protocol", codecConfig.Protocol.String()), zap.Error(err))
 		}
+
 		if sharer, ok := item.(tableInfoSharer); ok {
 			sharer.ShareTableInfo(group.schemas)
 		}
+
 		schema, ok := item.(*simple.Decoder)
 		if !ok {
 			group.decoders[i] = decoder{Decoder: item}
 			continue
 		}
+
 		group.decoders[i] = decoder{Decoder: item, schema: schema}
 	}
+
 	return group
 }
 
@@ -221,9 +230,11 @@ func (d *Group) Close() {
 			log.Warn("consumer upstream database close failed", zap.Error(err))
 		}
 	}
+
 	if d.claimCheckStorage != nil {
 		d.claimCheckStorage.Close()
 	}
+
 	if d.schemaManager != nil {
 		d.schemaManager.Close()
 	}
@@ -235,6 +246,7 @@ func (d *Group) decoderIndex(item *source.Payload) int {
 		d.index++
 		return idx
 	}
+
 	return int(uint32(item.Partition) % uint32(len(d.queues)))
 }
 
@@ -260,6 +272,7 @@ func (d *Group) Add(ctx context.Context, payloads []*source.Payload) error {
 		case d.output <- f:
 		}
 	}
+
 	return nil
 }
 
@@ -269,12 +282,14 @@ func (d *Group) Output() <-chan *Future {
 
 func (d *Group) Run(ctx context.Context) error {
 	g, ctx := errgroup.WithContext(ctx)
+
 	for i, decoder := range d.decoders {
 		futures := d.queues[i]
 		g.Go(func() error {
 			return d.runDecoder(ctx, decoder, futures)
 		})
 	}
+
 	return g.Wait()
 }
 
@@ -287,6 +302,7 @@ func (d *Group) runDecoder(ctx context.Context, decoder decoder, futures <-chan 
 			if err := d.decodeInput(ctx, decoder, f); err != nil {
 				return err
 			}
+
 			f.finish()
 		}
 	}
@@ -299,6 +315,7 @@ func (f *Future) Ready(ctx context.Context) error {
 		return context.Cause(ctx)
 	case <-f.done:
 	}
+
 	return nil
 }
 
@@ -311,6 +328,7 @@ func (d *Group) addRow(f *Future, dml *event.DMLEvent) {
 	if dml == nil {
 		log.Panic("consumer DML decoding failed")
 	}
+
 	f.Events = append(f.Events, dml)
 }
 
@@ -318,37 +336,46 @@ func (d *Group) popWaitingLocked(info *commonType.TableInfo, dst []wokenDML) []w
 	if info == nil || info.TableName.Schema == "" || info.TableName.Table == "" {
 		return dst
 	}
+
 	key := waitingSchemaKey{
 		schema:  info.TableName.Schema,
 		table:   info.TableName.Table,
 		version: info.GetUpdateTS(),
 	}
+
 	items := d.waiting[key]
 	if len(items) == 0 {
 		return dst
 	}
+
 	delete(d.waiting, key)
 	for _, item := range items {
 		dst = append(dst, wokenDML{waitingDML: item, tableInfo: info})
 	}
+
 	return dst
 }
 
 func (d *Group) decodeSimpleRow(schemaDecoder *simple.Decoder, future *Future) {
 	pending := schemaDecoder.TakePendingDML()
+
 	if released := d.schemas.ReleasedWatermark(); released != 0 && pending.CommitTs <= released {
 		return
 	}
+
 	d.waitMu.Lock()
+
 	if released := d.schemas.ReleasedWatermark(); released != 0 && pending.CommitTs <= released {
 		d.waitMu.Unlock()
 		return
 	}
+
 	tableInfo := d.schemas.Read(pending.Schema, pending.Table, pending.SchemaVersion)
 	if tableInfo == nil {
 		if d.waiting == nil {
 			d.waiting = make(map[waitingSchemaKey][]waitingDML)
 		}
+
 		d.nextPendingID++
 		id := d.nextPendingID
 		key := waitingSchemaKey{
@@ -356,6 +383,7 @@ func (d *Group) decodeSimpleRow(schemaDecoder *simple.Decoder, future *Future) {
 			table:   pending.Table,
 			version: pending.SchemaVersion,
 		}
+
 		d.waiting[key] = append(d.waiting[key], waitingDML{
 			id:        id,
 			pending:   pending,
@@ -370,7 +398,9 @@ func (d *Group) decodeSimpleRow(schemaDecoder *simple.Decoder, future *Future) {
 		d.waitMu.Unlock()
 		return
 	}
+
 	d.waitMu.Unlock()
+
 	d.addRow(future, schemaDecoder.DecodeDMLWithInfo(pending, tableInfo))
 }
 
@@ -384,6 +414,7 @@ func (d *Group) decodeSimpleDDL(schemaDecoder *simple.Decoder, future *Future) {
 	} else {
 		d.schemas.WriteTableInfo(ddlEvent.TableInfo)
 	}
+
 	woken = d.popWaitingLocked(ddlEvent.TableInfo, woken)
 	if len(ddlEvent.MultipleTableInfos) > 1 && ddlEvent.MultipleTableInfos[1] != nil {
 		d.schemas.WriteTableInfo(ddlEvent.MultipleTableInfos[1])
@@ -396,6 +427,7 @@ func (d *Group) decodeSimpleDDL(schemaDecoder *simple.Decoder, future *Future) {
 		if dml == nil {
 			log.Panic("consumer DML decoding failed")
 		}
+
 		future.Resolved = append(future.Resolved, ResolvedDML{
 			ID:        item.id,
 			DML:       dml,
@@ -407,10 +439,12 @@ func (d *Group) decodeSimpleDDL(schemaDecoder *simple.Decoder, future *Future) {
 	if ddlEvent.IsBootstrap || ddlEvent.Query == "" {
 		return
 	}
+
 	if !d.claimDDL(ddlEvent) {
 		future.Marker = max(future.Marker, ddlEvent.GetCommitTs())
 		return
 	}
+
 	future.Events = append(future.Events, ddlEvent)
 }
 
@@ -420,25 +454,30 @@ func (d *Group) decodeInput(ctx context.Context, decoder decoder, future *Future
 	if payload.File != nil {
 		return d.decodeStorage(ctx, future)
 	}
+
 	if payload.Watermark != 0 {
 		future.Events = append(future.Events, &event.ResolvedEvent{ResolvedTs: payload.Watermark})
 		return nil
 	}
+
 	decoder.AddKeyValue(payload.Key, payload.Value)
 	for {
 		if err := context.Cause(ctx); err != nil {
 			return err
 		}
+
 		kind, more := decoder.HasNext()
 		if !more {
 			return nil
 		}
+
 		switch kind {
 		case common.MessageTypeRow:
 			if decoder.schema != nil {
 				d.decodeSimpleRow(decoder.schema, future)
 				continue
 			}
+
 			dml := decoder.NextDMLEvent()
 			if dml != nil {
 				d.addRow(future, dml)
@@ -448,14 +487,17 @@ func (d *Group) decodeInput(ctx context.Context, decoder decoder, future *Future
 				d.decodeSimpleDDL(decoder.schema, future)
 				continue
 			}
+
 			ddlEvent := decoder.NextDDLEvent()
 			if ddlEvent.IsBootstrap || ddlEvent.Query == "" {
 				continue
 			}
+
 			if !d.claimDDL(ddlEvent) {
 				future.Marker = max(future.Marker, ddlEvent.GetCommitTs())
 				continue
 			}
+
 			future.Events = append(future.Events, ddlEvent)
 		case common.MessageTypeResolved:
 			future.Events = append(future.Events, &event.ResolvedEvent{ResolvedTs: decoder.NextResolvedEvent()})
@@ -467,15 +509,19 @@ func (d *Group) claimDDL(ddlEvent *event.DDLEvent) bool {
 	if ddlEvent == nil {
 		return false
 	}
+
 	key := ddl.KeyOf(ddlEvent)
+
 	d.ddlMu.Lock()
 	defer d.ddlMu.Unlock()
+
 	if d.seenDDLs == nil {
 		d.seenDDLs = make(map[ddl.Key]struct{})
 	}
 	if _, ok := d.seenDDLs[key]; ok {
 		return false
 	}
+
 	d.seenDDLs[key] = struct{}{}
 	return true
 }
@@ -485,6 +531,7 @@ func (d *Group) decodeStorage(ctx context.Context, future *Future) error {
 	schema := payload.File.Schema
 	table := schema.TableInfo()
 	table.UpdateTS = schema.TableVersion
+
 	if payload.Value == nil {
 		scope := event.InfluenceTypeNormal
 		switch {
@@ -493,6 +540,7 @@ func (d *Group) decodeStorage(ctx context.Context, future *Future) error {
 		case schema.Table == "":
 			scope = event.InfluenceTypeDB
 		}
+
 		future.Events = append(future.Events, &event.DDLEvent{
 			FinishedTs:    schema.TableVersion,
 			Type:          schema.Type,
@@ -504,6 +552,7 @@ func (d *Group) decodeStorage(ctx context.Context, future *Future) error {
 		})
 		return nil
 	}
+
 	var decoder common.Decoder
 	switch d.codecConfig.Protocol {
 	case config.ProtocolCsv:
@@ -518,21 +567,26 @@ func (d *Group) decodeStorage(ctx context.Context, future *Future) error {
 	default:
 		return errors.ErrCodecDecode.GenWithStack("storage consumer protocol is unsupported")
 	}
+
 	for {
 		if err := context.Cause(ctx); err != nil {
 			return err
 		}
+
 		kind, more := decoder.HasNext()
 		if !more {
 			return nil
 		}
+
 		if kind != common.MessageTypeRow {
 			continue
 		}
+
 		dml := decoder.NextDMLEvent()
 		if dml == nil {
 			log.Panic("consumer DML decoding failed")
 		}
+
 		dml.PhysicalTableID = payload.File.TableID
 		dml.TableInfo.UpdateTS = schema.TableVersion
 		d.addRow(future, dml)
@@ -544,17 +598,22 @@ func newUpstreamDB(ctx context.Context, upstreamURI *url.URL) *sql.DB {
 	if dsn == "" {
 		return nil
 	}
+
 	upstreamDB, err := sql.Open("mysql", dsn)
 	if err != nil {
 		log.Panic("consumer upstream database open failed", zap.Error(err))
 	}
+
 	upstreamDB.SetMaxOpenConns(10)
 	upstreamDB.SetMaxIdleConns(10)
 	upstreamDB.SetConnMaxLifetime(10 * time.Minute)
+
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
+
 	if err = upstreamDB.PingContext(ctx); err != nil {
 		log.Panic("consumer upstream database connection failed", zap.Error(err))
 	}
+
 	return upstreamDB
 }

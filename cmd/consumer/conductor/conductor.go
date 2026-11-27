@@ -65,12 +65,14 @@ const (
 // Start runs the ordering loop and the confirmation loop.
 func (c *Conductor) Start(ctx context.Context, tasks <-chan *decode.Future, w *writer.Writer) error {
 	g, ctx := errgroup.WithContext(ctx)
+
 	g.Go(func() error {
 		return c.run(ctx, tasks, w)
 	})
 	g.Go(func() error {
 		return c.confirm(ctx)
 	})
+
 	return g.Wait()
 }
 
@@ -83,18 +85,21 @@ func (c *Conductor) run(ctx context.Context, tasks <-chan *decode.Future, w *wri
 			if err := future.Ready(ctx); err != nil {
 				return err
 			}
+
 			if err := c.acceptFuture(future); err != nil {
 				if ctx.Err() == nil {
 					log.Error("consumer task handling failed", zap.Error(err))
 				}
 				return err
 			}
+
 			if err := c.flush(ctx, w); err != nil {
 				if ctx.Err() == nil {
 					log.Error("consumer DML submission failed", zap.Error(err))
 				}
 				return err
 			}
+
 			c.observeCheckpoint(w.Checkpoint())
 		}
 	}
@@ -102,21 +107,26 @@ func (c *Conductor) run(ctx context.Context, tasks <-chan *decode.Future, w *wri
 
 func (c *Conductor) acceptFuture(future *decode.Future) error {
 	c.marker = max(c.marker, future.Marker)
+
 	for _, pending := range future.Pending {
 		c.addPendingDecode(pending.ID, pending.CommitTs)
 	}
+
 	for _, resolved := range future.Resolved {
 		c.resolvePendingDecode(resolved)
 	}
+
 	return c.acceptBatch(future.Events, future.Payload)
 }
 
 func (c *Conductor) addPendingDecode(id, commitTs uint64) {
 	c.marker = max(c.marker, commitTs)
+
 	if _, alreadyResolved := c.resolvedDecodes[id]; alreadyResolved {
 		delete(c.resolvedDecodes, id)
 		return
 	}
+
 	c.pendingDecodes[id] = commitTs
 	if commitTs != 0 && (c.minPendingDecode == 0 || commitTs < c.minPendingDecode) {
 		c.minPendingDecode = commitTs
@@ -124,18 +134,25 @@ func (c *Conductor) addPendingDecode(id, commitTs uint64) {
 }
 
 func (c *Conductor) resolvePendingDecode(resolved decode.ResolvedDML) {
-	c.queueDML(&dmlTask{dml: resolved.DML, partition: resolved.Partition, offset: resolved.Offset})
+	c.queueDML(&dmlTask{
+		dml:       resolved.DML,
+		partition: resolved.Partition,
+		offset:    resolved.Offset,
+	})
+
 	ts, ok := c.pendingDecodes[resolved.ID]
 	if !ok {
 		c.resolvedDecodes[resolved.ID] = struct{}{}
 		return
 	}
+
 	delete(c.pendingDecodes, resolved.ID)
 	if len(c.pendingDecodes) == 0 {
 		c.minPendingDecode = 0
 		c.releaseSchemas()
 		return
 	}
+
 	if ts == c.minPendingDecode {
 		var minTs uint64
 		for _, pendingTs := range c.pendingDecodes {
@@ -143,6 +160,7 @@ func (c *Conductor) resolvePendingDecode(resolved decode.ResolvedDML) {
 				minTs = earliest(minTs, pendingTs)
 			}
 		}
+
 		c.minPendingDecode = minTs
 		c.releaseSchemas()
 	}
@@ -154,6 +172,7 @@ func (c *Conductor) acceptBatch(events []event.Event, payload *source.Payload) e
 			return err
 		}
 	}
+
 	return nil
 }
 
@@ -166,30 +185,39 @@ func (c *Conductor) accept(e event.Event, payload *source.Payload) error {
 		c.advanceWatermark(e.ResolvedTs, payload.Partition)
 	case *event.DDLEvent:
 		c.marker = max(c.marker, e.GetCommitTs())
+
 		if err := setDDLTableNames(e); err != nil {
 			return err
 		}
+
 		if c.notifier != nil {
 			if tables := ddlProcessedTables(e); len(tables) != 0 {
 				c.notifier.MarkProcessed(tables, e.GetCommitTs())
 			}
 		}
+
 		c.queueDDL(e)
 	case nil:
 		// A source position becomes confirmable once all decoded events from
 		// this payload are registered, including idle resolved/skipped-DDL payloads.
 		if payload.Ack != nil {
 			c.positionsMu.Lock()
+
 			through := c.marker
 			if pending := c.positions[payload.Partition]; len(pending) != 0 {
 				through = max(through, pending[len(pending)-1].through)
 			}
-			c.positions[payload.Partition] = append(c.positions[payload.Partition], sourcePosition{through: through, ack: payload.Ack})
+
+			c.positions[payload.Partition] = append(c.positions[payload.Partition],
+				sourcePosition{through: through, ack: payload.Ack})
 			c.positionsMu.Unlock()
+
 			notifyConfirmation(c.confirmable)
 		}
+
 		c.marker = 0
 	}
+
 	return nil
 }
 
@@ -210,9 +238,11 @@ func (h tableHeap) Less(i, j int) bool {
 	if a.rows[0].dml.CommitTs != b.rows[0].dml.CommitTs {
 		return a.rows[0].dml.CommitTs < b.rows[0].dml.CommitTs
 	}
+
 	if oa, ob := dmlRowOrder(a.rows[0].dml), dmlRowOrder(b.rows[0].dml); oa != ob {
 		return oa < ob
 	}
+
 	return a.tableID < b.tableID
 }
 
@@ -245,12 +275,14 @@ func dmlRowOrder(dml *event.DMLEvent) int {
 	if len(dml.RowTypes) == 0 {
 		return 1
 	}
+
 	first := dml.RowTypes[0]
 	for _, rt := range dml.RowTypes[1:] {
 		if rt != first {
 			return 1
 		}
 	}
+
 	switch first {
 	case common.RowTypeDelete:
 		return 0
@@ -265,6 +297,7 @@ func dmlBefore(a, b *dmlTask) bool {
 	if a.dml.CommitTs != b.dml.CommitTs {
 		return a.dml.CommitTs < b.dml.CommitTs
 	}
+
 	return dmlRowOrder(a.dml) < dmlRowOrder(b.dml)
 }
 
@@ -272,9 +305,11 @@ func insertDML(rows []*dmlTask, item *dmlTask) ([]*dmlTask, bool) {
 	if len(rows) == 0 || !dmlBefore(item, rows[len(rows)-1]) {
 		return append(rows, item), len(rows) == 0
 	}
+
 	index := sort.Search(len(rows), func(i int) bool {
 		return dmlBefore(item, rows[i])
 	})
+
 	return slices.Insert(rows, index, item), index == 0
 }
 
@@ -284,6 +319,7 @@ func (c *Conductor) rowBlockedByDDL(item *dmlTask) bool {
 			return true
 		}
 	}
+
 	return false
 }
 
@@ -297,12 +333,14 @@ func (c *Conductor) syncTable(q *tableQueue) {
 		}
 		return
 	}
+
 	if q.blocked {
 		heap.Remove(&c.blockedHeap, q.heapIndex)
 		q.blocked = false
 		heap.Push(&c.readyHeap, q)
 		return
 	}
+
 	heap.Remove(&c.readyHeap, q.heapIndex)
 	q.blocked = true
 	heap.Push(&c.blockedHeap, q)
@@ -311,6 +349,7 @@ func (c *Conductor) syncTable(q *tableQueue) {
 // queueDML records a decoded row until the writer can accept it.
 func (c *Conductor) queueDML(item *dmlTask) {
 	tableID := item.dml.PhysicalTableID
+
 	q := c.pendingDML[tableID]
 	if q == nil {
 		q = &tableQueue{
@@ -319,6 +358,7 @@ func (c *Conductor) queueDML(item *dmlTask) {
 			blocked: c.rowBlockedByDDL(item),
 		}
 		c.pendingDML[tableID] = q
+
 		if q.blocked {
 			heap.Push(&c.blockedHeap, q)
 		} else {
@@ -326,8 +366,9 @@ func (c *Conductor) queueDML(item *dmlTask) {
 		}
 		return
 	}
-	var headChanged bool
+
 	// A source may deliver an earlier timestamp or split DELETE before resolution.
+	var headChanged bool
 	q.rows, headChanged = insertDML(q.rows, item)
 	if headChanged {
 		c.syncTable(q)
@@ -341,6 +382,7 @@ func (c *Conductor) queueDDL(ddlEvent *event.DDLEvent) {
 		return
 	}
 	c.queuedDDLs[key] = struct{}{}
+
 	ts := ddlEvent.GetCommitTs()
 	if len(c.pendingDDL) == 0 || ts >= c.pendingDDL[len(c.pendingDDL)-1].GetCommitTs() {
 		c.pendingDDL = append(c.pendingDDL, ddlEvent)
@@ -350,12 +392,15 @@ func (c *Conductor) queueDDL(ddlEvent *event.DDLEvent) {
 		})
 		c.pendingDDL = slices.Insert(c.pendingDDL, index, ddlEvent)
 	}
+
+	// Rows already buffered above the DDL commit timestamp wait for it.
 	var blocked []*tableQueue
 	for _, q := range c.readyHeap {
 		if q.rows[0].dml.CommitTs > ts && ddl.BlocksTable(ddlEvent, q.rows[0].dml) {
 			blocked = append(blocked, q)
 		}
 	}
+
 	for _, q := range blocked {
 		heap.Remove(&c.readyHeap, q.heapIndex)
 		q.blocked = true
@@ -372,6 +417,7 @@ func (c *Conductor) nextReady() (*event.DDLEvent, *dmlTask) {
 			return head, nil
 		}
 	}
+
 	return nil, c.nextDML()
 }
 
@@ -379,6 +425,7 @@ func (c *Conductor) hasRowBefore(index int, limit uint64, block *event.DDLEvent)
 	if index >= len(c.readyHeap) {
 		return false
 	}
+
 	row := c.readyHeap[index].rows[0]
 	if row.dml.CommitTs > limit {
 		return false
@@ -386,6 +433,7 @@ func (c *Conductor) hasRowBefore(index int, limit uint64, block *event.DDLEvent)
 	if ddl.BlocksTable(block, row.dml) {
 		return true
 	}
+
 	return c.hasRowBefore(2*index+1, limit, block) || c.hasRowBefore(2*index+2, limit, block)
 }
 
@@ -394,10 +442,12 @@ func (c *Conductor) nextDML() *dmlTask {
 	if len(c.readyHeap) == 0 {
 		return nil
 	}
+
 	head := c.readyHeap[0].rows[0]
 	if head.dml.CommitTs > c.effectiveWatermark() {
 		return nil
 	}
+
 	return head
 }
 
@@ -405,6 +455,7 @@ func (c *Conductor) popDML(row *dmlTask) {
 	q := c.pendingDML[row.dml.PhysicalTableID]
 	q.rows[0] = nil
 	q.rows = q.rows[1:]
+
 	if len(q.rows) == 0 {
 		if q.blocked {
 			heap.Remove(&c.blockedHeap, q.heapIndex)
@@ -414,6 +465,7 @@ func (c *Conductor) popDML(row *dmlTask) {
 		delete(c.pendingDML, q.tableID)
 		return
 	}
+
 	c.syncTable(q)
 }
 
@@ -422,17 +474,20 @@ func (c *Conductor) popDDL() *event.DDLEvent {
 	delete(c.queuedDDLs, ddl.KeyOf(head))
 	c.pendingDDL[0] = nil
 	c.pendingDDL = c.pendingDDL[1:]
+
 	var unblocked []*tableQueue
 	for _, q := range c.blockedHeap {
 		if !c.rowBlockedByDDL(q.rows[0]) {
 			unblocked = append(unblocked, q)
 		}
 	}
+
 	for _, q := range unblocked {
 		heap.Remove(&c.blockedHeap, q.heapIndex)
 		q.blocked = false
 		heap.Push(&c.readyHeap, q)
 	}
+
 	return head
 }
 
@@ -443,6 +498,7 @@ func (c *Conductor) flush(ctx context.Context, w *writer.Writer) error {
 		if err := w.Flush(ctx); err != nil {
 			return err
 		}
+
 		var (
 			rows     int
 			bytes    int64
@@ -456,17 +512,21 @@ func (c *Conductor) flush(ctx context.Context, w *writer.Writer) error {
 				addedDDL = true
 				break
 			}
+
 			if row == nil {
 				break
 			}
+
 			c.popDML(row)
 			if c.validator != nil {
 				c.validator.CheckDML(row.dml, row.partition, row.offset)
 			}
+
 			w.AddDML(row.dml)
 			rows += int(row.dml.Len())
 			bytes += row.dml.Rows.MemoryUsage()
 		}
+
 		if rows == 0 && !addedDDL {
 			return nil
 		}
@@ -514,12 +574,14 @@ func New(reader source.Reader, schemas *codecCommon.TableInfoProvider) *Conducto
 		pendingDML:          make(map[int64]*tableQueue),
 		queuedDDLs:          make(map[ddl.Key]struct{}),
 	}
+
 	if validator, ok := reader.(source.Validator); ok {
 		c.validator = validator
 	}
 	if notifier, ok := reader.(source.SchemaNotifier); ok {
 		c.notifier = notifier
 	}
+
 	return c
 }
 
@@ -527,6 +589,7 @@ func (c *Conductor) effectiveWatermark() uint64 {
 	if c.minPendingDecode != 0 {
 		return min(c.watermark, c.minPendingDecode-1)
 	}
+
 	return c.watermark
 }
 
@@ -545,10 +608,13 @@ func (c *Conductor) advanceWatermark(ts uint64, partition int32) {
 		c.releaseSchemas()
 		return
 	}
+
 	if int(partition) >= len(c.partitionWatermarks) {
 		return
 	}
+
 	c.partitionWatermarks[partition] = max(c.partitionWatermarks[partition], ts)
+
 	watermark := uint64(math.MaxUint64)
 	for _, resolved := range c.partitionWatermarks {
 		if resolved == 0 {
@@ -556,6 +622,7 @@ func (c *Conductor) advanceWatermark(ts uint64, partition int32) {
 		}
 		watermark = min(watermark, resolved)
 	}
+
 	c.watermark = max(c.watermark, watermark)
 	c.releaseSchemas()
 }
@@ -573,6 +640,7 @@ func (c *Conductor) advanceWriter(w *writer.Writer) {
 	if len(c.pendingDDL) != 0 {
 		pending = earliest(pending, c.pendingDDL[0].GetCommitTs())
 	}
+
 	w.Advance(writer.Progress{Watermark: c.effectiveWatermark(), Pending: pending})
 }
 
@@ -582,6 +650,7 @@ func (c *Conductor) observeCheckpoint(checkpoint uint64) {
 	if previous == checkpoint {
 		return
 	}
+
 	notifyConfirmation(c.confirmable)
 }
 
@@ -595,6 +664,7 @@ func (c *Conductor) confirm(ctx context.Context) error {
 			if checkpoint == 0 {
 				continue
 			}
+
 			c.confirmPositions(ctx, checkpoint)
 		}
 	}
@@ -607,6 +677,7 @@ func (c *Conductor) confirmPositions(ctx context.Context, checkpoint uint64) {
 	c.positionsMu.Lock()
 	positions := maps.Clone(c.positions)
 	c.positionsMu.Unlock()
+
 	for partition, pending := range positions {
 		count := sort.Search(len(pending), func(i int) bool {
 			return pending[i].through > checkpoint
@@ -614,9 +685,11 @@ func (c *Conductor) confirmPositions(ctx context.Context, checkpoint uint64) {
 		if count == 0 {
 			continue
 		}
+
 		if err := pending[count-1].ack(ctx); err != nil && ctx.Err() == nil {
 			log.Warn("consumer input confirmation failed", zap.Error(err))
 		}
+
 		c.dropPositions(partition, count)
 	}
 }
@@ -624,10 +697,12 @@ func (c *Conductor) confirmPositions(ctx context.Context, checkpoint uint64) {
 func (c *Conductor) dropPositions(partition int32, count int) {
 	c.positionsMu.Lock()
 	defer c.positionsMu.Unlock()
+
 	pending := c.positions[partition]
 	if count <= 0 || len(pending) == 0 {
 		return
 	}
+
 	count = min(count, len(pending))
 	remaining := len(pending) - count
 	if remaining == 0 {
@@ -636,9 +711,11 @@ func (c *Conductor) dropPositions(partition int32, count int) {
 			c.positions[partition] = nil
 			return
 		}
+
 		c.positions[partition] = pending[:0]
 		return
 	}
+
 	copy(pending, pending[count:])
 	clear(pending[remaining:])
 	c.positions[partition] = pending[:remaining]
@@ -648,6 +725,7 @@ func earliest(current, ts uint64) uint64 {
 	if current == 0 || ts < current {
 		return ts
 	}
+
 	return current
 }
 
@@ -660,6 +738,7 @@ func setDDLTableNames(ddl *event.DDLEvent) error {
 		if err != nil {
 			return errors.WrapError(errors.ErrCodecDecode, err)
 		}
+
 		switch stmt := stmt.(type) {
 		case *ast.CreateTableStmt:
 			// CREATE fences its new table and, for LIKE, the source table.
@@ -680,6 +759,7 @@ func setDDLTableNames(ddl *event.DDLEvent) error {
 			}
 		}
 	}
+
 	return nil
 }
 
@@ -689,6 +769,7 @@ func ddlProcessedTables(ddlEvent *event.DDLEvent) []event.SchemaTableName {
 		if schema == "" && table == "" {
 			return
 		}
+
 		entry := event.SchemaTableName{SchemaName: schema, TableName: table}
 		if !slices.Contains(tables, entry) {
 			tables = append(tables, entry)
@@ -696,6 +777,7 @@ func ddlProcessedTables(ddlEvent *event.DDLEvent) []event.SchemaTableName {
 	}
 	add(ddlEvent.SchemaName, ddlEvent.TableName)
 	add(ddlEvent.ExtraSchemaName, ddlEvent.ExtraTableName)
+
 	// CREATE TABLE ... LIKE ... only fences the referenced table at the DDL
 	// barrier; it does not bump the source table's Storage TableVersion.
 	if model.ActionType(ddlEvent.Type) != model.ActionCreateTable {
@@ -703,11 +785,13 @@ func ddlProcessedTables(ddlEvent *event.DDLEvent) []event.SchemaTableName {
 			add(name.SchemaName, name.TableName)
 		}
 	}
+
 	for _, info := range ddlEvent.MultipleTableInfos {
 		if info != nil {
 			add(info.GetSchemaName(), info.GetTableName())
 		}
 	}
+
 	return tables
 }
 
@@ -716,11 +800,13 @@ func appendDDLTableNames(names []event.SchemaTableName, defaultSchema string, ta
 		if table == nil {
 			continue
 		}
+
 		names = append(names, event.SchemaTableName{
 			SchemaName: cmp.Or(table.Schema.O, defaultSchema),
 			TableName:  table.Name.O,
 		})
 	}
+
 	return names
 }
 

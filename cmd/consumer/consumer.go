@@ -44,15 +44,16 @@ func newConsumer(ctx context.Context, options *options) *consumer {
 	}); err != nil {
 		log.Panic("consumer logger initialization failed", zap.Error(err))
 	}
+
 	version.LogVersionInfo("consumer")
 
 	upstreamURI := parseRequiredURI(options.upstreamURI)
 	sourceType := source.TypeOf(upstreamURI)
-
 	consumerID := options.consumerID
 	if strings.TrimSpace(consumerID) == "" {
 		consumerID = "consumer_" + uuid.NewString()
 	}
+
 	replicaConfig := loadReplicaConfig(options.configFile, upstreamURI)
 	codecConfig := newCodecConfig(upstreamURI, replicaConfig)
 	logConsumerConfig(sourceType, consumerID, upstreamURI, options.downstreamURI, replicaConfig, codecConfig)
@@ -63,11 +64,13 @@ func newConsumer(ctx context.Context, options *options) *consumer {
 		ReplicaConfig: replicaConfig,
 		CodecConfig:   codecConfig,
 	})
+
 	decoder := decode.NewGroup(ctx, decode.Options{
 		CodecConfig:   codecConfig,
 		ReplicaConfig: replicaConfig,
 		UpstreamURI:   upstreamURI,
 	})
+
 	c := &consumer{
 		reader:    reader,
 		decoder:   decoder,
@@ -82,18 +85,23 @@ func newConsumer(ctx context.Context, options *options) *consumer {
 
 func (c *consumer) start(ctx context.Context) error {
 	g, ctx := errgroup.WithContext(ctx)
+
 	g.Go(func() error {
 		return c.readSource(ctx)
 	})
+
 	g.Go(func() error {
 		return c.decoder.Run(ctx)
 	})
+
 	g.Go(func() error {
 		return c.conductor.Start(ctx, c.decoder.Output(), c.writer)
 	})
+
 	g.Go(func() error {
 		return c.writer.Start(ctx)
 	})
+
 	err := g.Wait()
 	c.reader.Close()
 	c.decoder.Close()
@@ -106,6 +114,7 @@ func (c *consumer) readSource(ctx context.Context) error {
 		if err != nil {
 			return err
 		}
+
 		if err := c.decoder.Add(ctx, payloads); err != nil {
 			return err
 		}

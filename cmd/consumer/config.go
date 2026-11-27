@@ -32,14 +32,17 @@ func parseRequiredURI(rawURI string) *url.URL {
 	if rawURI == "" {
 		log.Panic("consumer URI is required", zap.String("rawURI", rawURI))
 	}
+
 	uri, err := url.Parse(rawURI)
 	if err != nil {
 		log.Panic("consumer URI parsing failed", zap.String("rawURI", rawURI), zap.Error(err))
 	}
+
 	uri.Scheme = strings.ToLower(uri.Scheme)
 	if uri.Scheme == "" {
 		log.Panic("consumer URI must include a scheme", zap.String("rawURI", rawURI))
 	}
+
 	return uri
 }
 
@@ -62,10 +65,12 @@ func logConsumerConfig(
 		zap.Bool("enableTiDBExtension", codecConfig.EnableTiDBExtension),
 		zap.Bool("avroEnableWatermark", codecConfig.AvroEnableWatermark),
 	}
+
 	if codecConfig.AvroConfluentSchemaRegistry != "" {
 		fields = append(fields,
 			zap.String("schemaRegistry", util.MaskSensitiveDataInURI(codecConfig.AvroConfluentSchemaRegistry)))
 	}
+
 	switch sourceType {
 	case source.KindKafka:
 		fields = append(fields,
@@ -87,6 +92,7 @@ func logConsumerConfig(
 				zap.Bool("csvOutputOldValue", codecConfig.OutputOldValue))
 		}
 	}
+
 	log.Info("consumer configuration", fields...)
 }
 
@@ -96,13 +102,16 @@ func loadReplicaConfig(configFile string, upstreamURI *url.URL) *config.ReplicaC
 		if err := cmdutil.StrictDecodeFile(configFile, "consumer", replicaConfig); err != nil {
 			log.Panic("consumer configuration loading failed", zap.String("configFile", configFile), zap.Error(err))
 		}
+
 		if _, err := filter.VerifyTableRules(replicaConfig.Filter); err != nil {
 			log.Panic("consumer filter rules are invalid", zap.Error(err))
 		}
 	}
+
 	if err := replicaConfig.ValidateAndAdjust(upstreamURI); err != nil {
 		log.Panic("consumer configuration is invalid", zap.Error(err))
 	}
+
 	return replicaConfig
 }
 
@@ -117,6 +126,7 @@ func newCodecConfig(upstreamURI *url.URL, replicaConfig *config.ReplicaConfig) *
 	if err := codecConfig.Apply(upstreamURI, replicaConfig.Sink); err != nil {
 		log.Panic("consumer codec configuration is invalid", zap.Error(err))
 	}
+
 	if replicaConfig.Integrity != nil {
 		codecConfig.EnableRowChecksum = replicaConfig.Integrity.Enabled()
 	}
@@ -134,14 +144,18 @@ func newCodecConfig(upstreamURI *url.URL, replicaConfig *config.ReplicaConfig) *
 		}
 	case config.ProtocolAvro, config.ProtocolDebeziumAvro:
 		if !codecConfig.EnableTiDBExtension || !codecConfig.AvroEnableWatermark {
-			log.Panic("consumer requires TiDB protocol extensions and Avro watermarks", zap.String("protocol", protocol.String()))
+			log.Panic("consumer requires TiDB protocol extensions and Avro watermarks",
+				zap.String("protocol", protocol.String()))
 		}
+
 		if codecConfig.AvroConfluentSchemaRegistry == "" {
 			log.Panic("consumer requires an Avro schema registry")
 		}
 	}
+
 	if (protocol == config.ProtocolDebezium || protocol == config.ProtocolDebeziumAvro) && codecConfig.DebeziumDisableSchema {
 		log.Panic("consumer requires Debezium schemas")
 	}
+
 	return codecConfig
 }

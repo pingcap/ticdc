@@ -43,6 +43,7 @@ type Payload struct {
 	Key       []byte
 	Value     []byte
 	Offset    int64
+
 	// File is set for storage inputs that decode one file with its schema.
 	File *File
 	// Watermark marks a completed storage scan.
@@ -104,6 +105,7 @@ func TypeOf(uri *url.URL) Kind {
 		config.GCSScheme, config.GSScheme, config.AzblobScheme, config.AzureScheme:
 		return KindStorage
 	}
+
 	log.Panic("consumer upstream scheme is unsupported", zap.String("scheme", uri.Scheme))
 	return ""
 }

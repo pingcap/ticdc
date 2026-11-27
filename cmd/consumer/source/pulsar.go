@@ -8,7 +8,6 @@
 //
 // Unless required by applicable law or agreed to in writing, software
 // distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
@@ -44,11 +43,13 @@ func newPulsarReader(opts Options) *pulsarReader {
 	if strings.Contains(topic, ",") {
 		log.Panic("consumer accepts one Pulsar topic", zap.String("topic", topic))
 	}
+
 	query := upstreamURI.Query()
 	pulsarConfig := config.PulsarConfig{}
 	if replicaConfig.Sink.PulsarConfig != nil {
 		pulsarConfig = *replicaConfig.Sink.PulsarConfig
 	}
+
 	brokerScheme := upstreamURI.Scheme
 	switch brokerScheme {
 	case config.PulsarHTTPScheme:
@@ -56,6 +57,7 @@ func newPulsarReader(opts Options) *pulsarReader {
 	case config.PulsarHTTPSScheme:
 		brokerScheme = "https"
 	}
+
 	clientOptions := pulsar.ClientOptions{
 		URL:                   brokerScheme + "://" + upstreamURI.Host,
 		ConnectionTimeout:     5 * time.Second,
@@ -70,10 +72,12 @@ func newPulsarReader(opts Options) *pulsarReader {
 	if (clientOptions.TLSCertificateFile == "") != (clientOptions.TLSKeyFilePath == "") {
 		log.Panic("pulsar TLS certificate and key must be configured together")
 	}
+
 	oauth2 := config.OAuth2{}
 	if pulsarConfig.OAuth2 != nil {
 		oauth2 = *pulsarConfig.OAuth2
 	}
+
 	for name, value := range map[string]*string{
 		"oauth2-issuer-url": &oauth2.OAuth2IssuerURL, "oauth2-private-key": &oauth2.OAuth2PrivateKey,
 		"oauth2-client-id": &oauth2.OAuth2ClientID, "oauth2-scope": &oauth2.OAuth2Scope, "oauth2-audience": &oauth2.OAuth2Audience,
@@ -82,6 +86,7 @@ func newPulsarReader(opts Options) *pulsarReader {
 			*value = query.Get(name)
 		}
 	}
+
 	token := cmp.Or(query.Get("authentication-token"), util.GetOrZero(pulsarConfig.AuthenticationToken))
 	tokenFile := cmp.Or(query.Get("token-from-file"), util.GetOrZero(pulsarConfig.TokenFromFile))
 	certificate := cmp.Or(query.Get("auth-tls-certificate-path"), util.GetOrZero(pulsarConfig.AuthTLSCertificatePath))
@@ -89,7 +94,9 @@ func newPulsarReader(opts Options) *pulsarReader {
 	if (certificate == "") != (key == "") {
 		log.Panic("pulsar authentication certificate and key must be configured together")
 	}
+
 	useOAuth2 := oauth2.OAuth2IssuerURL != "" || oauth2.OAuth2ClientID != "" || oauth2.OAuth2PrivateKey != "" || oauth2.OAuth2Audience != "" || oauth2.OAuth2Scope != ""
+
 	var authCount int
 	for _, enabled := range []bool{token != "", tokenFile != "", certificate != "", useOAuth2} {
 		if enabled {
@@ -99,6 +106,7 @@ func newPulsarReader(opts Options) *pulsarReader {
 	if authCount > 1 {
 		log.Panic("configure only one Pulsar authentication method")
 	}
+
 	switch {
 	case token != "":
 		clientOptions.Authentication = pulsar.NewAuthenticationToken(token)
@@ -110,6 +118,7 @@ func newPulsarReader(opts Options) *pulsarReader {
 		if oauth2.OAuth2IssuerURL == "" || oauth2.OAuth2ClientID == "" || oauth2.OAuth2PrivateKey == "" || oauth2.OAuth2Audience == "" {
 			log.Panic("pulsar OAuth2 requires issuer, client ID, private key and audience")
 		}
+
 		authentication, err := auth.NewAuthenticationOAuth2WithParams(map[string]string{
 			auth.ConfigParamType: auth.ConfigParamTypeClientCredentials, auth.ConfigParamIssuerURL: oauth2.OAuth2IssuerURL,
 			auth.ConfigParamClientID: oauth2.OAuth2ClientID, auth.ConfigParamKeyFile: oauth2.OAuth2PrivateKey,
@@ -120,14 +129,17 @@ func newPulsarReader(opts Options) *pulsarReader {
 		}
 		clientOptions.Authentication = authentication
 	}
+
 	client, err := pulsar.NewClient(clientOptions)
 	if err != nil {
 		log.Panic("pulsar client initialization failed", zap.Error(err))
 	}
+
 	topics, err := client.TopicPartitions(topic)
 	if err != nil {
 		log.Panic("pulsar partition discovery failed", zap.String("topic", topic), zap.Error(err))
 	}
+
 	consumer, err := client.Subscribe(pulsar.ConsumerOptions{
 		Topic:                             topic,
 		SubscriptionName:                  consumerID,
@@ -142,10 +154,12 @@ func newPulsarReader(opts Options) *pulsarReader {
 	if err != nil {
 		log.Panic("pulsar topic subscription failed", zap.String("topic", topic), zap.String("consumerID", consumerID), zap.Error(err))
 	}
+
 	partitions := make(map[string]int32, len(topics))
 	for id, partitionTopic := range topics {
 		partitions[partitionTopic] = int32(id)
 	}
+
 	return &pulsarReader{
 		client:     client,
 		consumer:   consumer,
@@ -159,13 +173,16 @@ func (c *pulsarReader) Partitions() int32 {
 
 func (c *pulsarReader) Read(ctx context.Context) ([]*Payload, error) {
 	var message pulsar.ConsumerMessage
+
 	select {
 	case <-ctx.Done():
 		return nil, context.Cause(ctx)
 	case message = <-c.consumer.Chan():
 	}
+
 	batch := make([]*Payload, 1, min(len(c.consumer.Chan())+1, readBatchRows))
 	batch[0] = c.toPayload(message)
+
 	for len(batch) < readBatchRows {
 		select {
 		case message = <-c.consumer.Chan():
@@ -174,6 +191,7 @@ func (c *pulsarReader) Read(ctx context.Context) ([]*Payload, error) {
 			return batch, nil
 		}
 	}
+
 	return batch, nil
 }
 
@@ -181,6 +199,7 @@ func (c *pulsarReader) toPayload(message pulsar.ConsumerMessage) *Payload {
 	id := message.ID()
 	key := []byte(message.Key())
 	value := message.Payload()
+
 	return &Payload{
 		Partition: c.partitions[message.Topic()],
 		Key:       key,
@@ -200,8 +219,10 @@ func (c *pulsarReader) confirmPosition(ctx context.Context, id pulsar.MessageID)
 	if err := context.Cause(ctx); err != nil {
 		return err
 	}
+
 	if err := c.consumer.AckIDCumulative(id); err != nil {
 		return errors.WrapError(errors.ErrInternalCheckFailed, err, "confirm Pulsar messages")
 	}
+
 	return nil
 }

@@ -102,10 +102,12 @@ type storageReader struct {
 // newStorageReader opens the storage described by the upstream URI.
 func newStorageReader(ctx context.Context, opts Options) *storageReader {
 	replicaConfig := opts.ReplicaConfig
+
 	storage, err := util.GetExternalStorageWithDefaultTimeout(ctx, opts.UpstreamURI.String())
 	if err != nil {
 		log.Panic("storage client initialization failed", zap.Error(err))
 	}
+
 	reader := &storageReader{
 		storage:        storage,
 		dateSeparator:  util.GetOrZero(replicaConfig.Sink.DateSeparator),
@@ -118,6 +120,7 @@ func newStorageReader(ctx context.Context, opts Options) *storageReader {
 		ddlWatermarks:  make(map[string]uint64),
 		tableIDs:       make(map[storageTableKey]int64),
 	}
+
 	switch reader.scheme {
 	case "file", "local":
 		reader.localPath = opts.UpstreamURI.Path
@@ -156,12 +159,15 @@ func (c *storageReader) scanFiles(ctx context.Context) (map[cloudstorage.DMLPath
 			delete(c.fileIndices, key)
 		}
 	}
+
 	for key, schema := range c.schemas {
 		if key.TableVersion < c.schemaWatermark(key, schema) {
 			delete(c.schemas, key)
 		}
 	}
+
 	files := make(map[cloudstorage.DMLPathKey]map[cloudstorage.FileIndexKey]storageIndexRange)
+
 	var err error
 	if c.localPath != "" || c.s3Client != nil {
 		err = c.discoverDir(ctx, "", 0, files)
@@ -171,6 +177,7 @@ func (c *storageReader) scanFiles(ctx context.Context) (map[cloudstorage.DMLPath
 	if err != nil {
 		return nil, err
 	}
+
 	return files, nil
 }
 
@@ -180,12 +187,14 @@ func (c *storageReader) walkStorage(
 ) error {
 	return c.storage.WalkDir(ctx, &storeapi.WalkOption{SubDir: ""}, func(filePath string, _ int64) error {
 		normalized := strings.TrimPrefix(filePath, "/")
+
 		switch {
 		case cloudstorage.IsSchemaFile(normalized):
 			key, added, err := c.readSchema(ctx, normalized)
 			if err != nil {
 				return err
 			}
+
 			if added {
 				files[cloudstorage.NewSchemaFileDMLPathKey(key)] = nil
 			}
@@ -194,6 +203,7 @@ func (c *storageReader) walkStorage(
 				return err
 			}
 		}
+
 		return nil
 	})
 }
@@ -208,6 +218,7 @@ func (c *storageReader) discoverDir(
 	if err != nil {
 		return err
 	}
+
 	var skipMetaDir bool
 	if depth > 0 && slices.Contains(dirs, "meta") {
 		meta := path.Join(dir, "meta")
@@ -215,9 +226,11 @@ func (c *storageReader) discoverDir(
 		if err != nil {
 			return err
 		}
+
 		indices := make([]string, 0, len(names))
 		for _, name := range names {
 			fullPath := path.Join(meta, name)
+
 			switch {
 			case strings.HasSuffix(name, ".index"):
 				indices = append(indices, fullPath)
@@ -226,11 +239,13 @@ func (c *storageReader) discoverDir(
 				if err != nil {
 					return err
 				}
+
 				if added {
 					files[cloudstorage.NewSchemaFileDMLPathKey(key)] = nil
 				}
 			}
 		}
+
 		if len(indices) > 0 {
 			matched := false
 			for _, indexPath := range indices {
@@ -238,29 +253,36 @@ func (c *storageReader) discoverDir(
 				if err != nil {
 					return err
 				}
+
 				if ok {
 					matched = true
 				}
 			}
+
 			if matched {
 				return nil
 			}
 		}
+
 		// Keep descending into "meta" when it is a table under a database (depth == 1 with
 		// subdirs) or a database at root (depth == 0); skip pure metadata directories.
 		skipMetaDir = depth >= 2 || len(metaDirs) == 0
 	}
+
 	if depth == storageDiscoveryDepth {
 		return nil
 	}
+
 	for _, child := range dirs {
 		if child == "meta" && skipMetaDir {
 			continue
 		}
+
 		if err := c.discoverDir(ctx, path.Join(dir, child), depth+1, files); err != nil {
 			return err
 		}
 	}
+
 	return nil
 }
 
@@ -275,30 +297,36 @@ func (c *storageReader) addIndex(
 	if err := key.ParseIndexFilePath(c.dateSeparator, indexPath); err != nil {
 		return false, nil
 	}
+
 	if (c.sourceCheckpoint > 0 && key.TableVersion > c.sourceCheckpoint) ||
 		key.TableVersion < c.schemaWatermark(key.SchemaPathKey, c.schemas[key.SchemaPathKey]) {
 		return true, nil
 	}
+
 	index, err := c.readIndex(ctx, indexPath)
 	if err != nil {
 		return false, err
 	}
+
 	indices := c.fileIndices[key]
 	if indices == nil {
 		indices = make(map[cloudstorage.FileIndexKey]uint64)
 		c.fileIndices[key] = indices
 	}
+
 	previous := indices[index.FileIndexKey]
 	indices[index.FileIndexKey] = max(previous, index.Idx)
 	if index.Idx > previous {
 		if files[key] == nil {
 			files[key] = make(map[cloudstorage.FileIndexKey]storageIndexRange)
 		}
+
 		files[key][index.FileIndexKey] = storageIndexRange{
 			start: previous + 1,
 			end:   index.Idx,
 		}
 	}
+
 	return true, nil
 }
 
@@ -312,6 +340,7 @@ func (c *storageReader) listEntries(ctx context.Context, dir string) ([]string, 
 		if err != nil {
 			return nil, nil, errors.WrapError(errors.ErrExternalStorageAPI, err)
 		}
+
 		dirs := make([]string, 0, len(entries))
 		files := make([]string, 0, len(entries))
 		for _, entry := range entries {
@@ -321,41 +350,51 @@ func (c *storageReader) listEntries(ctx context.Context, dir string) ([]string, 
 				files = append(files, entry.Name())
 			}
 		}
+
 		slices.Sort(dirs)
 		slices.Sort(files)
+
 		return dirs, files, nil
 	}
+
 	prefix := c.s3Prefix(dir)
 	request := &s3.ListObjectsV2Input{
 		Bucket:    aws.String(c.bucket),
 		Prefix:    aws.String(prefix),
 		Delimiter: aws.String("/"),
 	}
+
 	var dirs, files []string
 	for {
 		output, err := c.s3Client.ListObjectsV2(ctx, request)
 		if err != nil {
 			return nil, nil, errors.WrapError(errors.ErrExternalStorageAPI, err)
 		}
+
 		for _, commonPrefix := range output.CommonPrefixes {
 			name := strings.Trim(strings.TrimPrefix(aws.ToString(commonPrefix.Prefix), prefix), "/")
 			if name != "" {
 				dirs = append(dirs, name)
 			}
 		}
+
 		for _, object := range output.Contents {
 			name := strings.TrimPrefix(aws.ToString(object.Key), prefix)
 			if name != "" && !strings.Contains(name, "/") {
 				files = append(files, name)
 			}
 		}
+
 		if !aws.ToBool(output.IsTruncated) {
 			break
 		}
+
 		request.ContinuationToken = output.NextContinuationToken
 	}
+
 	slices.Sort(dirs)
 	slices.Sort(files)
+
 	return dirs, files, nil
 }
 
@@ -378,33 +417,43 @@ func (c *storageReader) readIndex(ctx context.Context, path string) (cloudstorag
 func (c *storageReader) readSchema(ctx context.Context, path string) (cloudstorage.SchemaPathKey, bool, error) {
 	var key cloudstorage.SchemaPathKey
 	key.Parse(path)
-	if (c.sourceCheckpoint > 0 && key.TableVersion > c.sourceCheckpoint) || c.schemas[key] != nil || key.TableVersion < c.schemaWatermark(key, nil) {
+
+	if (c.sourceCheckpoint > 0 && key.TableVersion > c.sourceCheckpoint) ||
+		c.schemas[key] != nil ||
+		key.TableVersion < c.schemaWatermark(key, nil) {
 		return key, false, nil
 	}
+
 	data, err := c.storage.ReadFile(ctx, path)
 	if err != nil {
 		return key, false, err
 	}
+
 	var file cloudstorage.SchemaFile
 	if err := json.Unmarshal(data, &file); err != nil {
 		return key, false, errors.WrapError(errors.ErrCodecDecode, err)
 	}
+
 	checksumText := strings.TrimSuffix(path[strings.LastIndex(path, "_")+1:], ".json")
 	checksum, err := strconv.ParseUint(checksumText, 10, 32)
 	if err != nil {
 		return key, false, errors.WrapError(errors.ErrStorageSinkInvalidFileName, err)
 	}
+
 	if file.Checksum() != uint32(checksum) || key.TableVersion != file.TableVersion {
 		return key, false, errors.ErrCodecDecode.FastGen("Storage schema checksum or table version does not match its path")
 	}
+
 	if file.Schema != "" {
 		if realKey := common.QuoteSchema(file.Schema, file.Table); realKey != key.GetKey() {
 			c.pathTableKeys[key.GetKey()] = realKey
 		}
 	}
+
 	if file.TableVersion < c.schemaWatermark(key, &file) {
 		return key, false, nil
 	}
+
 	c.schemas[key] = &file
 	return key, true, nil
 }
@@ -420,18 +469,27 @@ func (c *storageReader) Read(ctx context.Context) ([]*Payload, error) {
 				// The metadata checkpoint covers every file in the completed scan.
 				return []*Payload{{Watermark: c.sourceCheckpoint}}, nil
 			}
-			scanStart := time.Now()
+			if c.scanned {
+				select {
+				case <-ctx.Done():
+					return nil, context.Cause(ctx)
+				case <-time.After(storageScanInterval):
+				}
+			}
+
+			start := time.Now()
 			if err := c.scanInputs(ctx); err != nil {
 				return nil, err
 			}
+			duration := time.Since(start)
+
 			if len(c.ranges) == 0 && c.sourceCheckpoint > c.watermark {
 				c.watermark = c.sourceCheckpoint
-				// Report a completed scan: every file below checkpointTs is dispatched.
 				log.Info("storage scan done",
 					zap.Uint64("checkpointTs", c.sourceCheckpoint),
 					zap.Uint64("files", c.dispatchedFiles),
 					zap.Int("tables", len(c.schemas)),
-					zap.Duration("cost", time.Since(scanStart)))
+					zap.Duration("duration", duration))
 				c.dispatchedFiles = 0
 				return []*Payload{{Watermark: c.sourceCheckpoint}}, nil
 			}
@@ -441,6 +499,7 @@ func (c *storageReader) Read(ctx context.Context) ([]*Payload, error) {
 		key := item.key
 		schema := c.schemas[key.SchemaPathKey]
 		ddlWatermark := c.schemaWatermark(key.SchemaPathKey, schema)
+
 		switch {
 		case item.index.Idx < item.end && key.TableVersion >= ddlWatermark:
 			c.ranges[0].index.Idx++
@@ -449,88 +508,104 @@ func (c *storageReader) Read(ctx context.Context) ([]*Payload, error) {
 			c.ranges = c.ranges[1:]
 			c.dispatchedFiles++
 		}
+
 		if schema == nil {
-			log.Panic("storage DML file has no matching schema", zap.String("schema", key.Schema), zap.String("table", key.Table), zap.Uint64("tableVersion", key.TableVersion))
+			log.Panic("storage DML file has no matching schema",
+				zap.String("schema", key.Schema),
+				zap.String("table", key.Table),
+				zap.Uint64("tableVersion", key.TableVersion))
 		}
+
 		if key.IsSchemaFileDMLPathKey() && (schema.Query == "" || key.TableVersion <= ddlWatermark) {
 			continue
 		}
+
 		if key.TableVersion < ddlWatermark {
 			c.fileIndices[key][item.index.FileIndexKey] = max(item.index.Idx, item.end)
 			continue
 		}
+
 		if key.IsSchemaFileDMLPathKey() {
 			return []*Payload{{File: &File{Schema: schema}}}, nil
 		}
+
 		schemaName, tableName := key.Schema, key.Table
 		if schema.Schema != "" {
 			schemaName, tableName = schema.Schema, schema.Table
 		}
+
 		idKey := storageTableKey{
 			schema:    schemaName,
 			table:     tableName,
 			partition: key.PartitionNum,
 		}
+
 		tableID := c.tableIDs[idKey]
 		if tableID == 0 {
 			c.nextTableID++
 			tableID = c.nextTableID
 			c.tableIDs[idKey] = tableID
 		}
+
 		data, err := c.readDMLFile(ctx, item, schema, tableID)
 		if err != nil {
 			return nil, err
 		}
+
 		return []*Payload{data}, nil
 	}
 }
 
 func (c *storageReader) scanInputs(ctx context.Context) error {
-	if c.scanned {
-		select {
-		case <-ctx.Done():
-			return context.Cause(ctx)
-		case <-time.After(storageScanInterval):
-		}
-	}
 	c.scanned = true
+
 	exists, err := c.storage.FileExists(ctx, "metadata")
 	if err != nil {
 		return err
 	}
+
 	if exists {
 		data, err := c.storage.ReadFile(ctx, "metadata")
 		if err != nil {
 			return err
 		}
+
 		var metadata storageMetadata
 		if err := json.Unmarshal(data, &metadata); err != nil {
 			return errors.WrapError(errors.ErrCodecDecode, err)
 		}
+
 		c.sourceCheckpoint = max(c.sourceCheckpoint, metadata.CheckpointTs)
 	}
+
 	files, err := c.scanFiles(ctx)
 	if err != nil {
 		return err
 	}
+
 	keys := slices.SortedFunc(maps.Keys(files), cloudstorage.CompareDMLPathKey)
 	for _, key := range keys {
 		if key.IsSchemaFileDMLPathKey() {
 			c.ranges = append(c.ranges, storageRange{key: key})
 			continue
 		}
+
 		indexKeys := slices.SortedFunc(maps.Keys(files[key]), func(a, b cloudstorage.FileIndexKey) int {
-			if c := cmp.Compare(a.DispatcherID, b.DispatcherID); c != 0 {
-				return c
+			if byDispatcher := cmp.Compare(a.DispatcherID, b.DispatcherID); byDispatcher != 0 {
+				return byDispatcher
 			}
+
 			if a.EnableTableAcrossNodes == b.EnableTableAcrossNodes {
 				return 0
 			}
+
 			if a.EnableTableAcrossNodes {
 				return 1
 			}
+
 			return -1
 		})
+
 		for _, indexKey := range indexKeys {
 			span := files[key][indexKey]
 			c.ranges = append(c.ranges, storageRange{
@@ -543,16 +618,20 @@ func (c *storageReader) scanInputs(ctx context.Context) error {
 			})
 		}
 	}
+
 	return nil
 }
 
 func (c *storageReader) readDMLFile(ctx context.Context, item storageRange, schema *cloudstorage.SchemaFile, tableID int64) (*Payload, error) {
 	path := item.key.GenerateDMLFilePath(&item.index, c.fileExtension, c.fileIndexWidth)
+
 	data, err := c.storage.ReadFile(ctx, path)
 	if err != nil {
 		return nil, err
 	}
+
 	c.fileIndices[item.key][item.index.FileIndexKey] = item.index.Idx
+
 	return &Payload{
 		Value: data,
 		File:  &File{Schema: schema, TableID: tableID},
@@ -593,10 +672,12 @@ func newS3Client(ctx context.Context, uri *url.URL) *s3.Client {
 			sessionToken,
 		)))
 	}
+
 	cfg, err := awsconfig.LoadDefaultConfig(ctx, cfgOpts...)
 	if err != nil {
 		log.Panic("storage client initialization failed", zap.Error(err))
 	}
+
 	var options []func(*s3.Options)
 	endpoint := cmp.Or(values.Get("s3.endpoint"), values.Get("endpoint"))
 	if endpoint != "" {
@@ -605,16 +686,20 @@ func newS3Client(ctx context.Context, uri *url.URL) *s3.Client {
 			o.UsePathStyle = true
 		})
 	}
+
 	client := s3.NewFromConfig(cfg, options...)
+
 	// Only an AWS bucket served without an endpoint needs region detection.
 	provider := cmp.Or(values.Get("s3.provider"), values.Get("provider"))
 	if region != "" || (provider != "aws" && (provider != "" || endpoint != "")) {
 		return client
 	}
+
 	detected, err := manager.GetBucketRegion(ctx, client, uri.Host)
 	if err != nil {
 		log.Panic("detect Storage bucket region failed", zap.String("bucket", uri.Host), zap.Error(err))
 	}
+
 	if detected == "" || detected == cfg.Region {
 		return client
 	}

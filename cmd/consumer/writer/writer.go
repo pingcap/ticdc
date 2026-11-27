@@ -57,6 +57,7 @@ func New(ctx context.Context, opts Options) *Writer {
 	if err != nil {
 		log.Panic("consumer downstream sink initialization failed", zap.Error(err))
 	}
+
 	return &Writer{
 		target:    target,
 		mutations: make(map[mutationKey]bool),
@@ -67,21 +68,26 @@ func New(ctx context.Context, opts Options) *Writer {
 // Start runs the downstream sink until ctx is cancelled.
 func (w *Writer) Start(ctx context.Context) error {
 	g, ctx := errgroup.WithContext(ctx)
+
 	g.Go(func() error {
 		err := w.target.Run(ctx)
 		if ctx.Err() != nil {
 			return context.Cause(ctx)
 		}
+
 		if err != nil {
 			log.Error("consumer downstream sink failed", zap.Error(err))
 			return err
 		}
+
 		log.Panic("consumer downstream sink stopped unexpectedly")
 		return nil
 	})
+
 	<-ctx.Done()
 	// Close also wakes sinks whose input channel is blocked while idle.
 	w.target.Close()
+
 	return g.Wait()
 }
 
@@ -137,9 +143,11 @@ func (w *Writer) writeDDL(ctx context.Context, block *event.DDLEvent) error {
 	if err := context.Cause(ctx); err != nil {
 		return err
 	}
+
 	if err := w.target.FlushDMLBeforeBlock(block); err != nil {
 		return err
 	}
+
 	return w.target.WriteBlockEvent(block)
 }
 
@@ -157,19 +165,27 @@ func (w *Writer) flushDDL(ctx context.Context) error {
 			w.pendingDDL = w.pendingDDL[1:]
 			continue
 		}
+
 		w.pendingDDL[0] = nil
 		w.pendingDDL = w.pendingDDL[1:]
+
 		if err := w.writeDDL(ctx, block); err != nil {
 			if ctx.Err() == nil {
-				log.Error("consumer DDL write failed", zap.String("schema", block.SchemaName), zap.String("table", block.TableName), zap.Uint64("commitTs", block.GetCommitTs()), zap.Error(err))
+				log.Error("consumer DDL write failed",
+					zap.String("schema", block.SchemaName),
+					zap.String("table", block.TableName),
+					zap.Uint64("commitTs", block.GetCommitTs()),
+					zap.Error(err))
 			}
 			return err
 		}
+
 		if w.ddlWrites == nil {
 			w.ddlWrites = make(map[ddl.Key]bool)
 		}
 		w.ddlWrites[key] = true
 	}
+
 	return nil
 }
 
@@ -180,15 +196,19 @@ func (w *Writer) Flush(ctx context.Context) error {
 		if err := context.Cause(ctx); err != nil {
 			return err
 		}
+
 		items := w.selectBatch()
 		if err := w.writeBatch(ctx, items); err != nil {
 			return err
 		}
+
 		w.removeDML(items)
 	}
+
 	if err := w.flushDDL(ctx); err != nil {
 		return err
 	}
+
 	w.advanceCheckpoint()
 	return nil
 }
@@ -198,6 +218,7 @@ func (w *Writer) selectBatch() []*event.DMLEvent {
 	blocked := make(map[int64]bool)
 	tables := make(map[int64]*event.DMLEvent)
 	items := make([]*event.DMLEvent, 0, min(batchRows, len(w.pendingDML)))
+
 	var (
 		rows  int
 		bytes int64
@@ -207,39 +228,49 @@ func (w *Writer) selectBatch() []*event.DMLEvent {
 		if blocked[id] {
 			continue
 		}
+
 		if previous := tables[id]; previous != nil && !sameTableSchema(previous.TableInfo, dml.TableInfo) {
 			blocked[id] = true
 			continue
 		}
+
 		tables[id] = dml
 		rows += int(dml.Len())
 		bytes += dml.Rows.MemoryUsage()
 		items = append(items, dml)
+
 		if rows >= batchRows || bytes >= batchBytes {
 			break
 		}
 	}
+
 	return items
 }
 
 func (w *Writer) removeDML(items []*event.DMLEvent) {
 	remaining := w.pendingDML[:0]
+
 	dropped := 0
 	for _, dml := range w.pendingDML {
 		if dropped < len(items) && dml == items[dropped] {
 			dropped++
 			continue
 		}
+
 		remaining = append(remaining, dml)
 	}
+
 	clear(w.pendingDML[len(remaining):])
 	w.pendingDML = remaining
 }
 
 func sameTableSchema(a, b *common.TableInfo) bool {
-	return a == b || (a != nil && b != nil && a.GetUpdateTS() == b.GetUpdateTS() &&
-		a.GetSchemaName() == b.GetSchemaName() && a.GetTableName() == b.GetTableName() &&
-		reflect.DeepEqual(a.GetColumns(), b.GetColumns()) && reflect.DeepEqual(a.GetIndices(), b.GetIndices()))
+	return a == b || (a != nil && b != nil &&
+		a.GetUpdateTS() == b.GetUpdateTS() &&
+		a.GetSchemaName() == b.GetSchemaName() &&
+		a.GetTableName() == b.GetTableName() &&
+		reflect.DeepEqual(a.GetColumns(), b.GetColumns()) &&
+		reflect.DeepEqual(a.GetIndices(), b.GetIndices()))
 }
 
 // writeBatch submits the batch and waits until the sink has flushed every event.
@@ -252,23 +283,29 @@ func (w *Writer) writeBatch(ctx context.Context, items []*event.DMLEvent) error 
 			dropped = append(dropped, dml)
 			continue
 		}
+
 		events = append(events, filtered)
 	}
+
 	defer func() {
 		for _, dml := range dropped {
 			dml.PostFlush()
 		}
 	}()
+
 	if len(events) == 0 {
 		return nil
 	}
+
 	flushed := make(chan struct{})
 	remaining := &atomic.Int64{}
 	remaining.Store(int64(len(events)))
+
 	for _, dml := range events {
 		if err := context.Cause(ctx); err != nil {
 			return err
 		}
+
 		dml.AddPostFlushFunc(func() {
 			if remaining.Add(-1) == 0 {
 				close(flushed)
@@ -276,11 +313,13 @@ func (w *Writer) writeBatch(ctx context.Context, items []*event.DMLEvent) error 
 		})
 		w.target.AddDMLEvent(dml)
 	}
+
 	select {
 	case <-ctx.Done():
 		return context.Cause(ctx)
 	case <-flushed:
 	}
+
 	return nil
 }
 
@@ -290,6 +329,7 @@ func (w *Writer) advanceCheckpoint() {
 	if w.pending != 0 {
 		through = min(w.watermark, w.pending-1)
 	}
+
 	lower := func(ts uint64) {
 		if ts != 0 {
 			through = min(through, ts-1)
@@ -301,11 +341,13 @@ func (w *Writer) advanceCheckpoint() {
 	for _, block := range w.pendingDDL {
 		lower(block.GetCommitTs())
 	}
+
 	previous := w.checkpoint
 	w.checkpoint = max(w.checkpoint, through)
 	if w.checkpoint > previous && w.target != nil {
 		w.target.AddCheckpointTs(w.checkpoint)
 	}
+
 	for key := range w.mutations {
 		if key.commitTs > 0 && key.commitTs <= w.checkpoint {
 			delete(w.mutations, key)
@@ -323,21 +365,26 @@ func (w *Writer) filterRows(dml *event.DMLEvent) *event.DMLEvent {
 	if dml.CommitTs <= w.checkpoint {
 		return nil
 	}
+
 	if len(dml.TableInfo.GetOrderedHandleKeyColumnIDs()) == 0 {
 		return dml
 	}
+
 	keep := make([]bool, 0, dml.Len())
 	var (
 		kept         int
 		physicalRows int
 	)
+
 	dml.Rewind()
 	defer dml.Rewind()
+
 	for row, ok := dml.GetNextRow(); ok; row, ok = dml.GetNextRow() {
 		handleRow := row.Row
 		if row.RowType != common.RowTypeInsert {
 			handleRow = row.PreRow
 		}
+
 		var handle []byte
 		for _, id := range dml.TableInfo.GetOrderedHandleKeyColumnIDs() {
 			offset := dml.TableInfo.MustGetColumnOffsetByID(id)
@@ -346,10 +393,12 @@ func (w *Writer) filterRows(dml *event.DMLEvent) *event.DMLEvent {
 				handle = nil
 				break
 			}
+
 			valueString := common.ColumnValueString(value)
 			handle = binary.AppendUvarint(handle, uint64(len(valueString)))
 			handle = append(handle, valueString...)
 		}
+
 		retain := true
 		if len(handle) != 0 {
 			key := mutationKey{
@@ -367,6 +416,7 @@ func (w *Writer) filterRows(dml *event.DMLEvent) *event.DMLEvent {
 				w.mutations[key] = true
 			}
 		}
+
 		keep = append(keep, retain)
 		if retain {
 			kept++
@@ -376,24 +426,28 @@ func (w *Writer) filterRows(dml *event.DMLEvent) *event.DMLEvent {
 			}
 		}
 	}
+
 	if kept == len(keep) {
 		return dml
 	}
 	if kept == 0 {
 		return nil
 	}
+
 	filtered := event.NewDMLEvent(dml.DispatcherID, dml.PhysicalTableID, dml.StartTs, dml.CommitTs, dml.TableInfo)
 	filtered.Version, filtered.Seq, filtered.Epoch = dml.Version, dml.Seq, dml.Epoch
 	filtered.ReplicatingTs, filtered.TableInfoVersion, filtered.ApproximateSize = dml.ReplicatingTs, dml.TableInfoVersion, dml.ApproximateSize
 	filtered.Rows = chunk.NewChunkWithCapacity(dml.TableInfo.GetFieldSlice(), physicalRows)
 	filtered.AddPostFlushFunc(dml.PostFlush)
 	filtered.AddPostEnqueueFunc(dml.PostEnqueue)
+
 	var physicalOffset int
 	for index, retain := range keep {
 		width := 1
 		if dml.RowTypes[physicalOffset] == common.RowTypeUpdate {
 			width = 2
 		}
+
 		if retain {
 			filtered.Rows.Append(dml.Rows, dml.PreviousTotalOffset+physicalOffset, dml.PreviousTotalOffset+physicalOffset+width)
 			filtered.RowTypes = append(filtered.RowTypes, dml.RowTypes[physicalOffset:physicalOffset+width]...)
@@ -405,7 +459,9 @@ func (w *Writer) filterRows(dml *event.DMLEvent) *event.DMLEvent {
 			}
 			filtered.Length++
 		}
+
 		physicalOffset += width
 	}
+
 	return filtered
 }
