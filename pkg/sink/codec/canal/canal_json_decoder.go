@@ -284,7 +284,10 @@ func (d *decoder) assembleHandleKeyOnlyDMLEvent(
 		result.Data = []map[string]interface{}{data}
 	}
 
-	return d.decodeDMLMessage(result)
+	// This layout describes the snapshot rows, where enum and set columns are
+	// labels instead of the index or bitmask used on the wire, so it must not
+	// become the shared layout of ordinary messages.
+	return d.canalJSONMessage2DMLEvent(result, false)
 }
 
 // NextDMLMessage implements the Decoder interface
@@ -333,11 +336,13 @@ func (d *decoder) decodeDMLMessage(msg canalJSONMessageInterface) *commonEvent.D
 			return d.assembleClaimCheckDMLEvent(ctx, message.Extensions.ClaimCheckLocation)
 		}
 	}
-	return d.canalJSONMessage2DMLEvent(msg)
+	return d.canalJSONMessage2DMLEvent(msg, true)
 }
 
-func (d *decoder) canalJSONMessage2DMLEvent(msg canalJSONMessageInterface) *commonEvent.DMLEvent {
-	tableInfo := d.queryTableInfo(msg)
+func (d *decoder) canalJSONMessage2DMLEvent(
+	msg canalJSONMessageInterface, cacheable bool,
+) *commonEvent.DMLEvent {
+	tableInfo := d.queryTableInfo(msg, cacheable)
 
 	result := new(commonEvent.DMLEvent)
 	result.TableInfo = tableInfo
@@ -554,7 +559,9 @@ func (d *decoder) ShareTableInfo(cache *common.TableInfoProvider) {
 	d.cache = cache
 }
 
-func (d *decoder) queryTableInfo(msg canalJSONMessageInterface) *commonType.TableInfo {
+func (d *decoder) queryTableInfo(
+	msg canalJSONMessageInterface, cacheable bool,
+) *commonType.TableInfo {
 	schemaName := *msg.getSchema()
 	tableName := *msg.getTable()
 
@@ -564,7 +571,7 @@ func (d *decoder) queryTableInfo(msg canalJSONMessageInterface) *commonType.Tabl
 	}
 	tableInfo = newTableInfo(d.cache, msg)
 	d.cache.AddBlockTableID(schemaName, tableName, tableInfo.TableName.TableID)
-	if isCacheableCanalTableInfo(msg) {
+	if cacheable && isCacheableCanalTableInfo(msg) {
 		d.cache.Write(schemaName, tableName, version, tableInfo)
 	}
 	return tableInfo

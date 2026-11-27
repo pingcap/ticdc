@@ -255,7 +255,7 @@ func TestGetDDLActionType(t *testing.T) {
 	//require.Equal(t, timodel.ActionType(ddl.Type), GetDDLActionType(modifySchemaCharsetSQL))
 }
 
-func TestGetBlockedTablesForRenameVariants(t *testing.T) {
+func TestRenameBlockedTables(t *testing.T) {
 	allocator := NewTableInfoProvider()
 	allocator.AddBlockTableID("test", "t1", 1)
 	allocator.AddBlockTableID("test", "t2", 2)

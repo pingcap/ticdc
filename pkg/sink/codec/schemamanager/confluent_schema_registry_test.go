@@ -358,7 +358,7 @@ func TestHTTPRetryReturnsServerError(t *testing.T) {
 	_ = resp.Body.Close()
 }
 
-func TestSchemaCacheBoundsDecodeEntriesWithoutEvictingEncodeEntries(t *testing.T) {
+func TestDecodeCacheBound(t *testing.T) {
 	cache := newSchemaCache()
 	var err error
 	cache.decodeEntries, err = lru.New(2)

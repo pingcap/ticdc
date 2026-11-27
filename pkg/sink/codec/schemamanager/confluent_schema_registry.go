@@ -202,8 +202,6 @@ func (m *confluentSchemaManager) Register(
 		log.Error(
 			"Failed to register schema to the Registry, HTTP error",
 			zap.Int("status", resp.StatusCode),
-			zap.ByteString("requestBody", payload),
-			zap.ByteString("responseBody", body),
 		)
 		return id, errors.ErrAvroSchemaAPIError.GenWithStackByArgs(
 			"register schema failed with status " + strconv.Itoa(resp.StatusCode),

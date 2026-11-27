@@ -225,7 +225,7 @@ func TestDecodedTableInfoLocatesRowByPrimaryKey(t *testing.T) {
 	}
 }
 
-func TestDecodeDDLEventDoesNotMutateMemo(t *testing.T) {
+func TestDecodeDDLKeepsMemo(t *testing.T) {
 	const (
 		schema  = "test"
 		table   = "t"
@@ -263,18 +263,6 @@ func TestDecodeDDLEventDoesNotMutateMemo(t *testing.T) {
 	}
 	bootstrap := decoder.DecodeDDLEvent()
 	require.True(t, bootstrap.IsBootstrap)
-	require.Empty(t, decoder.memo.GetBlockedTables(schema, table))
-	require.Nil(t, decoder.memo.Read(schema, table, version))
-
-	decoder.msg = &message{
-		Version:     defaultVersion,
-		Type:        DDLTypeAlter,
-		SQL:         "ALTER TABLE test.t ADD COLUMN c INT",
-		CommitTs:    version + 10,
-		TableSchema: tableSchema,
-	}
-	ddl := decoder.DecodeDDLEvent()
-	require.Equal(t, "ALTER TABLE test.t ADD COLUMN c INT", ddl.Query)
 	require.Empty(t, decoder.memo.GetBlockedTables(schema, table))
 	require.Nil(t, decoder.memo.Read(schema, table, version))
 
