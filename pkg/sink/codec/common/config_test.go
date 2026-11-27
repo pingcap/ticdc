@@ -24,6 +24,72 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestDebeziumReplaceNullWithDefaultConfig(t *testing.T) {
+	for _, protocol := range []config.Protocol{config.ProtocolDebezium, config.ProtocolDebeziumAvro} {
+		t.Run(protocol.String(), func(t *testing.T) {
+			for _, tc := range []struct {
+				name        string
+				fileValue   string
+				query       string
+				nilDebezium bool
+				expected    bool
+				invalid     bool
+			}{
+				{name: "defaults", expected: true},
+				{name: "nil Debezium config", nilDebezium: true, expected: true},
+				{name: "nil Debezium config with URI", nilDebezium: true, query: "&debezium-replace-null-with-default=false"},
+				{name: "URI false", query: "&debezium-replace-null-with-default=false"},
+				{name: "URI true", query: "&debezium-replace-null-with-default=true", expected: true},
+				{name: "file false", fileValue: "false"},
+				{name: "file true", fileValue: "true", expected: true},
+				{name: "URI false overrides file true", fileValue: "true", query: "&debezium-replace-null-with-default=false"},
+				{name: "URI true overrides file false", fileValue: "false", query: "&debezium-replace-null-with-default=true", expected: true},
+				{name: "invalid boolean", query: "&debezium-replace-null-with-default=invalid", invalid: true},
+			} {
+				t.Run(tc.name, func(t *testing.T) {
+					replicaConfig := config.GetDefaultReplicaConfig()
+					if tc.nilDebezium {
+						replicaConfig.Sink.Debezium = nil
+					}
+					if tc.fileValue != "" {
+						_, err := toml.Decode("[sink.debezium]\nreplace-null-with-default = "+tc.fileValue, replicaConfig)
+						require.NoError(t, err)
+					}
+					sinkURI, err := url.Parse("kafka://127.0.0.1:9092/topic?protocol=" + protocol.String() + tc.query)
+					require.NoError(t, err)
+					cfg := NewConfig(protocol)
+					err = cfg.Apply(sinkURI, replicaConfig.Sink)
+					if tc.invalid {
+						require.ErrorIs(t, err, errors.ErrSinkInvalidConfig)
+						return
+					}
+					require.NoError(t, err)
+					require.Equal(t, tc.expected, cfg.DebeziumReplaceNullWithDefault)
+					if protocol == config.ProtocolDebeziumAvro {
+						cfg.AvroConfluentSchemaRegistry = "http://127.0.0.1:8081"
+					}
+					require.NoError(t, cfg.Validate())
+				})
+			}
+		})
+	}
+	for _, protocol := range []config.Protocol{config.ProtocolAvro, config.ProtocolOpen, config.ProtocolSimple} {
+		t.Run(protocol.String(), func(t *testing.T) {
+			cfg := NewConfig(protocol)
+			if protocol == config.ProtocolAvro {
+				cfg.AvroConfluentSchemaRegistry = "http://127.0.0.1:8081"
+			}
+			require.NoError(t, cfg.Validate())
+			sinkURI, err := url.Parse("kafka://127.0.0.1:9092/topic?protocol=" + protocol.String() + "&debezium-replace-null-with-default=false")
+			require.NoError(t, err)
+			require.NoError(t, cfg.Apply(sinkURI, config.GetDefaultReplicaConfig().Sink))
+			err = cfg.Validate()
+			require.ErrorIs(t, err, errors.ErrCodecInvalidConfig)
+			require.ErrorContains(t, err, "debezium-replace-null-with-default")
+		})
+	}
+}
+
 func TestDebeziumNumericHandlingConfig(t *testing.T) {
 	for _, tc := range []struct {
 		name          string

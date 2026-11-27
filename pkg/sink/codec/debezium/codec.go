@@ -174,6 +174,12 @@ func (c *dbzCodec) writeDebeziumFieldSchema(
 ) {
 	colName := col.Name.O
 	ft := &col.FieldType
+	defaultValue := col.GetDefaultValue()
+	// Kafka Connect applies schema defaults to NULL values. Omit nullable
+	// defaults when preserving SQL NULL, without changing the source metadata.
+	if !c.config.DebeziumReplaceNullWithDefault && !mysql.HasNotNullFlag(ft.GetFlag()) {
+		defaultValue = nil
+	}
 	writer.WriteObjectElement(func() {
 		if c.config.EnableTiDBExtension {
 			// The followings are TiDB extended fields
@@ -184,8 +190,8 @@ func (c *dbzCodec) writeDebeziumFieldSchema(
 			n := ft.GetFlen()
 			var v uint64
 			var err error
-			if col.GetDefaultValue() != nil {
-				val, ok := col.GetDefaultValue().(string)
+			if defaultValue != nil {
+				val, ok := defaultValue.(string)
 				if !ok {
 					return
 				}
@@ -198,7 +204,7 @@ func (c *dbzCodec) writeDebeziumFieldSchema(
 				writer.WriteStringField("type", "boolean")
 				writer.WriteBoolField("optional", c.columnOptional(ft))
 				writer.WriteStringField("field", colName)
-				if col.GetDefaultValue() != nil {
+				if defaultValue != nil {
 					writer.WriteBoolField("default", v != 0) // bool
 				}
 			} else {
@@ -210,7 +216,7 @@ func (c *dbzCodec) writeDebeziumFieldSchema(
 					writer.WriteStringField("length", fmt.Sprintf("%d", n))
 				})
 				writer.WriteStringField("field", colName)
-				if col.GetDefaultValue() != nil {
+				if defaultValue != nil {
 					writer.WriteBase64StringField("default", getBitFromUint64(n, v)) // binary
 				}
 			}
@@ -224,11 +230,11 @@ func (c *dbzCodec) writeDebeziumFieldSchema(
 			}
 			writer.WriteBoolField("optional", c.columnOptional(ft))
 			writer.WriteStringField("field", colName)
-			if col.GetDefaultValue() != nil {
-				if v, ok := col.GetDefaultValue().(string); ok && mysql.HasBinaryFlag(ft.GetFlag()) && !c.isDebeziumAvro() {
+			if defaultValue != nil {
+				if v, ok := defaultValue.(string); ok && mysql.HasBinaryFlag(ft.GetFlag()) && !c.isDebeziumAvro() {
 					c.writeBinaryField(writer, "default", []byte(v))
 				} else {
-					writer.WriteAnyField("default", col.GetDefaultValue())
+					writer.WriteAnyField("default", defaultValue)
 				}
 			}
 		case mysql.TypeEnum:
@@ -245,8 +251,8 @@ func (c *dbzCodec) writeDebeziumFieldSchema(
 				writer.WriteStringField("allowed", strings.Join(parameters, ","))
 			})
 			writer.WriteStringField("field", colName)
-			if col.GetDefaultValue() != nil {
-				writer.WriteAnyField("default", col.GetDefaultValue())
+			if defaultValue != nil {
+				writer.WriteAnyField("default", defaultValue)
 			}
 		case mysql.TypeSet:
 			writer.WriteStringField("type", "string")
@@ -257,8 +263,8 @@ func (c *dbzCodec) writeDebeziumFieldSchema(
 				writer.WriteStringField("allowed", strings.Join(ft.GetElems(), ","))
 			})
 			writer.WriteStringField("field", colName)
-			if col.GetDefaultValue() != nil {
-				writer.WriteAnyField("default", col.GetDefaultValue())
+			if defaultValue != nil {
+				writer.WriteAnyField("default", defaultValue)
 			}
 		case mysql.TypeDate, mysql.TypeNewDate:
 			writer.WriteStringField("type", "int32")
@@ -266,8 +272,8 @@ func (c *dbzCodec) writeDebeziumFieldSchema(
 			writer.WriteStringField("name", "io.debezium.time.Date")
 			writer.WriteIntField("version", 1)
 			writer.WriteStringField("field", colName)
-			if col.GetDefaultValue() != nil {
-				v, ok := col.GetDefaultValue().(string)
+			if defaultValue != nil {
+				v, ok := defaultValue.(string)
 				if !ok {
 					return
 				}
@@ -300,8 +306,8 @@ func (c *dbzCodec) writeDebeziumFieldSchema(
 			}
 			writer.WriteIntField("version", 1)
 			writer.WriteStringField("field", colName)
-			if col.GetDefaultValue() != nil {
-				v, ok := col.GetDefaultValue().(string)
+			if defaultValue != nil {
+				v, ok := defaultValue.(string)
 				if !ok {
 					return
 				}
@@ -341,8 +347,8 @@ func (c *dbzCodec) writeDebeziumFieldSchema(
 			writer.WriteStringField("name", "io.debezium.time.ZonedTimestamp")
 			writer.WriteIntField("version", 1)
 			writer.WriteStringField("field", colName)
-			if col.GetDefaultValue() != nil {
-				v, ok := col.GetDefaultValue().(string)
+			if defaultValue != nil {
+				v, ok := defaultValue.(string)
 				if !ok {
 					return
 				}
@@ -383,8 +389,8 @@ func (c *dbzCodec) writeDebeziumFieldSchema(
 			writer.WriteStringField("name", "io.debezium.time.MicroTime")
 			writer.WriteIntField("version", 1)
 			writer.WriteStringField("field", colName)
-			if col.GetDefaultValue() != nil {
-				v, ok := col.GetDefaultValue().(string)
+			if defaultValue != nil {
+				v, ok := defaultValue.(string)
 				if !ok {
 					return
 				}
@@ -400,15 +406,15 @@ func (c *dbzCodec) writeDebeziumFieldSchema(
 			writer.WriteStringField("name", "io.debezium.data.Json")
 			writer.WriteIntField("version", 1)
 			writer.WriteStringField("field", colName)
-			if col.GetDefaultValue() != nil {
-				writer.WriteAnyField("default", col.GetDefaultValue())
+			if defaultValue != nil {
+				writer.WriteAnyField("default", defaultValue)
 			}
 		case mysql.TypeTiny: // TINYINT
 			writer.WriteStringField("type", "int16")
 			writer.WriteBoolField("optional", c.columnOptional(ft))
 			writer.WriteStringField("field", colName)
-			if col.GetDefaultValue() != nil {
-				v, ok := col.GetDefaultValue().(string)
+			if defaultValue != nil {
+				v, ok := defaultValue.(string)
 				if !ok {
 					return
 				}
@@ -426,8 +432,8 @@ func (c *dbzCodec) writeDebeziumFieldSchema(
 			}
 			writer.WriteBoolField("optional", c.columnOptional(ft))
 			writer.WriteStringField("field", colName)
-			if col.GetDefaultValue() != nil {
-				v, ok := col.GetDefaultValue().(string)
+			if defaultValue != nil {
+				v, ok := defaultValue.(string)
 				if !ok {
 					return
 				}
@@ -441,8 +447,8 @@ func (c *dbzCodec) writeDebeziumFieldSchema(
 			writer.WriteStringField("type", "int32")
 			writer.WriteBoolField("optional", c.columnOptional(ft))
 			writer.WriteStringField("field", colName)
-			if col.GetDefaultValue() != nil {
-				v, ok := col.GetDefaultValue().(string)
+			if defaultValue != nil {
+				v, ok := defaultValue.(string)
 				if !ok {
 					return
 				}
@@ -460,8 +466,8 @@ func (c *dbzCodec) writeDebeziumFieldSchema(
 			}
 			writer.WriteBoolField("optional", c.columnOptional(ft))
 			writer.WriteStringField("field", colName)
-			if col.GetDefaultValue() != nil {
-				v, ok := col.GetDefaultValue().(string)
+			if defaultValue != nil {
+				v, ok := defaultValue.(string)
 				if !ok {
 					return
 				}
@@ -479,8 +485,8 @@ func (c *dbzCodec) writeDebeziumFieldSchema(
 			}
 			writer.WriteBoolField("optional", c.columnOptional(ft))
 			writer.WriteStringField("field", colName)
-			if col.GetDefaultValue() != nil {
-				v, ok := col.GetDefaultValue().(string)
+			if defaultValue != nil {
+				v, ok := defaultValue.(string)
 				if !ok {
 					return
 				}
@@ -510,8 +516,8 @@ func (c *dbzCodec) writeDebeziumFieldSchema(
 			}
 			writer.WriteBoolField("optional", c.columnOptional(ft))
 			writer.WriteStringField("field", colName)
-			if col.GetDefaultValue() != nil {
-				v, ok := col.GetDefaultValue().(string)
+			if defaultValue != nil {
+				v, ok := defaultValue.(string)
 				if !ok {
 					return
 				}
@@ -527,8 +533,8 @@ func (c *dbzCodec) writeDebeziumFieldSchema(
 			writer.WriteStringField("type", "double")
 			writer.WriteBoolField("optional", c.columnOptional(ft))
 			writer.WriteStringField("field", colName)
-			if col.GetDefaultValue() != nil {
-				v, ok := col.GetDefaultValue().(string)
+			if defaultValue != nil {
+				v, ok := defaultValue.(string)
 				if !ok {
 					return
 				}
@@ -557,8 +563,8 @@ func (c *dbzCodec) writeDebeziumFieldSchema(
 			}
 			writer.WriteBoolField("optional", c.columnOptional(ft))
 			writer.WriteStringField("field", colName)
-			if col.GetDefaultValue() != nil {
-				v, ok := col.GetDefaultValue().(string)
+			if defaultValue != nil {
+				v, ok := defaultValue.(string)
 				if !ok {
 					return
 				}
@@ -578,8 +584,8 @@ func (c *dbzCodec) writeDebeziumFieldSchema(
 			writer.WriteStringField("name", "io.debezium.time.Year")
 			writer.WriteIntField("version", 1)
 			writer.WriteStringField("field", colName)
-			if col.GetDefaultValue() != nil {
-				v, ok := col.GetDefaultValue().(string)
+			if defaultValue != nil {
+				v, ok := defaultValue.(string)
 				if !ok {
 					return
 				}
@@ -601,8 +607,8 @@ func (c *dbzCodec) writeDebeziumFieldSchema(
 			writer.WriteBoolField("optional", c.columnOptional(ft))
 			writer.WriteStringField("name", "io.debezium.data.TiDBVectorFloat32")
 			writer.WriteStringField("field", colName)
-			if col.GetDefaultValue() != nil {
-				writer.WriteAnyField("default", col.GetDefaultValue())
+			if defaultValue != nil {
+				writer.WriteAnyField("default", defaultValue)
 			}
 		default:
 			log.Warn(
@@ -628,7 +634,7 @@ func (c *dbzCodec) writeDebeziumFieldValue(
 	datum := row.GetDatum(idx, ft)
 	if datum.IsNull() {
 		defaultVal := colInfo.GetDefaultValue()
-		if defaultVal == nil {
+		if defaultVal == nil || !c.config.DebeziumReplaceNullWithDefault {
 			writer.WriteNullField(colName)
 			return nil
 		}
