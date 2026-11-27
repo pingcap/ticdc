@@ -50,6 +50,7 @@ type PullerDebugInfo struct {
 // PullerSubscriptionDebugInfo reports one subscription and its slowest Regions.
 type PullerSubscriptionDebugInfo struct {
 	SubscriptionID       SubscriptionID             `json:"subscription_id,string"`
+	ParentSubscriptionID SubscriptionID             `json:"parent_subscription_id,string,omitempty"`
 	KeyspaceID           uint32                     `json:"keyspace_id"`
 	TableID              int64                      `json:"table_id,string"`
 	ResolvedTs           uint64                     `json:"resolved_ts,string"`
@@ -231,6 +232,9 @@ func (s *subscriptionClient) debugSubscription(
 		ResolvedTsLagMillis: debugTsLag(resolvedTs, now),
 		Initialized:         span.initialized.Load(),
 		SlowRegions:         []PullerRegionDebugSummary{},
+	}
+	if span.splitSubscription != nil {
+		info.ParentSubscriptionID = span.splitSubscription.parent.subID
 	}
 	slowRegions := &pullerSlowRegionHeap{}
 	stats := span.rangeLock.IterAll(func(regionID uint64, state *regionlock.LockedRangeState) {
