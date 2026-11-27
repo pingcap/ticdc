@@ -31,9 +31,12 @@ import (
 	"github.com/pingcap/ticdc/coordinator/operator"
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/pkg/common"
+	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/node"
+	"github.com/pingcap/ticdc/pkg/pdutil"
+	"github.com/pingcap/ticdc/server/watcher"
 	"github.com/pingcap/ticdc/utils/chann"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/require"
@@ -71,7 +74,7 @@ func readMeteringFile(t *testing.T, path string) decodedMeteringFile {
 	return payload
 }
 
-func TestMeteringInitializationFailure(t *testing.T) {
+func TestMeteringInitializationDegrades(t *testing.T) {
 	original := config.GetGlobalServerConfig()
 	t.Cleanup(func() { config.StoreGlobalServerConfig(original) })
 	base := filepath.Join(t.TempDir(), "file")
@@ -94,6 +97,9 @@ func TestMeteringInitializationFailure(t *testing.T) {
 				gcCleaner:          gccleaner.New(nil, "test"),
 				eventCh:            chann.NewAutoDrainChann[*Event](),
 				changefeedChangeCh: make(chan []*changefeedChange),
+			}
+			if reporter := createMeteringReporter(); reporter != nil {
+				c.metering = newMeteringReporter(reporter, c.controller.metering)
 			}
 			defer c.eventCh.CloseAndDrain()
 			ctx, cancel := context.WithCancel(context.Background())
@@ -145,6 +151,9 @@ func TestMeteringCoordinatorTerm(t *testing.T) {
 				eventCh:            chann.NewAutoDrainChann[*Event](),
 				changefeedChangeCh: make(chan []*changefeedChange),
 			}
+			if reporter := createMeteringReporter(); reporter != nil {
+				c.metering = newMeteringReporter(reporter, c.controller.metering)
+			}
 			defer c.eventCh.CloseAndDrain()
 			ctx, cancel := context.WithCancel(context.Background())
 			defer cancel()
@@ -171,7 +180,6 @@ func TestMeteringCoordinatorTerm(t *testing.T) {
 				require.NoDirExists(t, dir)
 			} else {
 				require.NotNil(t, c.metering)
-				require.Equal(t, "prod_us_1", c.metering.reporter.SelfID())
 				_, err := os.Stat(dir)
 				require.NoError(t, err)
 				require.ErrorContains(t, c.metering.reporter.Report(t.Context(), 0, nil), "closed")
@@ -198,30 +206,30 @@ func TestMeteringAccumulatorConcurrencyAndDeletion(t *testing.T) {
 	acked, ok = acc.Accept(cf1, 1, 100)
 	require.True(t, ok)
 	require.Equal(t, uint64(1), acked)
-	require.Equal(t, uint64(100), acc.PendingBytesTotal())
 
 	// Snapshot pending state, then concurrently accept more bytes AND delete cf1 before Commit.
-	snap := acc.Snapshot()
+	snap, total := acc.Snapshot()
+	require.Equal(t, uint64(100), total)
 	require.Len(t, snap, 1)
 	require.Equal(t, uint64(100), snap[0].EffectiveBytes)
 
 	acked, ok = acc.Accept(cf1, 2, 25)
 	require.True(t, ok)
 	require.Equal(t, uint64(2), acked)
-	acc.OnChangefeedRemoved(cf1)
-	require.Equal(t, uint64(125), acc.PendingBytesTotal())
+	acc.Forget(cf1)
 
 	// Commit must deduct only the snapshotted 100 bytes, leaving 25.
-	acc.Commit(snap)
-	require.Equal(t, uint64(25), acc.PendingBytesTotal())
+	require.Equal(t, uint64(25), acc.Commit(snap))
 
 	// Next upload commits the remaining 25 bytes and cleans up the pending entry.
-	snap = acc.Snapshot()
+	snap, total = acc.Snapshot()
+	require.Equal(t, uint64(25), total)
 	require.Len(t, snap, 1)
 	require.Equal(t, uint64(25), snap[0].EffectiveBytes)
-	acc.Commit(snap)
-	require.Zero(t, acc.PendingBytesTotal())
-	require.Empty(t, acc.Snapshot())
+	require.Zero(t, acc.Commit(snap))
+	snap, total = acc.Snapshot()
+	require.Zero(t, total)
+	require.Empty(t, snap)
 }
 
 func TestCoordinatorMeteringReportingAndShutdownFlush(t *testing.T) {
@@ -240,11 +248,11 @@ func TestCoordinatorMeteringReportingAndShutdownFlush(t *testing.T) {
 			operatorController: &operator.Controller{},
 			metering:           newMeteringAccumulator(),
 		}
-		ctrl.EnableMetering()
 
 		c := &coordinator{
 			gcTickInterval:     time.Hour,
 			controller:         ctrl,
+			metering:           newMeteringReporter(createMeteringReporter(), ctrl.metering),
 			gcCleaner:          gccleaner.New(nil, "test"),
 			eventCh:            chann.NewAutoDrainChann[*Event](),
 			changefeedChangeCh: make(chan []*changefeedChange),
@@ -282,14 +290,16 @@ func TestCoordinatorMeteringReportingAndShutdownFlush(t *testing.T) {
 		// Tick 2 hits ErrFileExists -> retains 500 bytes in memory.
 		time.Sleep(time.Minute)
 		synctest.Wait()
-		require.Equal(t, uint64(500), ctrl.metering.PendingBytesTotal())
+		_, total := ctrl.metering.Snapshot()
+		require.Equal(t, uint64(500), total)
 
 		// Add 250 more bytes -> next whole minute merges all 750 bytes.
 		_, ok = ctrl.metering.Accept(cf, 2, 250)
 		require.True(t, ok)
 		time.Sleep(time.Minute)
 		synctest.Wait()
-		require.Zero(t, ctrl.metering.PendingBytesTotal())
+		_, total = ctrl.metering.Snapshot()
+		require.Zero(t, total)
 
 		uploadedPath := filepath.Join(dir, "metering/ru", strconv.FormatInt(nextMinute+60, 10), "ticdc/pool1/cluster_1-0.json.gz")
 		payload := readMeteringFile(t, uploadedPath)
@@ -298,21 +308,58 @@ func TestCoordinatorMeteringReportingAndShutdownFlush(t *testing.T) {
 		require.Equal(t, "cf-a", payload.Data[0].Changefeed)
 		require.Equal(t, uint64(750), payload.Data[0].EffectiveBytes.Value)
 
-		// Add final bytes and delete before shutdown -> shutdown flushes to next unused minute.
+		// Add final bytes and delete before shutdown; pre-create next unused minute so
+		// shutdown flush retries and advances cleanly to nextMinute+180 within its budget.
 		_, ok = ctrl.metering.Accept(cf, 3, 120)
 		require.True(t, ok)
-		ctrl.metering.OnChangefeedRemoved(cf)
+		ctrl.metering.Forget(cf)
+
+		shutdownCollisionPath := filepath.Join(dir, "metering/ru", strconv.FormatInt(nextMinute+120, 10), "ticdc/pool1/cluster_1-0.json.gz")
+		require.NoError(t, os.MkdirAll(filepath.Dir(shutdownCollisionPath), 0o755))
+		require.NoError(t, os.WriteFile(shutdownCollisionPath, []byte("prior-term"), 0o644))
 
 		cancel()
 		err = <-done
 		require.ErrorIs(t, err, context.Canceled)
-		require.Zero(t, ctrl.metering.PendingBytesTotal())
+		_, total = ctrl.metering.Snapshot()
+		require.Zero(t, total)
 
-		shutdownPath := filepath.Join(dir, "metering/ru", strconv.FormatInt(nextMinute+120, 10), "ticdc/pool1/cluster_1-0.json.gz")
+		shutdownPath := filepath.Join(dir, "metering/ru", strconv.FormatInt(nextMinute+180, 10), "ticdc/pool1/cluster_1-0.json.gz")
 		shutdownPayload := readMeteringFile(t, shutdownPath)
 		require.Len(t, shutdownPayload.Data, 1)
 		require.Equal(t, uint64(120), shutdownPayload.Data[0].EffectiveBytes.Value)
 	})
+}
+
+func TestNewControllerBootstrapAdvertisesMetering(t *testing.T) {
+	self := node.NewInfo("127.0.0.1:8300", "")
+	nodeManager := watcher.NewNodeManager(nil, nil)
+	nodeManager.GetAliveNodes()[self.ID] = self
+	mc := messaging.NewMockMessageCenter()
+	appcontext.SetService(appcontext.MessageCenter, mc)
+	appcontext.SetService(watcher.NodeManagerName, nodeManager)
+	appcontext.SetService(appcontext.DefaultPDClock, pdutil.NewClock4Test())
+
+	ctrl := NewController(
+		77,
+		self,
+		make(chan []*changefeedChange, 1),
+		nil,
+		chann.NewAutoDrainChann[*Event](),
+		1,
+		time.Minute,
+		nil,
+		true,
+	)
+	t.Cleanup(func() {
+		ctrl.taskScheduler.Stop()
+		ctrl.eventCh.CloseAndDrain()
+	})
+
+	sent := <-mc.GetMessageChannel()
+	msg := sent.Message[0].(*heartbeatpb.CoordinatorBootstrapRequest)
+	require.True(t, msg.MeteringEnabled)
+	require.Equal(t, int64(77), msg.Version)
 }
 
 func TestControllerMeteringAckAndAddMaintainerRecovery(t *testing.T) {
@@ -329,6 +376,7 @@ func TestControllerMeteringAckAndAddMaintainerRecovery(t *testing.T) {
 	cf.SetNodeID(owner)
 
 	db := changefeed.NewChangefeedDB(42)
+	db.SetMeteringEpoch(42)
 	db.AddReplicatingMaintainer(cf, owner)
 
 	ctrl := &Controller{
@@ -338,7 +386,6 @@ func TestControllerMeteringAckAndAddMaintainerRecovery(t *testing.T) {
 		operatorController: &operator.Controller{},
 		metering:           newMeteringAccumulator(),
 	}
-	ctrl.EnableMetering()
 
 	// handleSingleMaintainerStatus accepts matching epoch and updates cf's AddMaintainerRequest state.
 	_ = ctrl.handleSingleMaintainerStatus(owner, &heartbeatpb.MaintainerStatus{
@@ -350,7 +397,8 @@ func TestControllerMeteringAckAndAddMaintainerRecovery(t *testing.T) {
 		MeteringSeq:     1,
 		MeteringBytes:   640,
 	}, cfID)
-	require.Equal(t, uint64(640), ctrl.metering.PendingBytesTotal())
+	_, total := ctrl.metering.Snapshot()
+	require.Equal(t, uint64(640), total)
 
 	addMsg := cf.NewAddMaintainerMessage(node.ID("new-maintainer")).Message[0].(*heartbeatpb.AddMaintainerRequest)
 	require.Equal(t, uint64(42), addMsg.MeteringEpoch)
@@ -366,7 +414,8 @@ func TestControllerMeteringAckAndAddMaintainerRecovery(t *testing.T) {
 		MeteringSeq:     1,
 		MeteringBytes:   999,
 	}, cfID)
-	require.Equal(t, uint64(640), ctrl.metering.PendingBytesTotal())
+	_, total = ctrl.metering.Snapshot()
+	require.Equal(t, uint64(640), total)
 
 	// Out-of-order seq must be dropped cleanly and increment meteringRejectedStatusCounter.
 	rejectedBefore := testutil.ToFloat64(meteringRejectedStatusCounter)
@@ -379,6 +428,7 @@ func TestControllerMeteringAckAndAddMaintainerRecovery(t *testing.T) {
 		MeteringSeq:     3,
 		MeteringBytes:   500,
 	}, cfID)
-	require.Equal(t, uint64(640), ctrl.metering.PendingBytesTotal())
+	_, total = ctrl.metering.Snapshot()
+	require.Equal(t, uint64(640), total)
 	require.Equal(t, rejectedBefore+1, testutil.ToFloat64(meteringRejectedStatusCounter))
 }

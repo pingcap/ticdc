@@ -30,11 +30,15 @@ func ValidateConfig(c *config.MeteringConfig) error {
 	if c == nil || c.Type == "" {
 		return nil
 	}
-	if c.SharedPoolID != "" && !validPathComponent(c.SharedPoolID) {
+	if c.SharedPoolID != "" &&
+		(c.SharedPoolID == "." || c.SharedPoolID == ".." || strings.ContainsAny(c.SharedPoolID, "/\\\x00\r\n")) {
 		return errors.ErrInvalidServerOption.GenWithStack("metering: shared-pool-id must be a single path component")
 	}
-	if err := validateEndpoint(c.Endpoint); err != nil {
-		return err
+	if c.Endpoint != "" {
+		parsed, err := url.Parse(c.Endpoint)
+		if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Host == "" {
+			return errors.ErrInvalidServerOption.GenWithStack("metering: endpoint must be a valid http or https URL with host")
+		}
 	}
 
 	switch c.Type {
@@ -60,19 +64,4 @@ func ValidateConfig(c *config.MeteringConfig) error {
 		return errors.ErrInvalidServerOption.GenWithStack(fmt.Sprintf("metering: unsupported storage type %q", c.Type))
 	}
 	return nil
-}
-
-func validateEndpoint(endpoint string) error {
-	if endpoint == "" {
-		return nil
-	}
-	parsed, err := url.Parse(endpoint)
-	if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Host == "" {
-		return errors.ErrInvalidServerOption.GenWithStack("metering: endpoint must be a valid http or https URL with host")
-	}
-	return nil
-}
-
-func validPathComponent(s string) bool {
-	return s != "" && s != "." && s != ".." && !strings.ContainsAny(s, "/\\\x00\r\n")
 }

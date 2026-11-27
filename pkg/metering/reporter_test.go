@@ -31,51 +31,14 @@ import (
 	"time"
 
 	"github.com/pingcap/metering_sdk/config"
-	meteringreader "github.com/pingcap/metering_sdk/reader/metering"
+	"github.com/pingcap/metering_sdk/reader/metering"
 	"github.com/pingcap/metering_sdk/storage"
-	meteringwriterapi "github.com/pingcap/metering_sdk/writer"
+	"github.com/pingcap/metering_sdk/writer"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/metering"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/goleak"
 )
-
-func TestRecordJSON(t *testing.T) {
-	records := []map[string]any{
-		(metering.Record{
-			KeyspaceName:   "12345678901234567890",
-			ChangefeedName: "changefeed-2035974607254523904",
-			EffectiveBytes: 104857600,
-		}).ToMeteringMap(),
-		(metering.Record{
-			KeyspaceName:   "12345678901234567890",
-			ChangefeedName: "changefeed-2035974607254523905",
-			EffectiveBytes: 20480,
-		}).ToMeteringMap(),
-	}
-	encoded, err := json.Marshal(records)
-	require.NoError(t, err)
-	require.JSONEq(t, `[
-		{
-			"version": "1",
-			"cluster_id": "12345678901234567890",
-			"changefeed": "changefeed-2035974607254523904",
-			"effective_bytes": {
-				"value": 104857600,
-				"unit": "Bytes"
-			}
-		},
-		{
-			"version": "1",
-			"cluster_id": "12345678901234567890",
-			"changefeed": "changefeed-2035974607254523905",
-			"effective_bytes": {
-				"value": 20480,
-				"unit": "Bytes"
-			}
-		}
-	]`, string(encoded))
-}
 
 func TestReporterRecords(t *testing.T) {
 	defer goleak.VerifyNone(t, goleak.IgnoreCurrent())
@@ -98,7 +61,6 @@ func TestReporterRecords(t *testing.T) {
 		r, err := metering.NewReporter(cfg, "cluster-a")
 		require.NoError(t, err)
 		defer r.Close()
-		require.Equal(t, "cluster_a", r.SelfID())
 
 		ts := time.Now().Truncate(time.Minute).Unix()
 		require.NoError(t, r.Report(t.Context(), ts, records))
@@ -171,7 +133,7 @@ func TestReporterRecords(t *testing.T) {
 			EffectiveBytes: 99,
 		}}
 		err = r.Report(t.Context(), ts, updated)
-		require.ErrorIs(t, err, meteringwriterapi.ErrFileExists)
+		require.ErrorIs(t, err, writer.ErrFileExists)
 		checkRecords(ts, records)
 
 		// Advancing to the next whole-minute timestamp succeeds and retains the previous object.
@@ -191,12 +153,14 @@ func TestReporterUploadFailuresAndExists(t *testing.T) {
 		name         string
 		failures     int
 		fileExists   bool
+		putPersisted bool
 		cancelUpload bool
 	}{
 		{name: "transient failure", failures: 1},
 		{name: "last attempt succeeds", failures: 2},
 		{name: "retry exhausted", failures: 3},
 		{name: "file already exists", fileExists: true},
+		{name: "put persisted before transient error", failures: 1, putPersisted: true},
 		{name: "cancel in-flight upload", cancelUpload: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -207,13 +171,14 @@ func TestReporterUploadFailuresAndExists(t *testing.T) {
 			var paths []string
 			var payloads [][]byte
 			heads := 0
+			persistedOnPut := false
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				mu.Lock()
 				defer mu.Unlock()
 				switch r.Method {
 				case http.MethodHead:
 					heads++
-					if tc.fileExists {
+					if tc.fileExists || persistedOnPut {
 						w.WriteHeader(http.StatusOK)
 						return
 					}
@@ -231,6 +196,9 @@ func TestReporterUploadFailuresAndExists(t *testing.T) {
 						cancel()
 						<-r.Context().Done()
 						return
+					}
+					if tc.putPersisted {
+						persistedOnPut = true
 					}
 					if len(paths) <= tc.failures {
 						w.WriteHeader(http.StatusBadRequest)
@@ -258,9 +226,13 @@ func TestReporterUploadFailuresAndExists(t *testing.T) {
 			require.Greater(t, heads, 0, "OverwriteExisting = false must check object existence first")
 			switch {
 			case tc.fileExists:
-				require.ErrorIs(t, err, meteringwriterapi.ErrFileExists)
-				require.Equal(t, 1, heads, "ErrFileExists must not be retried")
+				require.ErrorIs(t, err, writer.ErrFileExists)
+				require.Equal(t, 1, heads, "ErrFileExists on first attempt must not be retried")
 				require.Empty(t, paths)
+			case tc.putPersisted:
+				require.NoError(t, err)
+				require.Equal(t, 2, heads)
+				require.Len(t, paths, 1, "already-persisted batch must commit without duplicate PUT")
 			case tc.cancelUpload:
 				require.ErrorIs(t, err, context.Canceled)
 				require.Len(t, paths, 1, "cancellation must stop further uploads")
@@ -288,7 +260,6 @@ func TestReporterCancellationAndValidation(t *testing.T) {
 	r, err := metering.NewReporter(config.NewMeteringConfig().WithLocalFS(dir), "default")
 	require.NoError(t, err)
 	defer r.Close()
-	require.Equal(t, "default", r.SelfID())
 
 	ts := time.Now().Truncate(time.Minute).Unix()
 	records := []metering.Record{{KeyspaceName: "tenant-a", ChangefeedName: "payments", EffectiveBytes: 10}}

@@ -28,27 +28,13 @@ const (
 	meteringRoundStallLogInterval = 60 * time.Second
 )
 
-type meteringCommand struct {
-	epoch uint64
-	seq   uint64
-}
-
-type meteringRoundReport struct {
-	epoch uint64
-	seq   uint64
-	bytes uint64
-}
-
-type meteringStall struct {
-	targetSeq    uint64
-	stalledFor   time.Duration
-	missingNodes []node.ID
-}
-
 type meteringHeartbeatResult struct {
-	cmd            *meteringCommand
+	cmdEpoch       uint64
+	cmdSeq         uint64
 	roundCompleted bool
-	stall          *meteringStall
+	targetSeq      uint64
+	stalledFor     time.Duration
+	missingNodes   []node.ID
 }
 
 // meteringCollector coordinates sealed round collection across DispatcherManagers
@@ -56,7 +42,6 @@ type meteringHeartbeatResult struct {
 type meteringCollector struct {
 	mu             sync.Mutex
 	epoch          uint64
-	ackedSeq       uint64
 	targetSeq      uint64
 	completedSeq   uint64
 	completedBytes uint64
@@ -65,13 +50,6 @@ type meteringCollector struct {
 	nextRoundAt    time.Time
 	roundStartedAt time.Time
 	lastStallLogAt time.Time
-}
-
-func newMeteringCollector() *meteringCollector {
-	return &meteringCollector{
-		supportedNodes: make(map[node.ID]struct{}),
-		roundBytes:     make(map[node.ID]uint64),
-	}
 }
 
 func (m *meteringCollector) SetInitialState(epoch, lastSeq uint64) {
@@ -92,7 +70,6 @@ func (m *meteringCollector) SetEpoch(epoch uint64) {
 
 func (m *meteringCollector) resetLocked(epoch, lastSeq uint64) {
 	m.epoch = epoch
-	m.ackedSeq = lastSeq
 	if epoch > 0 {
 		m.targetSeq = lastSeq + 1
 	} else {
@@ -112,6 +89,9 @@ func (m *meteringCollector) resetLocked(epoch, lastSeq uint64) {
 func (m *meteringCollector) MarkNodeSupported(id node.ID) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if m.supportedNodes == nil {
+		m.supportedNodes = make(map[node.ID]struct{})
+	}
 	m.supportedNodes[id] = struct{}{}
 }
 
@@ -134,6 +114,9 @@ func (m *meteringCollector) OnHeartbeat(
 ) meteringHeartbeatResult {
 	m.mu.Lock()
 	if supported {
+		if m.supportedNodes == nil {
+			m.supportedNodes = make(map[node.ID]struct{})
+		}
 		m.supportedNodes[from] = struct{}{}
 	}
 	if m.epoch == 0 || m.completedSeq > 0 || (!m.nextRoundAt.IsZero() && now.Before(m.nextRoundAt)) {
@@ -144,6 +127,9 @@ func (m *meteringCollector) OnHeartbeat(
 		m.roundStartedAt = now
 	}
 	if msgEpoch == m.epoch && msgSeq == m.targetSeq {
+		if m.roundBytes == nil {
+			m.roundBytes = make(map[node.ID]uint64)
+		}
 		m.roundBytes[from] = msgBytes
 	}
 	m.mu.Unlock()
@@ -167,19 +153,15 @@ func (m *meteringCollector) OnHeartbeat(
 		(m.lastStallLogAt.IsZero() || now.Sub(m.lastStallLogAt) >= meteringRoundStallLogInterval) {
 		if missing := m.missingSupportedNodesLocked(activeNodes); len(missing) > 0 {
 			m.lastStallLogAt = now
-			res.stall = &meteringStall{
-				targetSeq:    m.targetSeq,
-				stalledFor:   stalledFor,
-				missingNodes: missing,
-			}
+			res.targetSeq = m.targetSeq
+			res.stalledFor = stalledFor
+			res.missingNodes = missing
 		}
 	}
 
 	if _, ok := m.supportedNodes[from]; ok && (msgEpoch != m.epoch || msgSeq != m.targetSeq) {
-		res.cmd = &meteringCommand{
-			epoch: m.epoch,
-			seq:   m.targetSeq,
-		}
+		res.cmdEpoch = m.epoch
+		res.cmdSeq = m.targetSeq
 	}
 	return res
 }
@@ -225,38 +207,27 @@ func (m *meteringCollector) tryCompleteRoundLocked(activeNodes []node.ID) bool {
 	return true
 }
 
-func (m *meteringCollector) GetStatusReport() (meteringRoundReport, bool) {
+func (m *meteringCollector) CompletedRound() (epoch, seq, bytes uint64) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.epoch == 0 || m.completedSeq == 0 {
-		return meteringRoundReport{}, false
+		return 0, 0, 0
 	}
-	return meteringRoundReport{
-		epoch: m.epoch,
-		seq:   m.completedSeq,
-		bytes: m.completedBytes,
-	}, true
+	return m.epoch, m.completedSeq, m.completedBytes
 }
 
 func (m *meteringCollector) OnAck(epoch, ackedSeq uint64, now time.Time) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if m.epoch == 0 || epoch != m.epoch {
+	if m.epoch == 0 || epoch != m.epoch || ackedSeq < m.targetSeq {
 		return
 	}
-	if ackedSeq > m.ackedSeq {
-		m.ackedSeq = ackedSeq
-	}
-	if m.completedSeq > 0 && m.ackedSeq >= m.completedSeq {
+	if m.completedSeq > 0 && ackedSeq >= m.completedSeq {
 		m.completedSeq = 0
 		m.completedBytes = 0
-		m.targetSeq = m.ackedSeq + 1
 		m.nextRoundAt = now.Add(defaultMeteringRoundInterval)
 		m.roundStartedAt = time.Time{}
 		m.lastStallLogAt = time.Time{}
-		return
 	}
-	if m.targetSeq <= m.ackedSeq {
-		m.targetSeq = m.ackedSeq + 1
-	}
+	m.targetSeq = ackedSeq + 1
 }

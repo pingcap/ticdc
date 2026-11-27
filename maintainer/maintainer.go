@@ -171,7 +171,7 @@ type Maintainer struct {
 	tableCountGauge     prometheus.Gauge
 	handleEventDuration prometheus.Observer
 
-	metering *meteringCollector
+	metering meteringCollector
 
 	redoScheduledTaskGauge prometheus.Gauge
 	redoSpanCountGauge     prometheus.Gauge
@@ -244,7 +244,6 @@ func NewMaintainer(cfID common.ChangeFeedID,
 		redoScheduledTaskGauge: scheduleTaskGauge.WithLabelValues(keyspaceName, name, "redo"),
 		redoSpanCountGauge:     spanCountGauge.WithLabelValues(keyspaceName, name, "redo"),
 		redoTableCountGauge:    tableCountGauge.WithLabelValues(keyspaceName, name, "redo"),
-		metering:               newMeteringCollector(),
 	}
 	m.controller.SetSelfNodeID(selfNode.ID)
 	m.controller.SetErrorReporter(m.handleError)
@@ -407,12 +406,10 @@ func (m *Maintainer) GetMaintainerStatus() *heartbeatpb.MaintainerStatus {
 		LastSyncedTs:    m.getWatermark().LastSyncedTs,
 		MaintainerEpoch: m.currentMaintainerEpoch(),
 	}
-	if m.metering != nil {
-		if report, ok := m.metering.GetStatusReport(); ok {
-			status.MeteringEpoch = report.epoch
-			status.MeteringSeq = report.seq
-			status.MeteringBytes = report.bytes
-		}
+	if epoch, seq, bytes := m.metering.CompletedRound(); epoch > 0 {
+		status.MeteringEpoch = epoch
+		status.MeteringSeq = seq
+		status.MeteringBytes = bytes
 	}
 	drainTarget, drainEpoch := m.controller.getDispatcherDrainTarget()
 	if !drainTarget.IsEmpty() && drainEpoch > 0 {
@@ -458,16 +455,12 @@ func (m *Maintainer) SetDispatcherDrainTarget(target node.ID, epoch uint64) {
 
 // SetMeteringInitialState initializes traffic metering state inherited from Coordinator.
 func (m *Maintainer) SetMeteringInitialState(epoch, lastSeq uint64) {
-	if m.metering != nil {
-		m.metering.SetInitialState(epoch, lastSeq)
-	}
+	m.metering.SetInitialState(epoch, lastSeq)
 }
 
 // SetMeteringEpoch switches the traffic metering epoch when Coordinator changes.
 func (m *Maintainer) SetMeteringEpoch(epoch uint64) {
-	if m.metering != nil {
-		m.metering.SetEpoch(epoch)
-	}
+	m.metering.SetEpoch(epoch)
 }
 
 func (m *Maintainer) activeMeteringNodes() []node.ID {
@@ -639,7 +632,7 @@ func (m *Maintainer) onRemoveMaintainer(cascade, changefeedRemoved bool) {
 // which is co-located on the same node as the maintainer. The dispatcher will propagate
 // the watermark information to downstream sinks.
 func (m *Maintainer) onCheckpointTsPersisted(msg *heartbeatpb.CheckpointTsMessage) {
-	if msg.MeteringEpoch > 0 && m.metering != nil {
+	if msg.MeteringEpoch > 0 {
 		m.metering.OnAck(msg.MeteringEpoch, msg.MeteringAckedSeq, time.Now())
 	}
 	// CheckpointTs == 0 denotes a metering-only ACK from Coordinator and must not
@@ -681,7 +674,7 @@ func (m *Maintainer) onNodeChanged() {
 		m.controller.RemoveNode(id)
 		m.checkpointTsByCapture.Delete(id)
 		m.redoTsByCapture.Delete(id)
-		if m.metering != nil && m.metering.RemoveNode(id, m.activeMeteringNodes()) {
+		if m.metering.RemoveNode(id, m.activeMeteringNodes()) {
 			m.markStatusChanged()
 		}
 	}
@@ -1035,42 +1028,40 @@ func (m *Maintainer) onHeartbeatRequest(msg *messaging.TargetMessage) {
 	if watermarkUpdated {
 		m.notifyCheckpointUpdate()
 	}
-	if m.metering != nil {
-		res := m.metering.OnHeartbeat(
-			msg.From,
-			req.MeteringSupported,
-			req.MeteringEpoch,
-			req.MeteringSeq,
-			req.MeteringBytes,
-			m.activeMeteringNodes,
-			time.Now(),
-		)
-		if res.stall != nil {
-			maintainerMeteringRoundStalledCounter.Inc()
-			log.Warn("traffic metering round stalled waiting for dispatcher managers",
-				zap.Stringer("changefeedID", m.changefeedID),
-				zap.Uint64("targetSeq", res.stall.targetSeq),
-				zap.Duration("stalledFor", res.stall.stalledFor),
-				zap.Any("missingNodes", res.stall.missingNodes))
-		}
-		if res.cmd != nil {
-			m.sendMessages([]*messaging.TargetMessage{
-				messaging.NewSingleTargetMessage(
-					msg.From,
-					messaging.HeartbeatCollectorTopic,
-					&heartbeatpb.HeartBeatResponse{
-						ChangefeedID:    m.changefeedID.ToPB(),
-						Mode:            common.DefaultMode,
-						MaintainerEpoch: m.currentMaintainerEpoch(),
-						MeteringEpoch:   res.cmd.epoch,
-						MeteringSeq:     res.cmd.seq,
-					},
-				),
-			})
-		}
-		if res.roundCompleted {
-			m.markStatusChanged()
-		}
+	res := m.metering.OnHeartbeat(
+		msg.From,
+		req.MeteringSupported,
+		req.MeteringEpoch,
+		req.MeteringSeq,
+		req.MeteringBytes,
+		m.activeMeteringNodes,
+		time.Now(),
+	)
+	if len(res.missingNodes) > 0 {
+		meteringRoundStalledCounter.Inc()
+		log.Warn("traffic metering round stalled waiting for dispatcher managers",
+			zap.Stringer("changefeedID", m.changefeedID),
+			zap.Uint64("targetSeq", res.targetSeq),
+			zap.Duration("stalledFor", res.stalledFor),
+			zap.Any("missingNodes", res.missingNodes))
+	}
+	if res.cmdEpoch > 0 {
+		m.sendMessages([]*messaging.TargetMessage{
+			messaging.NewSingleTargetMessage(
+				msg.From,
+				messaging.HeartbeatCollectorTopic,
+				&heartbeatpb.HeartBeatResponse{
+					ChangefeedID:    m.changefeedID.ToPB(),
+					Mode:            common.DefaultMode,
+					MaintainerEpoch: m.currentMaintainerEpoch(),
+					MeteringEpoch:   res.cmdEpoch,
+					MeteringSeq:     res.cmdSeq,
+				},
+			),
+		})
+	}
+	if res.roundCompleted {
+		m.markStatusChanged()
 	}
 }
 
@@ -1164,7 +1155,7 @@ func (m *Maintainer) onMaintainerBootstrapResponse(msg *messaging.TargetMessage)
 		m.onError(msg.From, resp.Err)
 		return
 	}
-	if resp.MeteringSupported && m.metering != nil {
+	if resp.MeteringSupported {
 		m.metering.MarkNodeSupported(msg.From)
 	}
 

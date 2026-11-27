@@ -31,13 +31,14 @@ type meteringSealer struct {
 	sealedBytes uint64
 }
 
-func (s *meteringSealer) Counter() *atomic.Uint64 {
-	return &s.current
+// Add records flushed metered bytes into the unsealed accumulator.
+func (s *meteringSealer) Add(bytes uint64) {
+	s.current.Add(bytes)
 }
 
-// HandleCommand advances or idempotently retains the sealed traffic metering
-// snapshot for the given (metering_epoch, metering_seq).
-func (s *meteringSealer) HandleCommand(targetEpoch, targetSeq uint64) {
+// Seal advances or idempotently retains the sealed traffic metering snapshot
+// for the given (metering_epoch, metering_seq).
+func (s *meteringSealer) Seal(targetEpoch, targetSeq uint64) {
 	if targetEpoch == 0 || targetSeq == 0 {
 		return
 	}
@@ -50,14 +51,14 @@ func (s *meteringSealer) HandleCommand(targetEpoch, targetSeq uint64) {
 	}
 }
 
-// Report returns the currently sealed (metering_epoch, metering_seq, metering_bytes) tuple.
-func (s *meteringSealer) Report() (epoch, seq, bytes uint64) {
+// Sealed returns the currently sealed (metering_epoch, metering_seq, metering_bytes) tuple.
+func (s *meteringSealer) Sealed() (epoch, seq, bytes uint64) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.sealedEpoch, s.sealedSeq, s.sealedBytes
 }
 
-func isColumnSelectorMeteredSink(sinkType common.SinkType) bool {
+func appliesColumnSelector(sinkType common.SinkType) bool {
 	switch sinkType {
 	case common.KafkaSinkType, common.PulsarSinkType, common.CloudStorageSinkType:
 		return true

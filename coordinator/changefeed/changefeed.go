@@ -46,7 +46,7 @@ type Changefeed struct {
 	// the heartbeatpb.MaintainerStatus is read only
 	status *atomic.Pointer[heartbeatpb.MaintainerStatus]
 
-	meteringEpoch   *atomic.Uint64
+	meteringEpoch   uint64
 	meteringLastSeq atomic.Uint64
 
 	backoff *Backoff
@@ -306,8 +306,8 @@ func (c *Changefeed) GetLastSavedCheckPointTs() uint64 {
 	return c.lastSavedCheckpointTs.Load()
 }
 
-// SetMeteringEpochSource binds the shared coordinator metering epoch for AddMaintainerRequest.
-func (c *Changefeed) SetMeteringEpochSource(epoch *atomic.Uint64) {
+// SetMeteringEpoch sets the coordinator metering epoch included in AddMaintainerRequest.
+func (c *Changefeed) SetMeteringEpoch(epoch uint64) {
 	c.meteringEpoch = epoch
 }
 
@@ -331,10 +331,6 @@ func (c *Changefeed) NewAddMaintainerMessage(server node.ID) *messaging.TargetMe
 	if status := c.GetStatus(); status != nil {
 		checkpointTs = status.CheckpointTs
 	}
-	var meteringEpoch uint64
-	if c.meteringEpoch != nil {
-		meteringEpoch = c.meteringEpoch.Load()
-	}
 	return messaging.NewSingleTargetMessage(server,
 		messaging.MaintainerManagerTopic,
 		&heartbeatpb.AddMaintainerRequest{
@@ -344,7 +340,7 @@ func (c *Changefeed) NewAddMaintainerMessage(server node.ID) *messaging.TargetMe
 			IsNewChangefeed: c.isNew.Load(),
 			KeyspaceId:      info.KeyspaceID,
 			MaintainerEpoch: info.Epoch,
-			MeteringEpoch:   meteringEpoch,
+			MeteringEpoch:   c.meteringEpoch,
 			MeteringLastSeq: c.meteringLastSeq.Load(),
 		})
 }

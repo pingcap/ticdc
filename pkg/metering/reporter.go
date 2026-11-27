@@ -26,8 +26,8 @@ import (
 	"github.com/pingcap/metering_sdk/common"
 	"github.com/pingcap/metering_sdk/config"
 	"github.com/pingcap/metering_sdk/storage"
-	meteringwriterapi "github.com/pingcap/metering_sdk/writer"
-	meteringwriter "github.com/pingcap/metering_sdk/writer/metering"
+	"github.com/pingcap/metering_sdk/writer"
+	"github.com/pingcap/metering_sdk/writer/metering"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/util"
 	"go.uber.org/zap"
@@ -51,19 +51,6 @@ type Record struct {
 	EffectiveBytes uint64
 }
 
-// ToMeteringMap converts the record into the flat map consumed by MeteringData.Data.
-func (r Record) ToMeteringMap() map[string]any {
-	return map[string]any{
-		"version":    RecordVersion1,
-		"cluster_id": r.KeyspaceName,
-		"changefeed": r.ChangefeedName,
-		"effective_bytes": common.MeteringValue{
-			Value: r.EffectiveBytes,
-			Unit:  BytesUnit,
-		},
-	}
-}
-
 // Reporter uploads per-changefeed traffic deltas synchronously via Metering SDK.
 // The caller retains responsibility for in-memory accumulation, scheduling, and
 // retaining deltas across unsuccessful Report attempts.
@@ -85,7 +72,8 @@ func NewReporter(c *config.MeteringConfig, clusterID string) (*Reporter, error) 
 	if err := ValidateConfig(c); err != nil {
 		return nil, err
 	}
-	selfID := normalizeSelfID(clusterID)
+	// Replace '-' with '_' because the SDK forbids dashes in self_id path segments.
+	selfID := strings.ReplaceAll(strings.TrimSpace(clusterID), "-", "_")
 	if selfID == "" {
 		return nil, errors.ErrInvalidServerOption.GenWithStack("metering: cluster-id must not be empty")
 	}
@@ -99,20 +87,9 @@ func NewReporter(c *config.MeteringConfig, clusterID string) (*Reporter, error) 
 	}, nil
 }
 
-// normalizeSelfID derives the SDK self_id from clusterID by replacing '-' with '_'
-// because the SDK forbids dashes in self_id path segments.
-func normalizeSelfID(clusterID string) string {
-	return strings.ReplaceAll(strings.TrimSpace(clusterID), "-", "_")
-}
-
-// SelfID returns the normalized cluster identifier used in uploaded object names.
-func (r *Reporter) SelfID() string {
-	return r.selfID
-}
-
 // Report uploads all changefeed delta records for timestamp into one merged object.
 // Overwriting an existing object at the same timestamp is disabled; if the object
-// already exists, Report fails immediately with ErrFileExists without retrying.
+// already exists on the initial attempt, Report fails immediately with ErrFileExists.
 func (r *Reporter) Report(ctx context.Context, timestamp int64, records []Record) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -131,7 +108,15 @@ func (r *Reporter) Report(ctx context.Context, timestamp int64, records []Record
 		if record.ChangefeedName == "" {
 			return errors.ErrMeteringInvalidBatch.GenWithStackByArgs("changefeed name must not be empty")
 		}
-		items = append(items, record.ToMeteringMap())
+		items = append(items, map[string]any{
+			"version":    RecordVersion1,
+			"cluster_id": record.KeyspaceName,
+			"changefeed": record.ChangefeedName,
+			"effective_bytes": common.MeteringValue{
+				Value: record.EffectiveBytes,
+				Unit:  BytesUnit,
+			},
+		})
 	}
 
 	return r.write(ctx, &common.MeteringData{
@@ -150,12 +135,12 @@ func (r *Reporter) write(ctx context.Context, data *common.MeteringData) error {
 			select {
 			case <-ctx.Done():
 				timer.Stop()
-				return errors.WrapError(errors.ErrExternalStorageAPI, util.MaskSensitiveDataInURLError(ctx.Err()))
+				return errors.WrapError(errors.ErrExternalStorageAPI, ctx.Err())
 			case <-timer.C:
 			}
 		}
-		if err := ctx.Err(); err != nil {
-			return errors.WrapError(errors.ErrExternalStorageAPI, util.MaskSensitiveDataInURLError(err))
+		if err = ctx.Err(); err != nil {
+			return errors.WrapError(errors.ErrExternalStorageAPI, err)
 		}
 		attemptCtx, cancel := context.WithTimeout(ctx, writeTimeout)
 		err = r.inner.Write(attemptCtx, data)
@@ -163,7 +148,12 @@ func (r *Reporter) write(ctx context.Context, data *common.MeteringData) error {
 		if err == nil {
 			return nil
 		}
-		if errors.Is(err, meteringwriterapi.ErrFileExists) {
+		if errors.Is(err, writer.ErrFileExists) {
+			if attempt > 0 {
+				// attempt==0 HEAD confirmed absence before our PUT, so ErrFileExists on retry
+				// means the earlier PUT succeeded on storage; avoid re-uploading under next minute.
+				return nil
+			}
 			break
 		}
 	}

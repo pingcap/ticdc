@@ -22,7 +22,7 @@ import (
 	"time"
 
 	"github.com/pingcap/log"
-	meteringwriterapi "github.com/pingcap/metering_sdk/writer"
+	"github.com/pingcap/metering_sdk/writer"
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/metering"
@@ -32,6 +32,7 @@ import (
 const (
 	meteringReportInterval       = time.Minute
 	meteringShutdownFlushTimeout = 10 * time.Second
+	maxShutdownFlushAttempts     = 5
 )
 
 // meteringAccumulator buffers unreported per-changefeed traffic deltas in memory.
@@ -74,28 +75,30 @@ func (m *meteringAccumulator) Accept(cfID common.ChangeFeedID, seq, delta uint64
 	return prev, false
 }
 
-// OnChangefeedRemoved forgets sequence tracking for cfID while preserving any
+// Forget releases sequence tracking for cfID while preserving any
 // unreported pending bytes in memory until uploaded.
-func (m *meteringAccumulator) OnChangefeedRemoved(cfID common.ChangeFeedID) {
+func (m *meteringAccumulator) Forget(cfID common.ChangeFeedID) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	delete(m.lastSeq, cfID)
 }
 
 // Snapshot returns a deterministic batch of all positive pending balances
-// without holding the mutex across network I/O.
-func (m *meteringAccumulator) Snapshot() []metering.Record {
+// and the total buffered bytes without holding the mutex across network I/O.
+func (m *meteringAccumulator) Snapshot() ([]metering.Record, uint64) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
 	if len(m.pending) == 0 {
-		return nil
+		return nil, 0
 	}
 	records := make([]metering.Record, 0, len(m.pending))
+	var total uint64
 	for name, bytes := range m.pending {
 		if bytes == 0 {
 			continue
 		}
+		total += bytes
 		records = append(records, metering.Record{
 			KeyspaceName:   name.Keyspace,
 			ChangefeedName: name.Name,
@@ -108,12 +111,13 @@ func (m *meteringAccumulator) Snapshot() []metering.Record {
 		}
 		return cmp.Compare(a.ChangefeedName, b.ChangefeedName)
 	})
-	return records
+	return records, total
 }
 
 // Commit deducts only the snapshotted amounts after a successful upload,
-// preserving increments received concurrently during the upload.
-func (m *meteringAccumulator) Commit(records []metering.Record) {
+// preserving increments received concurrently during the upload, and returns
+// the remaining buffered bytes.
+func (m *meteringAccumulator) Commit(records []metering.Record) uint64 {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -126,24 +130,17 @@ func (m *meteringAccumulator) Commit(records []metering.Record) {
 			m.pending[key] = cur - r.EffectiveBytes
 		}
 	}
-}
-
-// PendingBytesTotal returns the total unreported traffic bytes currently in memory.
-func (m *meteringAccumulator) PendingBytesTotal() uint64 {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	var total uint64
+	var remaining uint64
 	for _, bytes := range m.pending {
-		total += bytes
+		remaining += bytes
 	}
-	return total
+	return remaining
 }
 
 // meteringReporter schedules per-minute delta uploads and shutdown flush for one coordinator term.
 type meteringReporter struct {
-	reporter      *metering.Reporter
-	accumulator   *meteringAccumulator
-	lastAttemptTS int64
+	reporter    *metering.Reporter
+	accumulator *meteringAccumulator
 }
 
 func newMeteringReporter(reporter *metering.Reporter, accumulator *meteringAccumulator) *meteringReporter {
@@ -156,10 +153,7 @@ func newMeteringReporter(reporter *metering.Reporter, accumulator *meteringAccum
 func (r *meteringReporter) Run(ctx context.Context) error {
 	next := time.Now().Truncate(meteringReportInterval).Add(meteringReportInterval)
 
-	for {
-		if !waitUntil(ctx, next) {
-			return nil
-		}
+	for waitUntil(ctx, next) {
 		// reportAt logs its own failures; the pending bytes stay in the accumulator
 		// and are retried on the next tick.
 		_ = r.reportAt(ctx, next)
@@ -168,6 +162,7 @@ func (r *meteringReporter) Run(ctx context.Context) error {
 			next = now.Truncate(meteringReportInterval).Add(meteringReportInterval)
 		}
 	}
+	return nil
 }
 
 // waitUntil blocks until deadline or ctx cancellation and reports whether deadline was reached.
@@ -190,21 +185,18 @@ func (r *meteringReporter) reportAt(ctx context.Context, reportTime time.Time) e
 	if r.reporter == nil || r.accumulator == nil {
 		return nil
 	}
-	meteringPendingBytesGauge.Set(float64(r.accumulator.PendingBytesTotal()))
-	records := r.accumulator.Snapshot()
+	records, pending := r.accumulator.Snapshot()
+	meteringPendingBytesGauge.Set(float64(pending))
 	if len(records) == 0 {
 		return nil
 	}
 	ts := reportTime.Truncate(time.Minute).Unix()
-	if ts > r.lastAttemptTS {
-		r.lastAttemptTS = ts
-	}
 
 	start := time.Now()
 	err := r.reporter.Report(ctx, ts, records)
 	meteringReportDuration.Observe(time.Since(start).Seconds())
 	if err != nil {
-		if errors.Is(err, meteringwriterapi.ErrFileExists) {
+		if errors.Is(err, writer.ErrFileExists) {
 			meteringReportCounter.WithLabelValues("exists").Inc()
 		} else {
 			meteringReportCounter.WithLabelValues("failure").Inc()
@@ -216,24 +208,33 @@ func (r *meteringReporter) reportAt(ctx context.Context, reportTime time.Time) e
 		return err
 	}
 
-	r.accumulator.Commit(records)
+	meteringPendingBytesGauge.Set(float64(r.accumulator.Commit(records)))
 	meteringReportCounter.WithLabelValues("success").Inc()
 	meteringLastSuccessTimestampGauge.Set(float64(ts))
-	meteringPendingBytesGauge.Set(float64(r.accumulator.PendingBytesTotal()))
 	return nil
 }
 
 func (r *meteringReporter) FlushOnShutdown() {
-	if r.reporter == nil || r.accumulator == nil || r.accumulator.PendingBytesTotal() == 0 {
+	if r.reporter == nil || r.accumulator == nil {
+		return
+	}
+	records, _ := r.accumulator.Snapshot()
+	if len(records) == 0 {
 		return
 	}
 	flushTS := time.Now().Truncate(time.Minute).Add(time.Minute)
-	if flushTS.Unix() <= r.lastAttemptTS {
-		flushTS = time.Unix(r.lastAttemptTS, 0).Add(time.Minute)
-	}
 	flushCtx, cancel := context.WithTimeout(context.Background(), meteringShutdownFlushTimeout)
 	defer cancel()
-	if err := r.reportAt(flushCtx, flushTS); err != nil {
+
+	var err error
+	for range maxShutdownFlushAttempts {
+		err = r.reportAt(flushCtx, flushTS)
+		if err == nil || !errors.Is(err, writer.ErrFileExists) || flushCtx.Err() != nil {
+			break
+		}
+		flushTS = flushTS.Add(time.Minute)
+	}
+	if err != nil {
 		log.Warn("shutdown traffic metering flush did not complete",
 			zap.Int64("timestamp", flushTS.Unix()),
 			zap.Error(err))

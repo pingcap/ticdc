@@ -23,7 +23,7 @@ import (
 )
 
 func TestMeteringCollectorMultiDMAndAckGating(t *testing.T) {
-	mc := newMeteringCollector()
+	var mc meteringCollector
 	mc.SetInitialState(10, 0)
 
 	n1 := node.ID("node-1")
@@ -37,63 +37,59 @@ func TestMeteringCollectorMultiDMAndAckGating(t *testing.T) {
 
 	// Both DMs advertise support but have no sealed data for (10, 1) yet.
 	res := mc.OnHeartbeat(n1, true, 0, 0, 0, getActive, now)
-	require.NotNil(t, res.cmd)
-	require.Equal(t, uint64(10), res.cmd.epoch)
-	require.Equal(t, uint64(1), res.cmd.seq)
+	require.Equal(t, uint64(10), res.cmdEpoch)
+	require.Equal(t, uint64(1), res.cmdSeq)
 	require.False(t, res.roundCompleted)
 	require.Equal(t, 1, activeCalls)
 
 	res = mc.OnHeartbeat(n2, true, 0, 0, 0, getActive, now)
-	require.NotNil(t, res.cmd)
-	require.Equal(t, uint64(10), res.cmd.epoch)
-	require.Equal(t, uint64(1), res.cmd.seq)
+	require.Equal(t, uint64(10), res.cmdEpoch)
+	require.Equal(t, uint64(1), res.cmdSeq)
 	require.False(t, res.roundCompleted)
 
 	// n1 reports round 1; round is still incomplete until n2 reports.
 	res = mc.OnHeartbeat(n1, true, 10, 1, 300, getActive, now)
-	require.Nil(t, res.cmd)
+	require.Zero(t, res.cmdEpoch)
 	require.False(t, res.roundCompleted)
-	_, ok := mc.GetStatusReport()
-	require.False(t, ok)
+	epoch, _, _ := mc.CompletedRound()
+	require.Zero(t, epoch)
 
 	// n2 reports round 1 -> round completes with sum 300 + 700 = 1000.
 	res = mc.OnHeartbeat(n2, true, 10, 1, 700, getActive, now)
-	require.Nil(t, res.cmd)
+	require.Zero(t, res.cmdEpoch)
 	require.True(t, res.roundCompleted)
-	report, ok := mc.GetStatusReport()
-	require.True(t, ok)
-	require.Equal(t, uint64(10), report.epoch)
-	require.Equal(t, uint64(1), report.seq)
-	require.Equal(t, uint64(1000), report.bytes)
+	epoch, seq, bytes := mc.CompletedRound()
+	require.Equal(t, uint64(10), epoch)
+	require.Equal(t, uint64(1), seq)
+	require.Equal(t, uint64(1000), bytes)
 
 	// Before ACK arrives, collector must NOT advance targetSeq or recompute active nodes.
 	callsBefore := activeCalls
 	res = mc.OnHeartbeat(n1, true, 10, 1, 300, getActive, now)
-	require.Nil(t, res.cmd)
+	require.Zero(t, res.cmdEpoch)
 	require.False(t, res.roundCompleted)
 	require.Equal(t, callsBefore, activeCalls)
 
 	// Coordinator ACKs (10, 1) -> collector advances to targetSeq = 2 after 1s interval.
 	mc.OnAck(10, 1, now)
-	_, ok = mc.GetStatusReport()
-	require.False(t, ok)
+	epoch, _, _ = mc.CompletedRound()
+	require.Zero(t, epoch)
 
 	// Before roundInterval elapses, OnHeartbeat is throttled and skips active node lookup.
 	res = mc.OnHeartbeat(n1, true, 10, 1, 300, getActive, now)
-	require.Nil(t, res.cmd)
+	require.Zero(t, res.cmdEpoch)
 	require.False(t, res.roundCompleted)
 	require.Equal(t, callsBefore, activeCalls)
 
 	res = mc.OnHeartbeat(n1, true, 10, 1, 300, getActive, now.Add(defaultMeteringRoundInterval))
-	require.NotNil(t, res.cmd)
-	require.Equal(t, uint64(10), res.cmd.epoch)
-	require.Equal(t, uint64(2), res.cmd.seq)
+	require.Equal(t, uint64(10), res.cmdEpoch)
+	require.Equal(t, uint64(2), res.cmdSeq)
 	require.False(t, res.roundCompleted)
 	require.Equal(t, callsBefore+1, activeCalls)
 }
 
 func TestMeteringCollectorRecoveryAndMixedUpgrade(t *testing.T) {
-	mc := newMeteringCollector()
+	var mc meteringCollector
 	// Maintainer restarts inheriting (epoch=10, lastSeq=5) from Coordinator.
 	mc.SetInitialState(10, 5)
 
@@ -108,49 +104,45 @@ func TestMeteringCollectorRecoveryAndMixedUpgrade(t *testing.T) {
 	mc.MarkNodeSupported(otherNewDM)
 
 	res := mc.OnHeartbeat(oldDM, false, 0, 0, 0, active, now)
-	require.Nil(t, res.cmd)
+	require.Zero(t, res.cmdEpoch)
 	require.False(t, res.roundCompleted)
 
 	res = mc.OnHeartbeat(newDM, true, 0, 0, 0, active, now)
-	require.NotNil(t, res.cmd)
-	require.Equal(t, uint64(10), res.cmd.epoch)
-	require.Equal(t, uint64(6), res.cmd.seq)
+	require.Equal(t, uint64(10), res.cmdEpoch)
+	require.Equal(t, uint64(6), res.cmdSeq)
 	require.False(t, res.roundCompleted)
 
 	// newDM reports round 6, then otherNewDM stalls past threshold -> reported with rate limit.
 	res = mc.OnHeartbeat(newDM, true, 10, 6, 450, active, now)
 	require.False(t, res.roundCompleted)
-	require.Nil(t, res.stall)
+	require.Empty(t, res.missingNodes)
 
 	res = mc.OnHeartbeat(newDM, true, 10, 6, 450, active, now.Add(meteringRoundStallThreshold))
 	require.False(t, res.roundCompleted)
-	require.NotNil(t, res.stall)
-	require.Equal(t, uint64(6), res.stall.targetSeq)
-	require.Equal(t, []node.ID{otherNewDM}, res.stall.missingNodes)
+	require.Equal(t, uint64(6), res.targetSeq)
+	require.Equal(t, []node.ID{otherNewDM}, res.missingNodes)
 
 	res = mc.OnHeartbeat(newDM, true, 10, 6, 450, active, now.Add(meteringRoundStallThreshold+10*time.Second))
-	require.Nil(t, res.stall)
+	require.Empty(t, res.missingNodes)
 
 	completed := mc.RemoveNode(otherNewDM, []node.ID{newDM, oldDM})
 	require.True(t, completed)
-	report, ok := mc.GetStatusReport()
-	require.True(t, ok)
-	require.Equal(t, uint64(10), report.epoch)
-	require.Equal(t, uint64(6), report.seq)
-	require.Equal(t, uint64(450), report.bytes)
+	epoch, seq, bytes := mc.CompletedRound()
+	require.Equal(t, uint64(10), epoch)
+	require.Equal(t, uint64(6), seq)
+	require.Equal(t, uint64(450), bytes)
 
 	// Coordinator failover bumps metering_epoch -> collector resets cleanly to seq=1.
 	mc.SetEpoch(11)
-	_, ok = mc.GetStatusReport()
-	require.False(t, ok)
+	epoch, _, _ = mc.CompletedRound()
+	require.Zero(t, epoch)
 
 	// Stale SetEpoch(10) after SetEpoch(11) must be ignored and keep epoch=11 intact.
 	mc.OnHeartbeat(newDM, true, 10, 6, 450, func() []node.ID { return []node.ID{newDM} }, now)
 	mc.SetEpoch(10)
 	res = mc.OnHeartbeat(newDM, true, 10, 6, 450, func() []node.ID { return []node.ID{newDM} }, now)
-	require.NotNil(t, res.cmd)
-	require.Equal(t, uint64(11), res.cmd.epoch)
-	require.Equal(t, uint64(1), res.cmd.seq)
+	require.Equal(t, uint64(11), res.cmdEpoch)
+	require.Equal(t, uint64(1), res.cmdSeq)
 	require.False(t, res.roundCompleted)
 
 	// SetEpoch(0) still disables metering cleanly.
@@ -160,6 +152,6 @@ func TestMeteringCollectorRecoveryAndMixedUpgrade(t *testing.T) {
 		calls++
 		return []node.ID{newDM}
 	}, now)
-	require.Nil(t, res.cmd)
+	require.Zero(t, res.cmdEpoch)
 	require.Zero(t, calls)
 }

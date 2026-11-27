@@ -25,7 +25,6 @@ import (
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/ticdc/pkg/scheduler/replica"
 	"github.com/pingcap/ticdc/pkg/util"
-	"go.uber.org/atomic"
 	"go.uber.org/zap"
 )
 
@@ -39,7 +38,7 @@ type ChangefeedDB struct {
 
 	// stopped changefeeds that failed, stopped or finished
 	stopped       map[common.ChangeFeedID]*Changefeed
-	meteringEpoch atomic.Uint64
+	meteringEpoch uint64
 	lock          sync.RWMutex
 }
 
@@ -63,7 +62,7 @@ func (db *ChangefeedDB) Init(allChangefeeds map[common.ChangeFeedID]*Changefeed)
 	defer db.lock.Unlock()
 	// Only add the changefeed to the changefeedDB and do nothing
 	for _, cf := range allChangefeeds {
-		cf.SetMeteringEpochSource(&db.meteringEpoch)
+		cf.SetMeteringEpoch(db.meteringEpoch)
 		db.changefeeds[cf.ID] = cf
 		db.changefeedDisplayNames[cf.ID.DisplayName] = cf.ID
 	}
@@ -71,7 +70,12 @@ func (db *ChangefeedDB) Init(allChangefeeds map[common.ChangeFeedID]*Changefeed)
 
 // SetMeteringEpoch updates the coordinator metering epoch shared by all changefeeds in this DB.
 func (db *ChangefeedDB) SetMeteringEpoch(epoch uint64) {
-	db.meteringEpoch.Store(epoch)
+	db.lock.Lock()
+	defer db.lock.Unlock()
+	db.meteringEpoch = epoch
+	for _, cf := range db.changefeeds {
+		cf.SetMeteringEpoch(epoch)
+	}
 }
 
 func (db *ChangefeedDB) withRLock(action func()) {
@@ -87,7 +91,7 @@ func (db *ChangefeedDB) AddAbsentChangefeed(tasks ...*Changefeed) {
 	defer db.lock.Unlock()
 
 	for _, task := range tasks {
-		task.SetMeteringEpochSource(&db.meteringEpoch)
+		task.SetMeteringEpoch(db.meteringEpoch)
 		db.changefeeds[task.ID] = task
 		db.changefeedDisplayNames[task.ID.DisplayName] = task.ID
 		db.AddAbsentWithoutLock(task)
@@ -99,7 +103,7 @@ func (db *ChangefeedDB) AddStoppedChangefeed(task *Changefeed) {
 	db.lock.Lock()
 	defer db.lock.Unlock()
 
-	task.SetMeteringEpochSource(&db.meteringEpoch)
+	task.SetMeteringEpoch(db.meteringEpoch)
 	db.changefeeds[task.ID] = task
 	db.changefeedDisplayNames[task.ID.DisplayName] = task.ID
 	db.stopped[task.ID] = task
@@ -110,7 +114,7 @@ func (db *ChangefeedDB) AddReplicatingMaintainer(task *Changefeed, nodeID node.I
 	db.lock.Lock()
 	defer db.lock.Unlock()
 
-	task.SetMeteringEpochSource(&db.meteringEpoch)
+	task.SetMeteringEpoch(db.meteringEpoch)
 	task.SetNodeID(nodeID)
 	log.Info("add an replicating maintainer",
 		zap.String("nodeID", nodeID.String()),
@@ -398,7 +402,7 @@ func (db *ChangefeedDB) ReplaceStoppedChangefeed(cf *config.ChangeFeedInfo) {
 	}
 	// todo: not create a new changefeed here?
 	newCf := NewChangefeed(cf.ChangefeedID, cf, oldCf.GetStatus().CheckpointTs, false)
-	newCf.SetMeteringEpochSource(&db.meteringEpoch)
+	newCf.SetMeteringEpoch(db.meteringEpoch)
 	newCf.SetMeteringLastSeq(oldCf.GetMeteringLastSeq())
 	db.stopped[cf.ChangefeedID] = newCf
 	db.changefeeds[cf.ChangefeedID] = newCf

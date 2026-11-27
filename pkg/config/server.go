@@ -24,7 +24,7 @@ import (
 
 	"github.com/pingcap/errors"
 	"github.com/pingcap/log"
-	meteringconfig "github.com/pingcap/metering_sdk/config"
+	"github.com/pingcap/metering_sdk/config"
 	cerror "github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/metering"
 	"github.com/pingcap/ticdc/pkg/security"
@@ -168,7 +168,7 @@ type ServerConfig struct {
 	Debug      *DebugConfig         `toml:"debug" json:"debug"`
 	ClusterID  string               `toml:"cluster-id" json:"cluster-id"`
 
-	Metering *meteringconfig.MeteringConfig `toml:"metering" json:"metering,omitempty"`
+	Metering *config.MeteringConfig `toml:"metering" json:"metering,omitempty"`
 
 	// Deprecated: we don't use this field anymore.
 	GcTunerMemoryThreshold uint64  `toml:"gc-tuner-memory-threshold" json:"gc-tuner-memory-threshold"`

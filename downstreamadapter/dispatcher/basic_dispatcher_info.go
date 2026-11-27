@@ -83,22 +83,23 @@ type SharedInfo struct {
 	// which includes the time of executing the DDL and waiting for the DDL to be resolved.
 	metricHandleDDLHis prometheus.Observer
 
-	meteringColumnSelector func(*common.TableInfo) commonEvent.Selector
-	meteringCounter        *atomic.Uint64
+	meteringColumnSelector  func(*common.TableInfo) commonEvent.Selector
+	addMeteredBytes         func(uint64)
+	lastMeasureErrorLogUnix atomic.Int64
 }
 
 // SetTrafficMetering configures DML traffic metering collection on SharedInfo.
 func (s *SharedInfo) SetTrafficMetering(
 	selectorFn func(*common.TableInfo) commonEvent.Selector,
-	counter *atomic.Uint64,
+	addBytes func(uint64),
 ) {
 	s.meteringColumnSelector = selectorFn
-	s.meteringCounter = counter
+	s.addMeteredBytes = addBytes
 }
 
 // IsTrafficMeteringEnabled reports whether traffic metering collection is attached.
 func (s *SharedInfo) IsTrafficMeteringEnabled() bool {
-	return s != nil && s.meteringCounter != nil
+	return s != nil && s.addMeteredBytes != nil
 }
 
 // NewSharedInfo creates a new SharedInfo with the given parameters

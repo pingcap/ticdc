@@ -129,6 +129,7 @@ func New(node *node.Info,
 	}
 	// handle messages from message center
 	mc.RegisterHandler(messaging.CoordinatorTopic, c.recvMessages)
+	reporter := createMeteringReporter()
 	c.controller = NewController(
 		c.version,
 		c.nodeInfo,
@@ -138,7 +139,11 @@ func New(node *node.Info,
 		batchSize,
 		balanceCheckInterval,
 		c.pdClient,
+		reporter != nil,
 	)
+	if reporter != nil {
+		c.metering = newMeteringReporter(reporter, c.controller.metering)
+	}
 
 	nodeManager := appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName)
 	nodeManager.RegisterOwnerChangeHandler(
@@ -177,7 +182,6 @@ func (c *coordinator) Run(ctx context.Context) error {
 	ctx, cancel := context.WithCancel(ctx)
 	c.cancel = cancel
 	defer cancel()
-	c.initializeMetering()
 	if c.metering != nil {
 		meteringEnabledGauge.Set(1)
 		defer func() {
@@ -213,24 +217,19 @@ func (c *coordinator) Run(ctx context.Context) error {
 	return err
 }
 
-func (c *coordinator) initializeMetering() {
+func createMeteringReporter() *metering.Reporter {
 	serverCfg := config.GetGlobalServerConfig()
 	if serverCfg == nil || serverCfg.Metering == nil || serverCfg.Metering.Type == "" {
-		return
+		return nil
 	}
 	reporter, err := metering.NewReporter(serverCfg.Metering, serverCfg.ClusterID)
 	if err != nil {
 		meteringEnabledGauge.Set(0)
 		log.Error("failed to initialize traffic metering reporter; disabling metering for this coordinator term",
 			zap.Error(err))
-		return
+		return nil
 	}
-	var acc *meteringAccumulator
-	if c.controller != nil {
-		c.controller.EnableMetering()
-		acc = c.controller.metering
-	}
-	c.metering = newMeteringReporter(reporter, acc)
+	return reporter
 }
 
 // run handles the following:

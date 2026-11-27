@@ -250,7 +250,7 @@ var (
 			Help:      "Total count of blocking ddl.",
 		}, []string{metrics.GetKeyspaceLabel(), "changefeed", "mode"})
 
-	maintainerMeteringRoundStalledCounter = prometheus.NewCounter(
+	meteringRoundStalledCounter = prometheus.NewCounter(
 		prometheus.CounterOpts{
 			Namespace: "ticdc",
 			Subsystem: "metering",
@@ -289,5 +289,5 @@ func RegisterMetrics(registry *prometheus.Registry) {
 	registry.MustRegister(slowestTableRegionGaugeVec)
 	registry.MustRegister(slowestTablePullerResolvedTs)
 	registry.MustRegister(slowestTablePullerResolvedTsLag)
-	registry.MustRegister(maintainerMeteringRoundStalledCounter)
+	registry.MustRegister(meteringRoundStalledCounter)
 }

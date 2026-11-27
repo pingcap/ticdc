@@ -15,7 +15,6 @@
 package dispatcher
 
 import (
-	"sync/atomic"
 	"time"
 
 	"github.com/pingcap/log"
@@ -28,9 +27,7 @@ import (
 	"go.uber.org/zap"
 )
 
-const unknownSQLTypeLogIntervalSeconds int64 = 60
-
-var lastUnknownSQLTypeLogUnix atomic.Int64
+const measureErrorLogIntervalSeconds int64 = 60
 
 // measureDMLEventV1 computes the canonical effective_bytes for all logical rows
 // in event matching selector, and rewinds event so downstream sinks read from
@@ -99,20 +96,17 @@ func measureRowV1(row chunk.Row, cols []*model.ColumnInfo, selector commonEvent.
 	return total, firstErr
 }
 
-func recordMeteringMeasureError(changefeedID common.ChangeFeedID, err error) {
-	if err == nil {
-		return
-	}
+func recordMeteringMeasureError(sharedInfo *SharedInfo, err error) {
 	reason := "value_error"
 	if errors.Is(err, metering.ErrUnsupportedSQLType) {
 		reason = "unsupported_type"
 	}
 	meteringMeasureErrorCounter.WithLabelValues(reason).Inc()
 	now := time.Now().Unix()
-	prev := lastUnknownSQLTypeLogUnix.Load()
-	if now-prev >= unknownSQLTypeLogIntervalSeconds && lastUnknownSQLTypeLogUnix.CompareAndSwap(prev, now) {
+	prev := sharedInfo.lastMeasureErrorLogUnix.Load()
+	if now-prev >= measureErrorLogIntervalSeconds && sharedInfo.lastMeasureErrorLogUnix.CompareAndSwap(prev, now) {
 		log.Warn("traffic metering column measurement error, treating column as 0 bytes",
-			zap.Stringer("changefeedID", changefeedID),
+			zap.Stringer("changefeedID", sharedInfo.changefeedID),
 			zap.String("reason", reason),
 			zap.Error(err))
 	}

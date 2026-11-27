@@ -145,7 +145,7 @@ func TestDispatcherTrafficMeteringAndColumnSelectors(t *testing.T) {
 			}
 			var counter atomic.Uint64
 			sharedInfo := newTestSharedInfo(false, false, nil)
-			sharedInfo.SetTrafficMetering(selectorFn, &counter)
+			sharedInfo.SetTrafficMetering(selectorFn, func(n uint64) { counter.Add(n) })
 
 			testSink := newDispatcherTestSink(t, common.MysqlSinkType)
 			d := &BasicDispatcher{
@@ -194,7 +194,7 @@ func TestDispatcherTrafficMeteringFailOpenOnUnknownType(t *testing.T) {
 
 	var counter atomic.Uint64
 	sharedInfo := newTestSharedInfo(false, false, nil)
-	sharedInfo.SetTrafficMetering(nil, &counter)
+	sharedInfo.SetTrafficMetering(nil, func(n uint64) { counter.Add(n) })
 	testSink := newDispatcherTestSink(t, common.MysqlSinkType)
 	d := &BasicDispatcher{
 		mode:          common.DefaultMode,

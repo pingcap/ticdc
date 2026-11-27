@@ -363,7 +363,7 @@ func NewDispatcherManager(
 	)
 	if serverCfg := config.GetGlobalServerConfig(); serverCfg != nil && serverCfg.Metering != nil && serverCfg.Metering.Type != "" {
 		var meteringSelectorFn func(*common.TableInfo) commonEvent.Selector
-		if isColumnSelectorMeteredSink(sinkType) && manager.config.SinkConfig != nil && len(manager.config.SinkConfig.ColumnSelectors) > 0 {
+		if appliesColumnSelector(sinkType) && manager.config.SinkConfig != nil && len(manager.config.SinkConfig.ColumnSelectors) > 0 {
 			meteringSelectors, err := columnselector.New(manager.config.SinkConfig, manager.config.CaseSensitive)
 			if err != nil {
 				return nil, errors.Trace(err)
@@ -372,7 +372,7 @@ func NewDispatcherManager(
 				return meteringSelectors.GetForTableInfo(tableInfo)
 			}
 		}
-		sharedInfo.SetTrafficMetering(meteringSelectorFn, manager.metering.Counter())
+		sharedInfo.SetTrafficMetering(meteringSelectorFn, manager.metering.Add)
 	}
 	manager.writePathMu.Lock()
 	if manager.writePathClosed.Load() {
@@ -1015,7 +1015,7 @@ func (e *DispatcherManager) aggregateDispatcherHeartbeats(needCompleteStatus boo
 	e.metricResolvedTsLag.Set(float64(oracle.GetPhysical(pdTime)-phyResolvedTs) / 1e3)
 
 	message.MeteringSupported = e.IsTrafficMeteringEnabled()
-	message.MeteringEpoch, message.MeteringSeq, message.MeteringBytes = e.metering.Report()
+	message.MeteringEpoch, message.MeteringSeq, message.MeteringBytes = e.metering.Sealed()
 
 	return &message
 }

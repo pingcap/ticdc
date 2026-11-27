@@ -120,8 +120,7 @@ type Controller struct {
 	// semantics so late polls still observe success instead of capture-not-exist.
 	drainCompleted *drainCompletedState
 
-	meteringEnabled atomic.Bool
-	metering        *meteringAccumulator
+	metering *meteringAccumulator
 }
 
 type changefeedChange struct {
@@ -151,6 +150,7 @@ func NewController(
 	batchSize int,
 	balanceInterval time.Duration,
 	pdClient pd.Client,
+	meteringEnabled bool,
 ) *Controller {
 	changefeedDB := changefeed.NewChangefeedDB(version)
 
@@ -197,9 +197,14 @@ func NewController(
 		pdClock:            appcontext.GetService[pdutil.Clock](appcontext.DefaultPDClock),
 		drainController:    drainController,
 		writeLease:         newCaptureWriteLeaseController(version, selfNode.ID),
-		metering:           newMeteringAccumulator(),
 	}
 	c.nodeChanged.changed = false
+	if meteringEnabled {
+		c.metering = newMeteringAccumulator()
+		if version > 0 {
+			changefeedDB.SetMeteringEpoch(uint64(version))
+		}
+	}
 
 	c.bootstrapper = bootstrap.NewBootstrapper[heartbeatpb.CoordinatorBootstrapResponse](
 		bootstrapperID,
@@ -763,7 +768,7 @@ func (c *Controller) handleSingleMaintainerStatus(
 		return nil
 	}
 
-	if c.meteringEnabled.Load() && c.metering != nil && c.version > 0 &&
+	if c.metering != nil && c.version > 0 &&
 		status.MeteringEpoch == uint64(c.version) && status.MeteringSeq > 0 {
 		if ackedSeq, ok := c.metering.Accept(cfID, status.MeteringSeq, status.MeteringBytes); ok {
 			cf.SetMeteringLastSeq(ackedSeq)
@@ -795,14 +800,6 @@ func (c *Controller) handleSingleMaintainerStatus(
 
 	change := c.updateChangefeedStatus(cf, cfID, status)
 	return change
-}
-
-// EnableMetering activates traffic metering acceptance and propagation for this controller term.
-func (c *Controller) EnableMetering() {
-	c.meteringEnabled.Store(true)
-	if c.version > 0 && c.changefeedDB != nil {
-		c.changefeedDB.SetMeteringEpoch(uint64(c.version))
-	}
 }
 
 // markChangefeedBootstrapped serializes the acknowledgement with API lifecycle
@@ -1190,7 +1187,7 @@ func (c *Controller) RemoveChangefeed(ctx context.Context, id common.ChangeFeedI
 		}
 	}
 	if c.metering != nil {
-		c.metering.OnChangefeedRemoved(id)
+		c.metering.Forget(id)
 	}
 	return cf.GetStatus().CheckpointTs, nil
 }
@@ -1443,7 +1440,7 @@ func (c *Controller) newBootstrapMessage(id node.ID, addr string) *messaging.Tar
 		&heartbeatpb.CoordinatorBootstrapRequest{
 			Version:                   c.version,
 			WriteLeaseProtocolVersion: heartbeatpb.LegacyWriteLeaseProtocolVersion,
-			MeteringEnabled:           c.meteringEnabled.Load(),
+			MeteringEnabled:           c.metering != nil,
 		})
 }
 

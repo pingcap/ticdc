@@ -335,10 +335,10 @@ func (d *BasicDispatcher) AddDMLEventsToSink(events []*commonEvent.DMLEvent, wak
 }
 
 func (d *BasicDispatcher) attachTrafficMeteringCallbacks(events []*commonEvent.DMLEvent) {
-	if common.IsRedoMode(d.mode) || d.sharedInfo == nil || d.sharedInfo.meteringCounter == nil {
+	if common.IsRedoMode(d.mode) || !d.sharedInfo.IsTrafficMeteringEnabled() {
 		return
 	}
-	counter := d.sharedInfo.meteringCounter
+	addBytes := d.sharedInfo.addMeteredBytes
 	selectorFn := d.sharedInfo.meteringColumnSelector
 	for _, event := range events {
 		var selector commonEvent.Selector
@@ -347,11 +347,11 @@ func (d *BasicDispatcher) attachTrafficMeteringCallbacks(events []*commonEvent.D
 		}
 		bytes, err := measureDMLEventV1(event, selector)
 		if err != nil {
-			recordMeteringMeasureError(d.sharedInfo.changefeedID, err)
+			recordMeteringMeasureError(d.sharedInfo, err)
 		}
 		if bytes > 0 {
 			event.AddPostFlushFunc(func() {
-				counter.Add(bytes)
+				addBytes(bytes)
 			})
 		}
 	}

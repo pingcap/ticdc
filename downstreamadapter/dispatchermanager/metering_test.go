@@ -29,48 +29,45 @@ func TestDispatcherManagerMeteringStateMachine(t *testing.T) {
 	dm.meta.maintainerID = "maintainer-1"
 	dm.meta.maintainerEpoch = 3
 
-	dm.metering.Counter().Add(120)
-	epoch, seq, bytes := dm.metering.Report()
+	dm.metering.Add(120)
+	epoch, seq, bytes := dm.metering.Sealed()
 	require.Zero(t, epoch)
 	require.Zero(t, seq)
 	require.Zero(t, bytes)
 
 	// New epoch & seq seals current into sealedBytes and swaps current to 0.
-	dm.metering.HandleCommand(10, 1)
-	epoch, seq, bytes = dm.metering.Report()
+	dm.metering.Seal(10, 1)
+	epoch, seq, bytes = dm.metering.Sealed()
 	require.Equal(t, uint64(10), epoch)
 	require.Equal(t, uint64(1), seq)
 	require.Equal(t, uint64(120), bytes)
-	require.Zero(t, dm.metering.Counter().Load())
 
 	// Receiving the same (epoch, seq) must be idempotent even if new bytes flushed.
-	dm.metering.Counter().Add(45)
-	dm.metering.HandleCommand(10, 1)
-	epoch, seq, bytes = dm.metering.Report()
+	dm.metering.Add(45)
+	dm.metering.Seal(10, 1)
+	epoch, seq, bytes = dm.metering.Sealed()
 	require.Equal(t, uint64(10), epoch)
 	require.Equal(t, uint64(1), seq)
 	require.Equal(t, uint64(120), bytes)
-	require.Equal(t, uint64(45), dm.metering.Counter().Load())
 
 	// Older epoch/seq must be ignored.
-	dm.metering.HandleCommand(9, 99)
-	epoch, seq, bytes = dm.metering.Report()
+	dm.metering.Seal(9, 99)
+	epoch, seq, bytes = dm.metering.Sealed()
 	require.Equal(t, uint64(10), epoch)
 	require.Equal(t, uint64(1), seq)
 	require.Equal(t, uint64(120), bytes)
 
-	// Higher seq in same epoch seals newly flushed 45 bytes.
-	dm.metering.HandleCommand(10, 2)
-	epoch, seq, bytes = dm.metering.Report()
+	// Higher seq in same epoch seals only the newly flushed 45 bytes.
+	dm.metering.Seal(10, 2)
+	epoch, seq, bytes = dm.metering.Sealed()
 	require.Equal(t, uint64(10), epoch)
 	require.Equal(t, uint64(2), seq)
 	require.Equal(t, uint64(45), bytes)
-	require.Zero(t, dm.metering.Counter().Load())
 
 	// Higher epoch (coordinator failover) resets seq cleanly and seals new bytes.
-	dm.metering.Counter().Add(80)
-	dm.metering.HandleCommand(11, 1)
-	epoch, seq, bytes = dm.metering.Report()
+	dm.metering.Add(80)
+	dm.metering.Seal(11, 1)
+	epoch, seq, bytes = dm.metering.Sealed()
 	require.Equal(t, uint64(11), epoch)
 	require.Equal(t, uint64(1), seq)
 	require.Equal(t, uint64(80), bytes)
@@ -80,7 +77,7 @@ func TestDispatcherManagerMeteringStateMachine(t *testing.T) {
 	require.False(t, req.MeteringSupported)
 
 	// Once attached on SharedInfo, aggregateDispatcherHeartbeats advertises capability and sealed values.
-	dm.sharedInfo.SetTrafficMetering(nil, dm.metering.Counter())
+	dm.sharedInfo.SetTrafficMetering(nil, dm.metering.Add)
 	req = dm.aggregateDispatcherHeartbeats(false)
 	require.True(t, req.MeteringSupported)
 	require.Equal(t, uint64(11), req.MeteringEpoch)
@@ -89,14 +86,14 @@ func TestDispatcherManagerMeteringStateMachine(t *testing.T) {
 
 	// HeartBeatResponseHandler forwards fenced commands and drops stale maintainer_epoch.
 	handler := &HeartBeatResponseHandler{}
-	dm.metering.Counter().Add(15)
+	dm.metering.Add(15)
 	handler.Handle(dm, NewHeartBeatResponse(node.ID("stale-maintainer"), &heartbeatpb.HeartBeatResponse{
 		ChangefeedID:    dm.changefeedID.ToPB(),
 		MaintainerEpoch: 2,
 		MeteringEpoch:   11,
 		MeteringSeq:     2,
 	}))
-	_, seq, _ = dm.metering.Report()
+	_, seq, _ = dm.metering.Sealed()
 	require.Equal(t, uint64(1), seq)
 
 	handler.Handle(dm, NewHeartBeatResponse(node.ID("maintainer-1"), &heartbeatpb.HeartBeatResponse{
@@ -105,7 +102,7 @@ func TestDispatcherManagerMeteringStateMachine(t *testing.T) {
 		MeteringEpoch:   11,
 		MeteringSeq:     2,
 	}))
-	epoch, seq, bytes = dm.metering.Report()
+	epoch, seq, bytes = dm.metering.Sealed()
 	require.Equal(t, uint64(11), epoch)
 	require.Equal(t, uint64(2), seq)
 	require.Equal(t, uint64(15), bytes)
