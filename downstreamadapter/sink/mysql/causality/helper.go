@@ -61,7 +61,7 @@ func ConflictKeys(event *commonEvent.DMLEvent, txnOrderMatcher *ordering.TxnOrde
 			event.Rewind()
 			break
 		}
-		keys := genRowKeys(row, event.TableInfo, event.DispatcherID)
+		keys := genRowKeys(row, event.TableInfo, event.PhysicalTableID)
 		for _, key := range keys {
 			if n, err := hasher.Write(key); n != len(key) || err != nil {
 				log.Panic("transaction key hash fail")
@@ -74,7 +74,7 @@ func ConflictKeys(event *commonEvent.DMLEvent, txnOrderMatcher *ordering.TxnOrde
 	return hashRes
 }
 
-func genRowKeys(row commonEvent.RowChange, tableInfo *common.TableInfo, dispatcherID common.DispatcherID) [][]byte {
+func genRowKeys(row commonEvent.RowChange, tableInfo *common.TableInfo, tableID int64) [][]byte {
 	var keys [][]byte
 
 	for _, rowData := range []chunk.Row{row.Row, row.PreRow} {
@@ -89,7 +89,7 @@ func genRowKeys(row commonEvent.RowChange, tableInfo *common.TableInfo, dispatch
 				Offset: tableInfo.MustGetColumnOffsetByID(pkIndex[0]),
 				Length: types.UnspecifiedLength,
 			}}
-			if key := genKeyList(&rowData, -1, pkColumns, dispatcherID, tableInfo); len(key) > 0 {
+			if key := genKeyList(&rowData, -1, pkColumns, tableID, tableInfo); len(key) > 0 {
 				keys = append(keys, key)
 			}
 		}
@@ -103,28 +103,28 @@ func genRowKeys(row commonEvent.RowChange, tableInfo *common.TableInfo, dispatch
 			if index.Primary && tableInfo.PKIsHandle() {
 				continue
 			}
-			if key := genKeyList(&rowData, index.ID, index.Columns, dispatcherID, tableInfo); len(key) > 0 {
+			if key := genKeyList(&rowData, index.ID, index.Columns, tableID, tableInfo); len(key) > 0 {
 				keys = append(keys, key)
 			}
 		}
 	}
 	if len(keys) == 0 {
-		// use dispatcherID as key if no key generated (no PK/UK),
-		// no concurrence for rows in the same dispatcher.
-		log.Debug("Use dispatcherID as the key", zap.Any("dispatcherID", dispatcherID))
+		// Use tableID as the key when no PK/UK dependency exists, serializing rows
+		// within the same table without cross-table serialization.
+		log.Debug("Use tableID as the key", zap.Int64("tableID", tableID))
 		tableKey := make([]byte, 8)
-		binary.BigEndian.PutUint64(tableKey, uint64(dispatcherID.GetLow()))
+		binary.BigEndian.PutUint64(tableKey, uint64(tableID))
 		keys = [][]byte{tableKey}
 	}
 	return keys
 }
 
 func genKeyList(
-	row *chunk.Row, indexID int64, indexColumns []*model.IndexColumn, dispatcherID common.DispatcherID, tableInfo *common.TableInfo,
+	row *chunk.Row, indexID int64, indexColumns []*model.IndexColumn, tableID int64, tableInfo *common.TableInfo,
 ) []byte {
 	indexKey := make([]byte, 16)
 	binary.BigEndian.PutUint64(indexKey[:8], uint64(indexID))
-	binary.BigEndian.PutUint64(indexKey[8:], dispatcherID.GetLow())
+	binary.BigEndian.PutUint64(indexKey[8:], uint64(tableID))
 
 	var key []byte
 	for _, indexColumn := range indexColumns {
