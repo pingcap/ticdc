@@ -929,18 +929,30 @@ func TestMsgToDispatcherInfoRejectsMalformedRequests(t *testing.T) {
 		DispatcherId: dispatcherID,
 		ChangefeedId: changefeedID,
 		TableSpan:    &heartbeatpb.TableSpan{TableID: 1},
+		ServerId:     "sender",
 	}}
 	validRegister := &messaging.DispatcherRequest{DispatcherRequest: &eventpb.DispatcherRequest{
 		ActionType:   eventpb.ActionType_ACTION_TYPE_REGISTER,
 		DispatcherId: dispatcherID,
 		ChangefeedId: changefeedID,
 		TableSpan:    &heartbeatpb.TableSpan{TableID: 1},
+		ServerId:     "sender",
+		FilterConfig: &eventpb.FilterConfig{FilterConfig: &eventpb.InnerFilterConfig{
+			Rules: []string{"*.*"},
+		}},
+	}}
+	forgedRegister := &messaging.DispatcherRequest{DispatcherRequest: &eventpb.DispatcherRequest{
+		ActionType:   eventpb.ActionType_ACTION_TYPE_REGISTER,
+		DispatcherId: dispatcherID,
+		ChangefeedId: changefeedID,
+		TableSpan:    &heartbeatpb.TableSpan{TableID: 1},
+		ServerId:     "other-sender",
 		FilterConfig: &eventpb.FilterConfig{FilterConfig: &eventpb.InnerFilterConfig{
 			Rules: []string{"*.*"},
 		}},
 	}}
 
-	infos := msgToDispatcherInfo(&messaging.TargetMessage{Message: []messaging.IOTypeT{
+	infos := msgToDispatcherInfo(&messaging.TargetMessage{From: node.ID("sender"), Message: []messaging.IOTypeT{
 		nil,
 		&commonEvent.DispatcherHeartbeat{},
 		&messaging.DispatcherRequest{},
@@ -951,6 +963,7 @@ func TestMsgToDispatcherInfoRejectsMalformedRequests(t *testing.T) {
 			ActionType: eventpb.ActionType_ACTION_TYPE_REGISTER,
 			TableSpan:  &heartbeatpb.TableSpan{TableID: 1},
 		}},
+		forgedRegister,
 		validRemove,
 		validRegister,
 	}})

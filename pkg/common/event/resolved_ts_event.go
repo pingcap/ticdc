@@ -256,6 +256,9 @@ func (e ResolvedEvent) encodeV1() ([]byte, error) {
 
 func (e *ResolvedEvent) decodeV1(data []byte) error {
 	// Note: header (magic + event type + version + length) has already been read and removed from data
+	if err := validatePayloadMinimumSize(data, 24+e.DispatcherID.GetSize(), "resolved event"); err != nil {
+		return err
+	}
 	offset := 0
 
 	// ResolvedTs

@@ -82,7 +82,8 @@ func RegisterOpenAPIV1Routes(router *gin.Engine, api OpenAPIV1) {
 
 	// owner API
 	ownerGroup := v1.Group("/owner")
-	ownerGroup.POST("/resign", coordinatorMiddleware, setV1Header, api.v2.ResignOwner)
+	ownerGroup.POST("/resign", nodeAuthenticateMiddleware, coordinatorMiddleware,
+		middleware.ChangefeedOperationMiddleware("resign_owner"), setV1Header, api.v2.ResignOwner)
 
 	// processor API
 	processorGroup := v1.Group("/processors")

@@ -29,7 +29,10 @@ import (
 	"github.com/pingcap/ticdc/pkg/config/kerneltype"
 	"github.com/pingcap/ticdc/pkg/etcd"
 	"github.com/pingcap/ticdc/pkg/keyspace"
+	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/ticdc/pkg/server/mock"
+	"github.com/pingcap/ticdc/pkg/txnutil/gc"
+	"github.com/pingcap/ticdc/server/watcher"
 	"github.com/stretchr/testify/require"
 	clientv3 "go.etcd.io/etcd/client/v3"
 	"go.uber.org/zap/zapcore"
@@ -104,16 +107,19 @@ func TestTableInspectionRoutesRequireAuthentication(t *testing.T) {
 	cfg.Security.ClientAllowedUser = []string{"alice"}
 	config.StoreGlobalServerConfig(cfg)
 
-	paths := []string{
-		"/api/v2/verify_table?keyspace=" + common.DefaultKeyspaceName,
-		"/api/v2/get_all_tables?keyspace=" + common.DefaultKeyspaceName,
+	requests := []struct {
+		method string
+		path   string
+	}{
+		{http.MethodPost, "/api/v2/verify_table?keyspace=" + common.DefaultKeyspaceName},
+		{http.MethodPost, "/api/v2/get_all_tables?keyspace=" + common.DefaultKeyspaceName},
 	}
 
 	ctrl := gomock.NewController(t)
 	apiServer := mock.NewMockServer(ctrl)
 	etcdClient := etcd.NewMockCDCEtcdClient(ctrl)
-	apiServer.EXPECT().GetEtcdClient().Return(etcdClient).Times(len(paths))
-	etcdClient.EXPECT().GetEtcdClient().Return(nil).Times(len(paths))
+	apiServer.EXPECT().GetEtcdClient().Return(etcdClient).Times(len(requests))
+	etcdClient.EXPECT().GetEtcdClient().Return(nil).Times(len(requests))
 
 	if kerneltype.IsNextGen() {
 		previous, _ := appcontext.TryGetService[keyspace.Manager](appcontext.KeyspaceManager)
@@ -124,16 +130,16 @@ func TestTableInspectionRoutesRequireAuthentication(t *testing.T) {
 				Keyspace: &keyspacepb.KeyspaceMeta_Id{Id: common.DefaultKeyspaceID},
 				Name:     common.DefaultKeyspaceName,
 			}, nil,
-		).Times(len(paths))
+		).Times(len(requests))
 		appcontext.SetService[keyspace.Manager](appcontext.KeyspaceManager, keyspaceManager)
 	}
 
 	router := gin.New()
 	RegisterOpenAPIV2Routes(router, NewOpenAPIV2(apiServer))
 
-	for _, path := range paths {
-		t.Run(path, func(t *testing.T) {
-			request := httptest.NewRequest(http.MethodPost, path, strings.NewReader(`{}`))
+	for _, request := range requests {
+		t.Run(request.path, func(t *testing.T) {
+			request := httptest.NewRequest(request.method, request.path, strings.NewReader(`{}`))
 			request.Header.Set("Content-Type", "application/json")
 			response := httptest.NewRecorder()
 
@@ -217,6 +223,58 @@ func TestManagementRoutesRequireAuthentication(t *testing.T) {
 			require.Equal(t, http.StatusUnauthorized, response.Code, response.Body.String())
 		})
 	}
+}
+
+func TestCaptureRouteAllowedWithClientUserRequired(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	originalConfig := config.GetGlobalServerConfig()
+	t.Cleanup(func() { config.StoreGlobalServerConfig(originalConfig) })
+	cfg := originalConfig.Clone()
+	cfg.Security.ClientUserRequired = true
+	config.StoreGlobalServerConfig(cfg)
+
+	originalNodeManager, _ := appcontext.TryGetService[*watcher.NodeManager](watcher.NodeManagerName)
+	t.Cleanup(func() { appcontext.SetService(watcher.NodeManagerName, originalNodeManager) })
+	appcontext.SetService(watcher.NodeManagerName, watcher.NewNodeManager(nil, nil))
+
+	ctrl := gomock.NewController(t)
+	apiServer := mock.NewMockServer(ctrl)
+	apiServer.EXPECT().IsCoordinator().Return(true)
+	apiServer.EXPECT().SelfInfo().Return(&node.Info{ID: "capture-1"}, nil)
+
+	router := gin.New()
+	RegisterOpenAPIV2Routes(router, NewOpenAPIV2(apiServer))
+
+	request := httptest.NewRequest(http.MethodGet, "/api/v2/captures", nil)
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, request)
+
+	require.Equal(t, http.StatusOK, response.Code, response.Body.String())
+}
+
+func TestTsoRouteAllowedWithClientUserRequired(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	originalConfig := config.GetGlobalServerConfig()
+	t.Cleanup(func() { config.StoreGlobalServerConfig(originalConfig) })
+	cfg := originalConfig.Clone()
+	cfg.Security.ClientUserRequired = true
+	config.StoreGlobalServerConfig(cfg)
+
+	ctrl := gomock.NewController(t)
+	apiServer := mock.NewMockServer(ctrl)
+	apiServer.EXPECT().GetPdClient().Return(&gc.MockPDClient{})
+
+	router := gin.New()
+	RegisterOpenAPIV2Routes(router, NewOpenAPIV2(apiServer))
+
+	request := httptest.NewRequest(http.MethodPost, "/api/v2/tso", strings.NewReader(`{}`))
+	request.Header.Set("Content-Type", "application/json")
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, request)
+
+	require.Equal(t, http.StatusOK, response.Code, response.Body.String())
 }
 
 func TestManagementRoutesAllowedWithoutClientUserRequired(t *testing.T) {

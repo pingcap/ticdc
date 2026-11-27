@@ -1245,6 +1245,43 @@ func TestHandleBootstrapRequestRejectsClosedOlderMaintainerEpoch(t *testing.T) {
 	require.Empty(t, orchestrator.dispatcherManagers)
 }
 
+func TestHandleBootstrapRequestRejectsMalformedConfig(t *testing.T) {
+	cfID := common.NewChangeFeedIDWithName("cf", "default")
+	orchestrator := &DispatcherOrchestrator{
+		mc:                     messaging.NewMockMessageCenter(),
+		dispatcherManagers:     make(map[common.ChangeFeedID]*dispatchermanager.DispatcherManager),
+		closedMaintainerEpochs: make(map[common.ChangeFeedID]uint64),
+	}
+
+	err := orchestrator.handleBootstrapRequest(node.ID("maintainer"), &heartbeatpb.MaintainerBootstrapRequest{
+		ChangefeedID: cfID.ToPB(),
+		Config:       []byte("invalid config"),
+	})
+	require.Error(t, err)
+	require.ErrorIs(t, err, errors.ErrDecodeFailed)
+	require.Empty(t, orchestrator.dispatcherManagers)
+}
+
+func TestHandleBootstrapRequestRejectsMismatchedConfigIdentity(t *testing.T) {
+	cfID := common.NewChangeFeedIDWithName("cf", "default")
+	otherID := common.NewChangeFeedIDWithName("other", "default")
+	configBytes, err := json.Marshal(newBootstrapResponseTestChangefeedConfig(otherID))
+	require.NoError(t, err)
+	orchestrator := &DispatcherOrchestrator{
+		mc:                     messaging.NewMockMessageCenter(),
+		dispatcherManagers:     make(map[common.ChangeFeedID]*dispatchermanager.DispatcherManager),
+		closedMaintainerEpochs: make(map[common.ChangeFeedID]uint64),
+	}
+
+	err = orchestrator.handleBootstrapRequest(node.ID("maintainer"), &heartbeatpb.MaintainerBootstrapRequest{
+		ChangefeedID: cfID.ToPB(),
+		Config:       configBytes,
+	})
+	require.Error(t, err)
+	require.ErrorIs(t, err, errors.ErrDecodeFailed)
+	require.Empty(t, orchestrator.dispatcherManagers)
+}
+
 func TestHandleCloseRequestDoesNotRecordEpochZeroTombstoneForCompatClose(t *testing.T) {
 	cfID := common.NewChangeFeedIDWithName("cf", "default")
 

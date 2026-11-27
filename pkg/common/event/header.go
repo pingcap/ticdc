@@ -125,3 +125,12 @@ func ValidateAndExtractPayload(data []byte, expectedType int) (payload []byte, v
 
 	return payload, ver, nil
 }
+
+func validatePayloadMinimumSize(data []byte, minimum int, eventName string) error {
+	if len(data) < minimum {
+		return errors.ErrDecodeFailed.FastGenByArgs(fmt.Sprintf(
+			"incomplete %s payload: expected at least %d bytes, got %d",
+			eventName, minimum, len(data)))
+	}
+	return nil
+}

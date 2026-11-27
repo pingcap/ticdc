@@ -119,6 +119,9 @@ func TestSyncPointEventHeader(t *testing.T) {
 }
 
 func TestSyncPointEventUnmarshalErrors(t *testing.T) {
+	shortPayload, err := MarshalEventWithHeader(TypeSyncPointEvent, SyncPointEventVersion1, nil)
+	require.NoError(t, err)
+
 	testCases := []struct {
 		name      string
 		data      []byte
@@ -157,6 +160,11 @@ func TestSyncPointEventUnmarshalErrors(t *testing.T) {
 				return header
 			}(),
 			wantError: "incomplete data",
+		},
+		{
+			name:      "payload too short",
+			data:      shortPayload,
+			wantError: "incomplete sync point event payload",
 		},
 	}
 

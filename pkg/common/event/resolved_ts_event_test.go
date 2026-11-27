@@ -148,6 +148,9 @@ func TestResolvedEventHeader(t *testing.T) {
 
 // TestResolvedEventUnmarshalErrors tests error handling in Unmarshal
 func TestResolvedEventUnmarshalErrors(t *testing.T) {
+	shortPayload, err := MarshalEventWithHeader(TypeResolvedEvent, ResolvedEventVersion1, nil)
+	require.NoError(t, err)
+
 	testCases := []struct {
 		name      string
 		data      []byte
@@ -186,6 +189,11 @@ func TestResolvedEventUnmarshalErrors(t *testing.T) {
 				return header
 			}(),
 			wantError: "incomplete data",
+		},
+		{
+			name:      "payload too short",
+			data:      shortPayload,
+			wantError: "incomplete resolved event payload",
 		},
 	}
 
