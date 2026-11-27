@@ -89,6 +89,8 @@ type storageReader struct {
 	mu               sync.Mutex
 	ranges           []storageRange
 	scanned          bool
+	// dispatchedFiles counts DML files read since the last completed scan was reported.
+	dispatchedFiles uint64
 	// Listing a directory needs a client that returns common prefixes.
 	scheme     string
 	bucket     string
@@ -407,6 +409,18 @@ func (c *storageReader) readSchema(ctx context.Context, path string) (cloudstora
 	return key, true, nil
 }
 
+// reportScanDone reports a completed storage scan. It is emitted only when the
+// metadata checkpoint advances and no file is left, so a reported checkpointTs
+// means every file below it has been dispatched.
+func (c *storageReader) reportScanDone(cost time.Duration) {
+	log.Info("storage scan done",
+		zap.Uint64("checkpointTs", c.sourceCheckpoint),
+		zap.Uint64("files", c.dispatchedFiles),
+		zap.Int("tables", len(c.schemas)),
+		zap.Duration("cost", cost))
+	c.dispatchedFiles = 0
+}
+
 func (c *storageReader) Read(ctx context.Context) ([]*Payload, error) {
 	for {
 		if err := context.Cause(ctx); err != nil {
@@ -418,11 +432,13 @@ func (c *storageReader) Read(ctx context.Context) ([]*Payload, error) {
 				// The metadata checkpoint covers every file in the completed scan.
 				return []*Payload{{Watermark: c.sourceCheckpoint}}, nil
 			}
+			scanStart := time.Now()
 			if err := c.scanInputs(ctx); err != nil {
 				return nil, err
 			}
 			if len(c.ranges) == 0 && c.sourceCheckpoint > c.watermark {
 				c.watermark = c.sourceCheckpoint
+				c.reportScanDone(time.Since(scanStart))
 				return []*Payload{{Watermark: c.sourceCheckpoint}}, nil
 			}
 			continue
@@ -437,6 +453,7 @@ func (c *storageReader) Read(ctx context.Context) ([]*Payload, error) {
 		default:
 			c.ranges[0] = storageRange{}
 			c.ranges = c.ranges[1:]
+			c.dispatchedFiles++
 		}
 		if schema == nil {
 			log.Panic("storage DML file has no matching schema", zap.String("schema", key.Schema), zap.String("table", key.Table), zap.Uint64("tableVersion", key.TableVersion))

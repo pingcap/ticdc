@@ -21,10 +21,11 @@ function wait_ignore_sql_ddl() {
 	ensure 20 "run_sql 'SELECT COUNT(*) AS marker_count FROM event_filter.sql_query_barrier WHERE id = $marker;' \
 		${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT} && check_contains 'marker_count: 1'"
 	if [ "$SINK_TYPE" == "storage" ]; then
-		# A scan is logged before its files are applied. The next scan proves that
-		# all files in the preceding scan, including other tables, were applied.
-		ensure 20 "test \"\$(sed -n '/storage consumer scan done/s/.*checkpointTs=\([0-9]*\).*/\1/p' \
-			'$WORK_DIR/cdc_storage_consumer.log' | tail -n 2 | sed '\$d')\" -gt '$target_ts'"
+		# A completed scan is logged once no file is left, so the scan before the
+		# latest one proves that every file up to its checkpointTs was applied,
+		# including tables that a single marker row does not cover.
+		ensure 20 "test \"\$(sed -n '/storage scan done/s/.*checkpointTs=\([0-9]*\).*/\1/p' \
+			'$WORK_DIR/cdc_consumer.log' | tail -n 2 | sed '\$d')\" -gt '$target_ts'"
 	fi
 }
 
