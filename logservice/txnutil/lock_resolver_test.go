@@ -15,12 +15,20 @@ package txnutil
 
 import (
 	"context"
-	"fmt"
 	"testing"
+	"time"
 
+	"github.com/golang/mock/gomock"
+	"github.com/pingcap/kvproto/pkg/keyspacepb"
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
+	appcontext "github.com/pingcap/ticdc/pkg/common/context"
+	"github.com/pingcap/ticdc/pkg/keyspace"
+	"github.com/pingcap/tidb/pkg/store/mockstore"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/require"
+	"github.com/tikv/client-go/v2/testutils"
 	"github.com/tikv/client-go/v2/tikv"
+	"github.com/tikv/client-go/v2/tikvrpc"
 	"github.com/tikv/client-go/v2/txnkv"
 	"github.com/tikv/client-go/v2/txnkv/txnlock"
 )
@@ -51,131 +59,80 @@ func TestDirectSharedLockWrapperResolveFails(t *testing.T) {
 	require.Contains(t, err.Error(), "trying to resolve a shared lock directly")
 }
 
-func TestResolveScanLockInfosExpandsSharedLockWrapper(t *testing.T) {
-	sharedLock1 := &kvrpcpb.LockInfo{
-		Key:         []byte("shared-key"),
-		PrimaryLock: []byte("primary-1"),
-		LockVersion: 101,
-		LockType:    kvrpcpb.Op_Lock,
-	}
-	sharedLock2 := &kvrpcpb.LockInfo{
-		Key:         []byte("shared-key"),
-		PrimaryLock: []byte("primary-2"),
-		LockVersion: 102,
-		LockType:    kvrpcpb.Op_PessimisticLock,
-	}
-	ordinaryLock := &kvrpcpb.LockInfo{
-		Key:         []byte("ordinary-key"),
-		PrimaryLock: []byte("ordinary-primary"),
-		LockVersion: 103,
-		LockType:    kvrpcpb.Op_Lock,
-	}
-	wrapper := &kvrpcpb.LockInfo{
-		Key:             []byte("shared-key"),
-		LockVersion:     100,
-		LockType:        kvrpcpb.Op_SharedLock,
-		SharedLockInfos: []*kvrpcpb.LockInfo{sharedLock1, sharedLock2},
-	}
-	var resolvedLocks []*txnkv.Lock
+// lockScanClient supplies ScanLock pages while using client-go's actual resolver.
+type lockScanClient struct {
+	tikv.Client
+	scan func(*kvrpcpb.ScanLockRequest) []*kvrpcpb.LockInfo
+}
 
-	locks, ttl, err := resolveScanLockInfos([]*kvrpcpb.LockInfo{wrapper, ordinaryLock}, func(locks []*txnkv.Lock) (int64, error) {
-		for _, lock := range locks {
-			if lock.LockType == kvrpcpb.Op_SharedLock {
-				return 0, fmt.Errorf("unexpected shared lock wrapper")
-			}
-		}
-		resolvedLocks = append(resolvedLocks, locks...)
-		return 42, nil
-	})
+func (c lockScanClient) SendRequest(ctx context.Context, addr string, req *tikvrpc.Request, timeout time.Duration) (*tikvrpc.Response, error) {
+	if req.Type == tikvrpc.CmdScanLock {
+		return &tikvrpc.Response{Resp: &kvrpcpb.ScanLockResponse{Locks: c.scan(req.ScanLock())}}, nil
+	}
+	return c.Client.SendRequest(ctx, addr, req, timeout)
+}
 
+func TestProgressRepairScansPastSharedMetadata(t *testing.T) {
+	wrapper := &kvrpcpb.LockInfo{LockType: kvrpcpb.Op_SharedLock}
+	for i := range scanLockLimit {
+		wrapper.SharedLockInfos = append(wrapper.SharedLockInfos, &kvrpcpb.LockInfo{
+			Key: []byte("m"), LockType: kvrpcpb.Op_Lock, LockVersion: uint64(i + 1),
+		})
+	}
+	ctx := context.Background()
+	dataKey := []byte{'m', 0}
+	expired := &kvrpcpb.LockInfo{Key: dataKey, PrimaryLock: dataKey, LockType: kvrpcpb.Op_Put, LockVersion: 10}
+	var regionID uint64
+	var starts [][]byte
+	store, err := mockstore.NewMockStore(
+		mockstore.WithClusterInspector(func(c testutils.Cluster) { _, _, regionID = mockstore.BootstrapWithSingleStore(c) }),
+		mockstore.WithClientHijacker(func(c tikv.Client) tikv.Client {
+			return lockScanClient{c, func(scan *kvrpcpb.ScanLockRequest) []*kvrpcpb.LockInfo {
+				starts = append(starts, scan.StartKey)
+				if len(scan.StartKey) == 0 || string(scan.StartKey) == "z" {
+					return []*kvrpcpb.LockInfo{wrapper}
+				}
+				return []*kvrpcpb.LockInfo{expired}
+			}}
+		}),
+	)
 	require.NoError(t, err)
-	require.Equal(t, int64(42), ttl)
-	require.Len(t, locks, 3)
-	require.Equal(t, locks, resolvedLocks)
-	require.Equal(t, []uint64{101, 102, 103}, []uint64{locks[0].TxnID, locks[1].TxnID, locks[2].TxnID})
-	require.Equal(t, []kvrpcpb.Op{kvrpcpb.Op_Lock, kvrpcpb.Op_PessimisticLock, kvrpcpb.Op_Lock},
-		[]kvrpcpb.Op{locks[0].LockType, locks[1].LockType, locks[2].LockType})
-	require.Equal(t, [][]byte{[]byte("shared-key"), []byte("shared-key"), []byte("ordinary-key")},
-		[][]byte{locks[0].Key, locks[1].Key, locks[2].Key})
-}
+	t.Cleanup(func() { require.NoError(t, store.Close()) })
+	meta := &keyspacepb.KeyspaceMeta{Name: "test"}
+	manager := keyspace.NewMockManager(gomock.NewController(t))
+	manager.EXPECT().GetKeyspaceByID(ctx, uint32(1)).Return(meta, nil).AnyTimes()
+	manager.EXPECT().GetStorage(ctx, meta.Name).Return(store, nil).AnyTimes()
+	previous, _ := appcontext.TryGetService[keyspace.Manager](appcontext.KeyspaceManager)
+	defer appcontext.SetService(appcontext.KeyspaceManager, previous)
+	appcontext.SetService[keyspace.Manager](appcontext.KeyspaceManager, manager)
 
-func TestResolveScanLockInfosKeepsOrdinaryLocks(t *testing.T) {
-	ordinaryLock := &kvrpcpb.LockInfo{
-		Key:         []byte("ordinary-key"),
-		PrimaryLock: []byte("ordinary-primary"),
-		LockVersion: 103,
-		LockType:    kvrpcpb.Op_Lock,
-	}
-	var resolvedLocks []*txnkv.Lock
-
-	locks, ttl, err := resolveScanLockInfos([]*kvrpcpb.LockInfo{ordinaryLock}, func(locks []*txnkv.Lock) (int64, error) {
-		resolvedLocks = append(resolvedLocks, locks...)
-		return 0, nil
-	})
-
+	found := testutil.ToFloat64(metricResolveLockFoundCounter)
+	resolved := testutil.ToFloat64(metricResolveLockResolvedCounter)
+	r := NewDataLockResolver()
+	next, err := r.ResolveDataLocks(ctx, 1, regionID, 2000, nil)
 	require.NoError(t, err)
-	require.Equal(t, int64(0), ttl)
-	require.Len(t, locks, 1)
-	require.Equal(t, locks, resolvedLocks)
-	require.Equal(t, uint64(103), locks[0].TxnID)
-	require.Equal(t, []byte("ordinary-key"), locks[0].Key)
-	require.Equal(t, kvrpcpb.Op_Lock, locks[0].LockType)
-}
-
-func TestNextScanLockKeyStopsAtRegionEndWhenFullPageHasLiveLocks(t *testing.T) {
-	locks := make([]*txnkv.Lock, scanLockLimit)
-	for i := range locks {
-		locks[i] = &txnkv.Lock{Key: []byte("shared-key")}
-	}
-
-	key := nextScanLockKey([]byte("region-end"), locks, 1)
-
-	require.Equal(t, []byte("region-end"), key)
-}
-
-func TestNextScanLockKeyContinuesFromLastLockWhenFullPageHasNoLiveLocks(t *testing.T) {
-	locks := make([]*txnkv.Lock, scanLockLimit)
-	for i := range locks {
-		locks[i] = &txnkv.Lock{Key: []byte("shared-key")}
-	}
-	locks[len(locks)-1].Key = []byte("last-lock")
-
-	key := nextScanLockKey([]byte("region-end"), locks, 0)
-
-	require.Equal(t, []byte("last-lock"), key)
-}
-
-func TestNextScanLockKeyStopsAtRegionEndWhenPageIsNotFull(t *testing.T) {
-	locks := []*txnkv.Lock{{Key: []byte("last-lock")}}
-
-	key := nextScanLockKey([]byte("region-end"), locks, 0)
-
-	require.Equal(t, []byte("region-end"), key)
-}
-
-func TestSharedLockFullPageUsesResolveTTLForNextScanKey(t *testing.T) {
-	sharedLockInfos := make([]*kvrpcpb.LockInfo, scanLockLimit)
-	for i := range sharedLockInfos {
-		sharedLockInfos[i] = &kvrpcpb.LockInfo{
-			Key:         []byte("shared-key"),
-			PrimaryLock: fmt.Appendf(nil, "primary-%d", i),
-			LockVersion: uint64(i + 1),
-			LockType:    kvrpcpb.Op_Lock,
-		}
-	}
-	wrapper := &kvrpcpb.LockInfo{
-		Key:             []byte("shared-key"),
-		LockType:        kvrpcpb.Op_SharedLock,
-		SharedLockInfos: sharedLockInfos,
-	}
-
-	locks, ttl, err := resolveScanLockInfos([]*kvrpcpb.LockInfo{wrapper}, func(locks []*txnkv.Lock) (int64, error) {
-		require.Len(t, locks, scanLockLimit)
-		return 1, nil
-	})
-
+	require.Equal(t, dataKey, next)
+	next, err = r.ResolveDataLocks(ctx, 1, regionID, 2000, next)
 	require.NoError(t, err)
-	require.Equal(t, int64(1), ttl)
-	require.Equal(t, []byte("region-end"), nextScanLockKey([]byte("region-end"), locks, ttl))
-	require.Equal(t, []byte("shared-key"), nextScanLockKey([]byte("region-end"), locks, 0))
+	require.Nil(t, next)
+	require.Len(t, starts, 2)
+	require.Empty(t, starts[0])
+	require.Equal(t, dataKey, starts[1])
+	require.Equal(t, found+1025, testutil.ToFloat64(metricResolveLockFoundCounter))
+	require.Equal(t, resolved+1, testutil.ToFloat64(metricResolveLockResolvedCounter))
+
+	_, err = r.ResolveDataLocks(ctx, 1, regionID, 2000, []byte("z"))
+	require.ErrorContains(t, err, "did not advance")
+}
+
+func TestProgressRepairSelectsOnlyDataLocks(t *testing.T) {
+	infos := []*kvrpcpb.LockInfo{
+		{LockType: kvrpcpb.Op_PessimisticLock}, {LockType: kvrpcpb.Op_SharedPessimisticLock},
+		{LockType: kvrpcpb.Op_Lock}, {LockType: kvrpcpb.Op_SharedLock},
+		{LockType: kvrpcpb.Op_Put}, {LockType: kvrpcpb.Op_Del},
+	}
+	locks := locksToResolve(infos, true)[0]
+	require.Len(t, locks, 2)
+	require.Equal(t, kvrpcpb.Op_Put, locks[0].LockType)
+	require.Equal(t, kvrpcpb.Op_Del, locks[1].LockType)
 }

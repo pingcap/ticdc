@@ -212,7 +212,7 @@ func (c *server) initialize(ctx context.Context) error {
 	schemaStore := schemastore.New(conf.DataDir, c.pdClient)
 	subscriptionClient := logpuller.NewSubscriptionClient(
 		c.pdClient,
-		txnutil.NewLockerResolver(),
+		txnutil.NewDataLockResolver(),
 		c.security,
 	)
 	eventStore := eventstore.New(conf.DataDir, subscriptionClient)
