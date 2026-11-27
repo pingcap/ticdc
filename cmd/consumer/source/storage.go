@@ -409,18 +409,6 @@ func (c *storageReader) readSchema(ctx context.Context, path string) (cloudstora
 	return key, true, nil
 }
 
-// reportScanDone reports a completed storage scan. It is emitted only when the
-// metadata checkpoint advances and no file is left, so a reported checkpointTs
-// means every file below it has been dispatched.
-func (c *storageReader) reportScanDone(cost time.Duration) {
-	log.Info("storage scan done",
-		zap.Uint64("checkpointTs", c.sourceCheckpoint),
-		zap.Uint64("files", c.dispatchedFiles),
-		zap.Int("tables", len(c.schemas)),
-		zap.Duration("cost", cost))
-	c.dispatchedFiles = 0
-}
-
 func (c *storageReader) Read(ctx context.Context) ([]*Payload, error) {
 	for {
 		if err := context.Cause(ctx); err != nil {
@@ -438,7 +426,13 @@ func (c *storageReader) Read(ctx context.Context) ([]*Payload, error) {
 			}
 			if len(c.ranges) == 0 && c.sourceCheckpoint > c.watermark {
 				c.watermark = c.sourceCheckpoint
-				c.reportScanDone(time.Since(scanStart))
+				// Report a completed scan: every file below checkpointTs is dispatched.
+				log.Info("storage scan done",
+					zap.Uint64("checkpointTs", c.sourceCheckpoint),
+					zap.Uint64("files", c.dispatchedFiles),
+					zap.Int("tables", len(c.schemas)),
+					zap.Duration("cost", time.Since(scanStart)))
+				c.dispatchedFiles = 0
 				return []*Payload{{Watermark: c.sourceCheckpoint}}, nil
 			}
 			continue
