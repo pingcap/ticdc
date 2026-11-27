@@ -28,6 +28,7 @@ import (
 	"testing"
 
 	"github.com/jarcoal/httpmock"
+	"github.com/pingcap/ticdc/cmd/consumer/ddl"
 	"github.com/pingcap/ticdc/cmd/consumer/source"
 	"github.com/pingcap/ticdc/downstreamadapter/sink/columnselector"
 	"github.com/pingcap/ticdc/pkg/cloudstorage"
@@ -126,7 +127,12 @@ func TestDecodeGroupBroadcastDDLDedupBootstrapAndStaleSkip(t *testing.T) {
 		s.ShareTableInfo(schemas)
 		return decoder{EventDecoder: s, schema: s}
 	}
-	group := &Group{codecConfig: cfg, schemas: schemas}
+	group := &Group{
+		codecConfig: cfg,
+		schemas:     schemas,
+		waiting:     make(map[waitingSchemaKey][]waitingDML),
+		seenDDLs:    make(map[ddl.Key]struct{}),
+	}
 	dec0 := newSimple()
 	dec1 := newSimple()
 

@@ -434,7 +434,11 @@ func (c *storageReader) readSchema(ctx context.Context, path string) (cloudstora
 		return key, false, errors.WrapError(errors.ErrCodecDecode, err)
 	}
 
-	checksumText := strings.TrimSuffix(path[strings.LastIndex(path, "_")+1:], ".json")
+	_, checksumText, found := strings.CutLast(path, "_")
+	if !found {
+		return key, false, errors.ErrStorageSinkInvalidFileName.FastGen("Storage schema file name does not contain a checksum")
+	}
+	checksumText = strings.TrimSuffix(checksumText, ".json")
 	checksum, err := strconv.ParseUint(checksumText, 10, 32)
 	if err != nil {
 		return key, false, errors.WrapError(errors.ErrStorageSinkInvalidFileName, err)

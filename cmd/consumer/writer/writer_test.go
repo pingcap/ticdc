@@ -15,6 +15,7 @@
 package writer
 
 import (
+	"slices"
 	"testing"
 
 	"github.com/golang/mock/gomock"
@@ -407,11 +408,11 @@ func TestWriterAddDMLMergeBoundaries(t *testing.T) {
 
 	// A merged CommitTs event exceeding batchRows is still kept whole by selectBatch.
 	base := helper.DML2Event("test", "t", "insert into test.t values (8, 80, 1)")
-	for i := 0; i < batchRows+5; i++ {
+	for range batchRows + 5 {
 		dml := event.NewDMLEvent(common.DispatcherID{}, base.PhysicalTableID, base.StartTs, 400, base.TableInfo)
 		dml.Rows = chunk.NewChunkWithCapacity(base.TableInfo.GetFieldSlice(), 1)
 		dml.Rows.Append(base.Rows, 0, 1)
-		dml.RowTypes = append([]common.RowType(nil), base.RowTypes...)
+		dml.RowTypes = slices.Clone(base.RowTypes)
 		dml.Length = 1
 		w.AddDML(dml)
 	}
@@ -427,7 +428,7 @@ func TestWriterAddDMLMergeBoundaries(t *testing.T) {
 	srcWithRows := event.NewDMLEvent(common.DispatcherID{}, base.PhysicalTableID, base.StartTs, 500, base.TableInfo)
 	srcWithRows.Rows = chunk.NewChunkWithCapacity(base.TableInfo.GetFieldSlice(), 1)
 	srcWithRows.Rows.Append(base.Rows, 0, 1)
-	srcWithRows.RowTypes = append([]common.RowType(nil), base.RowTypes...)
+	srcWithRows.RowTypes = slices.Clone(base.RowTypes)
 	srcWithRows.Length = 1
 	w.AddDML(dstNilRows)
 	w.AddDML(srcWithRows)

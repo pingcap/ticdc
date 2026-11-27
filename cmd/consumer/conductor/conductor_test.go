@@ -588,7 +588,7 @@ func TestConductorFlushDrainsWholeCommitTsGroupAndPreservesRoundBoundForZeroTs(t
 	// Entire t1@100 group (including rows past roundRows) must drain contiguously in a single
 	// flush round before t2@100 begins.
 	require.Len(t, drainedOrder, t1GroupRows+2)
-	for i := 0; i < t1GroupRows; i++ {
+	for i := range t1GroupRows {
 		require.Equal(t, int64(1), drainedOrder[i])
 		require.Equal(t, int32(0), observedFlushedDuringT1[i])
 	}
@@ -600,7 +600,7 @@ func TestConductorFlushDrainsWholeCommitTsGroupAndPreservesRoundBoundForZeroTs(t
 	flushedCount.Store(0)
 	observedFlushedDuringT1 = nil
 	zeroRows := roundRows + 10
-	for i := 0; i < zeroRows; i++ {
+	for range zeroRows {
 		require.NoError(t, c.accept(newDML(1, t1Info, 0, commonType.RowTypeInsert), &source.Payload{}))
 	}
 	require.NoError(t, c.flush(t.Context(), w))

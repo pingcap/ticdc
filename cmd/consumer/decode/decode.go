@@ -364,10 +364,6 @@ func (d *Group) decodeSimpleRow(schemaDecoder *simple.Decoder, future *Future) {
 
 	tableInfo := d.schemas.Read(pending.Schema, pending.Table, pending.SchemaVersion)
 	if tableInfo == nil {
-		if d.waiting == nil {
-			d.waiting = make(map[waitingSchemaKey][]waitingDML)
-		}
-
 		d.nextPendingID++
 		id := d.nextPendingID
 		key := waitingSchemaKey{
@@ -471,11 +467,10 @@ func (d *Group) decodeInput(ctx context.Context, decoder decoder, future *Future
 			}
 
 			msg := decoder.NextDMLMessage()
-			if msg != nil {
-				if dml := msg.ToDMLEvent(); dml != nil {
-					d.addRow(future, dml)
-				}
+			if msg == nil {
+				log.Panic("consumer DML decoding failed")
 			}
+			d.addRow(future, msg.ToDMLEvent())
 		case common.MessageTypeDDL:
 			if decoder.schema != nil {
 				d.decodeSimpleDDL(decoder.schema, future)
@@ -500,18 +495,11 @@ func (d *Group) decodeInput(ctx context.Context, decoder decoder, future *Future
 }
 
 func (d *Group) claimDDL(ddlEvent *event.DDLEvent) bool {
-	if ddlEvent == nil {
-		return false
-	}
-
 	key := ddl.KeyOf(ddlEvent)
 
 	d.ddlMu.Lock()
 	defer d.ddlMu.Unlock()
 
-	if d.seenDDLs == nil {
-		d.seenDDLs = make(map[ddl.Key]struct{})
-	}
 	if _, ok := d.seenDDLs[key]; ok {
 		return false
 	}

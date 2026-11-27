@@ -28,6 +28,8 @@ import (
 	"go.uber.org/zap"
 )
 
+// parseRequiredURI panics with the raw URI: the consumer is an internal testing
+// tool, so keeping the original input helps analyze failures and no masking is needed.
 func parseRequiredURI(rawURI string) *url.URL {
 	if rawURI == "" {
 		log.Panic("consumer URI is required", zap.String("rawURI", rawURI))
