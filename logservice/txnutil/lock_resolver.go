@@ -26,22 +26,33 @@ import (
 	"github.com/pingcap/ticdc/pkg/keyspace"
 	"github.com/pingcap/ticdc/pkg/util"
 	tikverr "github.com/tikv/client-go/v2/error"
-	"github.com/tikv/client-go/v2/oracle"
+	"github.com/tikv/client-go/v2/kv"
 	"github.com/tikv/client-go/v2/tikv"
 	"github.com/tikv/client-go/v2/tikvrpc"
 	"github.com/tikv/client-go/v2/txnkv"
 	"go.uber.org/zap"
 )
 
-// LockResolver resolves lock in the given region.
+// LockResolver resolves all kinds of locks in a region.
 type LockResolver interface {
-	Resolve(ctx context.Context, keyspaceID uint32, regionID uint64, maxVersion uint64) error
+	Resolve(ctx context.Context, keyspaceID uint32, regionID, maxVersion uint64) error
+}
+
+// DataLockResolver repairs one ScanLock page for checkpoint progress. A non-nil
+// cursor resumes the same region and maxVersion on the worker's next turn.
+type DataLockResolver interface {
+	ResolveDataLocks(ctx context.Context, keyspaceID uint32, regionID, maxVersion uint64, startKey []byte) ([]byte, error)
 }
 
 type resolver struct{}
 
 // NewLockerResolver returns a LockResolver.
 func NewLockerResolver() LockResolver {
+	return &resolver{}
+}
+
+// NewDataLockResolver returns a DataLockResolver for checkpoint repair.
+func NewDataLockResolver() DataLockResolver {
 	return &resolver{}
 }
 
@@ -54,181 +65,189 @@ var (
 	metricResolveLockOperationDuration = subscriptionClientResolveLockOperationDuration.WithLabelValues("resolve")
 )
 
-// Only data locks can hold back resolved-ts. In particular a shared wrapper
-// can contain more live readers than fit in one ScanLock response.
-func resolveScanLockInfos(lockInfos []*kvrpcpb.LockInfo, resolve func([]*txnkv.Lock) (int64, error)) ([]*txnkv.Lock, int64, error) {
-	locks := make([]*txnkv.Lock, 0, len(lockInfos))
-	for _, info := range lockInfos {
-		switch info.GetLockType() {
-		case kvrpcpb.Op_SharedLock, kvrpcpb.Op_Lock, kvrpcpb.Op_PessimisticLock:
+// Resolve attempts to resolve every lock through maxVersion, including lock-only
+// prewrites, pessimistic primaries, and individual shared holders.
+func (r *resolver) Resolve(ctx context.Context, keyspaceID uint32, regionID, maxVersion uint64) error {
+	_, err := r.resolve(ctx, keyspaceID, regionID, maxVersion, nil, false)
+	return err
+}
+
+func (r *resolver) ResolveDataLocks(ctx context.Context, keyspaceID uint32, regionID, maxVersion uint64, startKey []byte) ([]byte, error) {
+	return r.resolve(ctx, keyspaceID, regionID, maxVersion, startKey, true)
+}
+
+func physicalLockKey(info *kvrpcpb.LockInfo) []byte {
+	if members := info.GetSharedLockInfos(); len(members) > 0 {
+		return members[0].GetKey()
+	}
+	return info.GetKey()
+}
+
+// ResolveLocks returns a single TTL for its entire batch. Keep each
+// transaction's locks together so a live transaction cannot mask the outcome
+// for another one, and client-go can still batch its secondary-key rollbacks.
+func locksToResolve(infos []*kvrpcpb.LockInfo, dataOnly bool) map[uint64][]*txnkv.Lock {
+	byTxn := make(map[uint64][]*txnkv.Lock)
+	add := func(info *kvrpcpb.LockInfo) {
+		id := info.GetLockVersion()
+		byTxn[id] = append(byTxn[id], txnkv.NewLock(info))
+	}
+	for _, info := range infos {
+		if members := info.GetSharedLockInfos(); len(members) > 0 {
+			if !dataOnly {
+				for _, member := range members {
+					add(member)
+				}
+			}
 			continue
 		}
-		locks = append(locks, txnkv.NewLock(info))
+		switch info.GetLockType() {
+		case kvrpcpb.Op_SharedLock:
+			continue // An empty wrapper has no holder to resolve.
+		case kvrpcpb.Op_Lock, kvrpcpb.Op_PessimisticLock, kvrpcpb.Op_SharedPessimisticLock:
+			if dataOnly {
+				continue
+			}
+		}
+		add(info)
 	}
-	if len(locks) == 0 {
-		return locks, 0, nil
-	}
-	ttl, err := resolve(locks)
-	return locks, ttl, err
+	return byTxn
 }
 
-func nextScanLockKey(regionEnd []byte, infos []*kvrpcpb.LockInfo) []byte {
-	// TiKV counts individual shared members towards the page limit. All
-	// remaining members at the last physical key are also metadata. A data
-	// lock, on the other hand, was already passed to the resolver above.
-	count := 0
-	for _, info := range infos {
-		count += max(1, len(info.GetSharedLockInfos()))
-	}
-	if count < scanLockLimit {
-		return regionEnd
-	}
-	lastKey := infos[len(infos)-1].GetKey()
-	return append(bytes.Clone(lastKey), 0)
-}
-
-func (r *resolver) Resolve(ctx context.Context, keyspaceID uint32, regionID uint64, maxVersion uint64) (err error) {
-	var totalLocks []*txnkv.Lock
-
+func (r *resolver) resolve(ctx context.Context, keyspaceID uint32, regionID, maxVersion uint64, key []byte, dataOnly bool) (_ []byte, err error) {
+	var totalLockCount int
+	var sampleLocks []string
 	start := time.Now()
-
 	defer func() {
-		// Only log when there are locks or error to avoid log flooding.
-		if len(totalLocks) != 0 || err != nil {
-			cost := time.Since(start)
-			locks := totalLocks
-			if len(locks) > 5 {
-				locks = locks[:5]
-			}
-			sampleLocks := make([]string, 0, len(locks))
-			for _, lock := range locks {
-				sampleLocks = append(sampleLocks, fmt.Sprintf("key: %s, primary: %s, txnID: %d, ttl: %d",
-					util.RedactKey(lock.Key), util.RedactKey(lock.Primary), lock.TxnID, lock.TTL))
-			}
+		if totalLockCount != 0 || err != nil {
 			log.Debug("resolve lock finishes",
 				zap.Uint64("regionID", regionID),
-				zap.Int("lockCount", len(totalLocks)),
+				zap.Int("lockCount", totalLockCount),
 				zap.Strings("sampleLocks", sampleLocks),
 				zap.Uint64("maxVersion", maxVersion),
-				zap.Duration("duration", cost),
+				zap.Duration("duration", time.Since(start)),
 				zap.Error(err))
 		}
 	}()
 
-	req := tikvrpc.NewRequest(tikvrpc.CmdScanLock, &kvrpcpb.ScanLockRequest{
-		MaxVersion: maxVersion,
-		Limit:      scanLockLimit,
-	})
-
 	keyspaceManager := appcontext.GetService[keyspace.Manager](appcontext.KeyspaceManager)
 	keyspaceMeta, err := keyspaceManager.GetKeyspaceByID(ctx, keyspaceID)
 	if err != nil {
-		return err
+		return nil, err
 	}
-
 	storage, err := keyspaceManager.GetStorage(ctx, keyspaceMeta.Name)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	kvStorage := storage.(tikv.Storage)
 
-	bo := tikv.NewGcResolveLockMaxBackoffer(ctx)
-	var loc *tikv.KeyLocation
-	var key []byte
-	var endKey []byte
-	reloadRegion := func() error {
-		var err error
-		loc, err = kvStorage.GetRegionCache().LocateRegionByID(bo, regionID)
+	for ctx.Err() == nil {
+		bo := tikv.NewGcResolveLockMaxBackoffer(ctx)
+		page := &kvrpcpb.ScanLockRequest{StartKey: key, MaxVersion: maxVersion, Limit: scanLockLimit}
+		infos, scannedCount, err := scanRegionLocks(bo, kvStorage, regionID, page)
 		if err != nil {
-			return err
+			return nil, err
 		}
-		key = loc.StartKey
-		endKey = loc.EndKey
-		return nil
+		var nextKey []byte
+		if scannedCount >= scanLockLimit {
+			last := infos[len(infos)-1]
+			lastKey := physicalLockKey(last)
+			nextKey = kv.NextKey(lastKey)
+			if bytes.Compare(nextKey, page.StartKey) <= 0 {
+				return nil, errors.ErrUnexpected.GenWithStackByArgs("scan lock page did not advance")
+			}
+			if !dataOnly && len(last.GetSharedLockInfos()) > 0 {
+				// TiKV can truncate the last wrapper even when live holders
+				// hide later expired ones. Read just this physical key with
+				// no holder limit before advancing the manual scan.
+				point := &kvrpcpb.ScanLockRequest{StartKey: lastKey, EndKey: nextKey, MaxVersion: maxVersion}
+				holders, _, err := scanRegionLocks(bo, kvStorage, regionID, point)
+				if err != nil {
+					return nil, err
+				}
+				infos = append(infos[:len(infos)-1], holders...)
+			}
+			if len(page.EndKey) > 0 && bytes.Compare(nextKey, page.EndKey) >= 0 {
+				nextKey = nil
+			}
+		}
+
+		resolveStart := time.Now()
+		byTxn := locksToResolve(infos, dataOnly)
+		for _, locks := range byTxn {
+			totalLockCount += len(locks)
+			for _, lock := range locks[:min(len(locks), 5-len(sampleLocks))] {
+				sampleLocks = append(sampleLocks, fmt.Sprintf("key: %s, primary: %s, txnID: %d, ttl: %d",
+					util.RedactKey(lock.Key), util.RedactKey(lock.Primary), lock.TxnID, lock.TTL))
+			}
+			ttl, err := kvStorage.GetLockResolver().ResolveLocks(bo, 0, locks)
+			if err != nil {
+				return nil, errors.WrapError(errors.ErrUnexpected, err, "resolve scanned locks")
+			}
+			if ttl == 0 {
+				metricResolveLockResolvedCounter.Add(float64(len(locks)))
+			}
+		}
+		if len(byTxn) > 0 {
+			metricResolveLockOperationDuration.Observe(time.Since(resolveStart).Seconds())
+		}
+		if nextKey == nil || dataOnly {
+			return nextKey, nil
+		}
+		key = nextKey
 	}
-	if err = reloadRegion(); err != nil {
-		return errors.Trace(err)
-	}
+	return nil, ctx.Err()
+}
+
+// scanRegionLocks clips the request to the current region bounds, including
+// after region errors. The caller uses the actual bounds to advance its cursor.
+func scanRegionLocks(bo *tikv.Backoffer, kvStorage tikv.Storage, regionID uint64, page *kvrpcpb.ScanLockRequest) ([]*kvrpcpb.LockInfo, int, error) {
+	endKey := page.EndKey
 	for {
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		default:
+		loc, err := kvStorage.GetRegionCache().LocateRegionByID(bo, regionID)
+		if err != nil {
+			return nil, 0, errors.WrapError(errors.ErrUnexpected, err, "locate region for lock scan")
 		}
-		req.ScanLock().StartKey = key
-		req.ScanLock().EndKey = endKey
+		if bytes.Compare(page.StartKey, loc.StartKey) < 0 {
+			page.StartKey = loc.StartKey
+		}
+		page.EndKey = endKey
+		if len(loc.EndKey) > 0 && (len(endKey) == 0 || bytes.Compare(loc.EndKey, endKey) < 0) {
+			page.EndKey = loc.EndKey
+		}
+		if len(page.EndKey) > 0 && bytes.Compare(page.StartKey, page.EndKey) >= 0 {
+			return nil, 0, nil
+		}
+		req := tikvrpc.NewRequest(tikvrpc.CmdScanLock, page)
 		scanLockStart := time.Now()
 		resp, err := kvStorage.SendReq(bo, req, loc.Region, tikv.ReadTimeoutMedium)
 		if err != nil {
-			return errors.Trace(err)
+			return nil, 0, errors.WrapError(errors.ErrUnexpected, err, "scan region locks")
 		}
 		regionErr, err := resp.GetRegionError()
 		if err != nil {
-			return errors.Trace(err)
+			return nil, 0, errors.WrapError(errors.ErrUnexpected, err, "read lock scan response")
 		}
 		if regionErr != nil {
-			err = bo.Backoff(tikv.BoRegionMiss(), errors.New(regionErr.String()))
-			if err != nil {
-				return errors.Trace(err)
-			}
-			if err := reloadRegion(); err != nil {
-				return errors.Trace(err)
+			if err := bo.Backoff(tikv.BoRegionMiss(), errors.New(regionErr.String())); err != nil {
+				return nil, 0, errors.WrapError(errors.ErrUnexpected, err, "retry region lock scan")
 			}
 			continue
 		}
 		if resp.Resp == nil {
-			return errors.Trace(tikverr.ErrBodyMissing)
+			return nil, 0, errors.WrapError(errors.ErrUnexpected, tikverr.ErrBodyMissing, "read lock scan response")
 		}
 		locksResp := resp.Resp.(*kvrpcpb.ScanLockResponse)
 		if locksResp.GetError() != nil {
-			return errors.Errorf("unexpected scanlock error: %s", locksResp)
+			return nil, 0, errors.ErrUnexpected.GenWithStackByArgs("TiKV returned a scan lock key error")
 		}
 		metricScanLockOperationDuration.Observe(time.Since(scanLockStart).Seconds())
-		locksInfo := locksResp.GetLocks()
-		locks, msBeforeTxnExpired, err1 := resolveScanLockInfos(locksInfo, func(locks []*txnkv.Lock) (int64, error) {
-			resolveLockStart := time.Now()
-			msBeforeTxnExpired, err := kvStorage.GetLockResolver().ResolveLocks(bo, 0, locks)
-			if err == nil {
-				metricResolveLockOperationDuration.Observe(time.Since(resolveLockStart).Seconds())
-			}
-			return msBeforeTxnExpired, err
-		})
-		totalLocks = append(totalLocks, locks...)
-		metricResolveLockFoundCounter.Add(float64(len(locks)))
-
-		if err1 != nil {
-			return errors.Trace(err1)
+		infos := locksResp.GetLocks()
+		scannedCount := 0
+		for _, info := range infos {
+			scannedCount += max(1, len(info.GetSharedLockInfos()))
 		}
-		if len(locks) != 0 {
-			resolvedLockCount := len(locks)
-			if msBeforeTxnExpired > 0 {
-				resolvedLockCount = countExpiredLocks(kvStorage, locks)
-			}
-			metricResolveLockResolvedCounter.Add(float64(resolvedLockCount))
-		}
-		key = nextScanLockKey(loc.EndKey, locksInfo)
-
-		if len(key) == 0 || (len(loc.EndKey) != 0 && bytes.Compare(key, loc.EndKey) >= 0) {
-			break
-		}
-		bo = tikv.NewGcResolveLockMaxBackoffer(ctx)
+		metricResolveLockFoundCounter.Add(float64(scannedCount))
+		return infos, scannedCount, nil
 	}
-	return nil
-}
-
-func countExpiredLocks(kvStorage tikv.Storage, locks []*txnkv.Lock) int {
-	resolvedLockCount := 0
-	oracleClient := kvStorage.GetOracle()
-	oracleOption := &oracle.Option{TxnScope: oracle.GlobalTxnScope}
-	for _, lock := range locks {
-		msBeforeLockExpired := oracleClient.UntilExpired(
-			lock.TxnID,
-			lock.TTL,
-			oracleOption,
-		)
-		if msBeforeLockExpired <= 0 {
-			resolvedLockCount++
-		}
-	}
-	return resolvedLockCount
 }

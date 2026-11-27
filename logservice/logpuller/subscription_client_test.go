@@ -14,44 +14,54 @@
 package logpuller
 
 import (
+	"bytes"
 	"context"
+	"fmt"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/golang/mock/gomock"
 	"github.com/pingcap/errors"
 	"github.com/pingcap/kvproto/pkg/cdcpb"
 	"github.com/pingcap/kvproto/pkg/errorpb"
+	"github.com/pingcap/kvproto/pkg/keyspacepb"
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/logservice/logpuller/regionlock"
+	"github.com/pingcap/ticdc/logservice/txnutil"
 	"github.com/pingcap/ticdc/pkg/common"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
+	"github.com/pingcap/ticdc/pkg/keyspace"
 	"github.com/pingcap/ticdc/pkg/pdutil"
 	"github.com/pingcap/ticdc/pkg/security"
 	"github.com/pingcap/ticdc/utils/dynstream"
 	"github.com/pingcap/ticdc/utils/priorityqueue"
+	"github.com/pingcap/tidb/pkg/store/mockstore"
 	"github.com/pingcap/tidb/pkg/store/mockstore/mockcopr"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/require"
 	"github.com/tikv/client-go/v2/oracle"
 	"github.com/tikv/client-go/v2/testutils"
 	"github.com/tikv/client-go/v2/tikv"
+	"github.com/tikv/client-go/v2/tikvrpc"
 )
 
 type mockLockResolver struct {
 	calls atomic.Int32
 }
 
-func (r *mockLockResolver) Resolve(
+func (r *mockLockResolver) ResolveDataLocks(
 	_ context.Context,
 	_ uint32,
 	_ uint64,
 	_ uint64,
-) error {
+	_ []byte,
+) ([]byte, error) {
 	r.calls.Add(1)
-	return nil
+	return nil, nil
 }
 
 func TestGenerateResolveLockTask(t *testing.T) {
@@ -183,6 +193,112 @@ func TestResolveLockTaskDeduplicatedAcrossSubscribedSpans(t *testing.T) {
 	case <-client.resolveLockTaskCh:
 		require.True(t, false, "shouldn't get a duplicate resolve lock task")
 	case <-time.After(100 * time.Millisecond):
+	}
+}
+
+// MockTiKV returns all region locks on ScanLock. Apply TiKV's start key and
+// page limit to those real locks so the worker sees multiple live pages.
+type pagedLockClient struct {
+	tikv.Client
+	starts []string
+	liveTS uint64
+}
+
+func (c *pagedLockClient) SendRequest(ctx context.Context, addr string, req *tikvrpc.Request, timeout time.Duration) (*tikvrpc.Response, error) {
+	resp, err := c.Client.SendRequest(ctx, addr, req, timeout)
+	if err == nil && req.Type == tikvrpc.CmdScanLock {
+		scan := req.ScanLock()
+		c.starts = append(c.starts, string(scan.StartKey))
+		page := resp.Resp.(*kvrpcpb.ScanLockResponse)
+		i, _ := slices.BinarySearchFunc(page.Locks, scan.StartKey, func(lock *kvrpcpb.LockInfo, key []byte) int {
+			return bytes.Compare(lock.Key, key)
+		})
+		page.Locks = page.Locks[i:min(i+int(scan.Limit), len(page.Locks))]
+		// MockTiKV also omits TTL, which means forced rollback to client-go.
+		for _, lock := range page.Locks {
+			lock.LockTtl = 1
+			if lock.LockVersion == c.liveTS {
+				lock.LockTtl = 60000
+			}
+		}
+	}
+	return resp, err
+}
+
+func TestRepairYieldsLivePagesToOtherRegions(t *testing.T) {
+	var regions []uint64
+	rpc := &pagedLockClient{}
+	store, err := mockstore.NewMockStore(
+		mockstore.WithStoreType(mockstore.MockTiKV),
+		mockstore.WithClusterInspector(func(c testutils.Cluster) { _, regions, _ = mockstore.BootstrapWithMultiRegions(c, []byte("m")) }),
+		mockstore.WithClientHijacker(func(c tikv.Client) tikv.Client {
+			rpc.Client = c
+			return rpc
+		}),
+	)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, store.Close()) })
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	s := store.(tikv.Storage)
+	bo := tikv.NewGcResolveLockMaxBackoffer(ctx)
+	send := func(region uint64, req *tikvrpc.Request) *tikvrpc.Response {
+		loc, err := s.GetRegionCache().LocateRegionByID(bo, region)
+		require.NoError(t, err)
+		resp, err := s.SendReq(bo, req, loc.Region, tikv.ReadTimeoutMedium)
+		require.NoError(t, err)
+		return resp
+	}
+	liveTS, err := s.CurrentTimestamp(oracle.GlobalTxnScope)
+	require.NoError(t, err)
+	prewrite := func(region, ts, ttl uint64, mutations []*kvrpcpb.Mutation) {
+		resp := send(region, tikvrpc.NewRequest(tikvrpc.CmdPrewrite, &kvrpcpb.PrewriteRequest{
+			Mutations: mutations, PrimaryLock: mutations[0].Key, StartVersion: ts, LockTtl: ttl,
+		}))
+		require.Empty(t, resp.Resp.(*kvrpcpb.PrewriteResponse).Errors)
+	}
+	var live []*kvrpcpb.Mutation
+	for i := range 2048 {
+		live = append(live, &kvrpcpb.Mutation{Key: []byte(fmt.Sprintf("a%04d", i)), Op: kvrpcpb.Op_Put, Value: []byte("v")})
+	}
+	rpc.liveTS = liveTS
+	prewrite(regions[0], liveTS, 60000, live)
+	prewrite(regions[0], 10, 1, []*kvrpcpb.Mutation{{Key: []byte("b"), Op: kvrpcpb.Op_Put, Value: []byte("v")}})
+	prewrite(regions[1], 20, 1, []*kvrpcpb.Mutation{{Key: []byte("n"), Op: kvrpcpb.Op_Put, Value: []byte("v")}})
+
+	manager := keyspace.NewMockManager(gomock.NewController(t))
+	manager.EXPECT().GetKeyspaceByID(gomock.Any(), uint32(1)).Return(&keyspacepb.KeyspaceMeta{Name: "test"}, nil).AnyTimes()
+	manager.EXPECT().GetStorage(gomock.Any(), "test").Return(store, nil).AnyTimes()
+	previous, _ := appcontext.TryGetService[keyspace.Manager](appcontext.KeyspaceManager)
+	defer appcontext.SetService(appcontext.KeyspaceManager, previous)
+	appcontext.SetService[keyspace.Manager](appcontext.KeyspaceManager, manager)
+	client := &subscriptionClient{
+		lockResolver:           txnutil.NewDataLockResolver(),
+		resolveLockTaskCh:      make(chan resolveLockTask, 2),
+		resolveLockRateLimiter: newResolveLockRateLimiter(),
+	}
+	for _, region := range regions {
+		state := &regionlock.LockedRangeState{}
+		state.Initialized.Store(true)
+		require.True(t, client.resolveLockRateLimiter.trySchedule(resolveLockKey{1, region}, time.Now()))
+		client.resolveLockTaskCh <- resolveLockTask{keyspaceID: 1, regionID: region, targetTs: liveTS, state: state}
+	}
+	success := testutil.ToFloat64(metricResolveLockSuccessCounter)
+	done := make(chan error, 1)
+	go func() { done <- client.handleResolveLockTasks(ctx) }()
+	defer func() {
+		cancel()
+		require.ErrorIs(t, <-done, context.Canceled)
+	}()
+	require.Eventually(t, func() bool {
+		return testutil.ToFloat64(metricResolveLockSuccessCounter) == success+2
+	}, 5*time.Second, 10*time.Millisecond)
+	require.Equal(t, []string{"", "m", "a1023\x00", "a2047\x00"}, rpc.starts)
+	// Both expired primaries are gone and all live data locks remain.
+	want := []int{len(live), 0}
+	for i, region := range regions {
+		resp := send(region, tikvrpc.NewRequest(tikvrpc.CmdScanLock, &kvrpcpb.ScanLockRequest{MaxVersion: liveTS, Limit: 3000}))
+		require.Len(t, resp.Resp.(*kvrpcpb.ScanLockResponse).Locks, want[i])
 	}
 }
 

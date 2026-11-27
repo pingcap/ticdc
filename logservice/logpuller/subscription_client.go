@@ -29,6 +29,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/pdutil"
 	"github.com/pingcap/ticdc/pkg/security"
 	"github.com/pingcap/ticdc/pkg/util"
+	"github.com/pingcap/ticdc/utils/deque"
 	"github.com/pingcap/ticdc/utils/dynstream"
 	"github.com/tikv/client-go/v2/tikv"
 	pd "github.com/tikv/pd/client"
@@ -69,6 +70,7 @@ type SubscriptionID uint64
 const InvalidSubscriptionID SubscriptionID = 0
 
 type resolveLockTask struct {
+	startKey   []byte
 	keyspaceID uint32
 	regionID   uint64
 	targetTs   uint64
@@ -127,7 +129,7 @@ type subscriptionClient struct {
 	cancel   context.CancelFunc
 	upstream *upstreamHandle
 
-	lockResolver txnutil.LockResolver
+	lockResolver txnutil.DataLockResolver
 
 	// failureHandler handles failed regions and owns reschedule/retry decisions.
 	failureHandler *regionFailureHandler
@@ -152,7 +154,7 @@ type subscriptionClient struct {
 // NewSubscriptionClient creates a client.
 func NewSubscriptionClient(
 	pd pd.Client,
-	lockResolver txnutil.LockResolver,
+	lockResolver txnutil.DataLockResolver,
 	credential *security.Credential,
 ) SubscriptionClient {
 	subClient := &subscriptionClient{
@@ -496,7 +498,7 @@ func (s *subscriptionClient) scheduleRangeRequest(
 }
 
 func (s *subscriptionClient) handleResolveLockTasks(ctx context.Context) error {
-	doResolve := func(task resolveLockTask) {
+	doResolve := func(task resolveLockTask) []byte {
 		keyspaceID := task.keyspaceID
 		regionID := task.regionID
 		state := task.state
@@ -505,10 +507,13 @@ func (s *subscriptionClient) handleResolveLockTasks(ctx context.Context) error {
 
 		if !state.Initialized.Load() || state.ResolvedTs.Load() >= targetTs {
 			s.resolveLockRateLimiter.cancel(key)
-			return
+			return nil
 		}
 
-		err := s.lockResolver.Resolve(ctx, keyspaceID, regionID, targetTs)
+		nextKey, err := s.lockResolver.ResolveDataLocks(ctx, keyspaceID, regionID, targetTs, task.startKey)
+		if err == nil && nextKey != nil {
+			return nextKey // Keep this region pending across turns.
+		}
 		s.resolveLockRateLimiter.finish(key, time.Now())
 		if err != nil {
 			metricResolveLockFailureCounter.Inc()
@@ -521,14 +526,29 @@ func (s *subscriptionClient) handleResolveLockTasks(ctx context.Context) error {
 		} else {
 			metricResolveLockSuccessCounter.Inc()
 		}
+		return nil
 	}
 
-	for {
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case task := <-s.resolveLockTaskCh:
-			doResolve(task)
+	// Keep continuations on the worker: sending one back to a full ingress
+	// channel would block its only reader. Admit waiting regions ahead of a
+	// continuation, keeping at most one channel's worth of waiting tasks locally.
+	ready := deque.NewDequeDefault[resolveLockTask]()
+	for ctx.Err() == nil {
+		task, ok := ready.PopFront()
+		if !ok {
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case task = <-s.resolveLockTaskCh:
+			}
+		}
+		if next := doResolve(task); next != nil {
+			for range min(len(s.resolveLockTaskCh), cap(s.resolveLockTaskCh)-ready.Length()) {
+				ready.PushBack(<-s.resolveLockTaskCh)
+			}
+			task.startKey = next
+			ready.PushBack(task)
 		}
 	}
+	return ctx.Err()
 }

@@ -16,10 +16,19 @@ package txnutil
 import (
 	"context"
 	"testing"
+	"time"
 
+	"github.com/golang/mock/gomock"
+	"github.com/pingcap/kvproto/pkg/keyspacepb"
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
+	appcontext "github.com/pingcap/ticdc/pkg/common/context"
+	"github.com/pingcap/ticdc/pkg/keyspace"
+	"github.com/pingcap/tidb/pkg/store/mockstore"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/require"
+	"github.com/tikv/client-go/v2/testutils"
 	"github.com/tikv/client-go/v2/tikv"
+	"github.com/tikv/client-go/v2/tikvrpc"
 	"github.com/tikv/client-go/v2/txnkv"
 	"github.com/tikv/client-go/v2/txnkv/txnlock"
 )
@@ -50,52 +59,80 @@ func TestDirectSharedLockWrapperResolveFails(t *testing.T) {
 	require.Contains(t, err.Error(), "trying to resolve a shared lock directly")
 }
 
-func TestProgressRepairScansPastSharedMetadata(t *testing.T) {
-	key := []byte("shared")
-	wrapper := &kvrpcpb.LockInfo{
-		Key: key, LockType: kvrpcpb.Op_SharedLock,
-		SharedLockInfos: make([]*kvrpcpb.LockInfo, scanLockLimit),
-	}
-	for i := range wrapper.SharedLockInfos {
-		wrapper.SharedLockInfos[i] = &kvrpcpb.LockInfo{
-			Key: key, LockVersion: uint64(i + 1), LockType: kvrpcpb.Op_Lock,
-		}
-	}
-	dataKey := append(append([]byte{}, key...), 0)
-	expired := &kvrpcpb.LockInfo{Key: dataKey, LockType: kvrpcpb.Op_Put, LockVersion: 10}
-	regionEnd := []byte("z")
-	page := []*kvrpcpb.LockInfo{wrapper}
-	locks, _, err := resolveScanLockInfos(page, func(_ []*txnkv.Lock) (int64, error) {
-		t.Fatal("a shared member cannot hold back resolved-ts")
-		return 0, nil
-	})
-	require.NoError(t, err)
-	require.Empty(t, locks)
-	require.Equal(t, dataKey, nextScanLockKey(regionEnd, page))
-
-	page = []*kvrpcpb.LockInfo{expired, {Key: []byte("u"), LockType: kvrpcpb.Op_PessimisticLock}}
-	locks, _, err = resolveScanLockInfos(page, func(locks []*txnkv.Lock) (int64, error) {
-		require.Len(t, locks, 1)
-		require.Equal(t, expired.Key, locks[0].Key)
-		return 0, nil
-	})
-	require.NoError(t, err)
-	require.Len(t, locks, 1)
-	require.Equal(t, regionEnd, nextScanLockKey(regionEnd, page))
+// lockScanClient supplies ScanLock pages while using client-go's actual resolver.
+type lockScanClient struct {
+	tikv.Client
+	scan func(*kvrpcpb.ScanLockRequest) []*kvrpcpb.LockInfo
 }
 
-func TestProgressRepairContinuesPastAttemptedDataLocks(t *testing.T) {
-	page := make([]*kvrpcpb.LockInfo, scanLockLimit)
-	for i := range page {
-		page[i] = &kvrpcpb.LockInfo{Key: []byte("k"), LockType: kvrpcpb.Op_Put}
+func (c lockScanClient) SendRequest(ctx context.Context, addr string, req *tikvrpc.Request, timeout time.Duration) (*tikvrpc.Response, error) {
+	if req.Type == tikvrpc.CmdScanLock {
+		return &tikvrpc.Response{Resp: &kvrpcpb.ScanLockResponse{Locks: c.scan(req.ScanLock())}}, nil
 	}
-	page[len(page)-1].Key = []byte("x")
-	locks, ttl, err := resolveScanLockInfos(page, func(locks []*txnkv.Lock) (int64, error) {
-		return 1000, nil
-	})
+	return c.Client.SendRequest(ctx, addr, req, timeout)
+}
+
+func TestProgressRepairScansPastSharedMetadata(t *testing.T) {
+	wrapper := &kvrpcpb.LockInfo{LockType: kvrpcpb.Op_SharedLock}
+	for i := range scanLockLimit {
+		wrapper.SharedLockInfos = append(wrapper.SharedLockInfos, &kvrpcpb.LockInfo{
+			Key: []byte("m"), LockType: kvrpcpb.Op_Lock, LockVersion: uint64(i + 1),
+		})
+	}
+	ctx := context.Background()
+	dataKey := []byte{'m', 0}
+	expired := &kvrpcpb.LockInfo{Key: dataKey, PrimaryLock: dataKey, LockType: kvrpcpb.Op_Put, LockVersion: 10}
+	var regionID uint64
+	var starts [][]byte
+	store, err := mockstore.NewMockStore(
+		mockstore.WithClusterInspector(func(c testutils.Cluster) { _, _, regionID = mockstore.BootstrapWithSingleStore(c) }),
+		mockstore.WithClientHijacker(func(c tikv.Client) tikv.Client {
+			return lockScanClient{c, func(scan *kvrpcpb.ScanLockRequest) []*kvrpcpb.LockInfo {
+				starts = append(starts, scan.StartKey)
+				if len(scan.StartKey) == 0 || string(scan.StartKey) == "z" {
+					return []*kvrpcpb.LockInfo{wrapper}
+				}
+				return []*kvrpcpb.LockInfo{expired}
+			}}
+		}),
+	)
 	require.NoError(t, err)
-	require.Len(t, locks, scanLockLimit)
-	require.Positive(t, ttl)
-	require.Equal(t, []byte{'x', 0}, nextScanLockKey([]byte("z"), page))
-	require.Equal(t, []byte("z"), nextScanLockKey([]byte("z"), nil))
+	t.Cleanup(func() { require.NoError(t, store.Close()) })
+	meta := &keyspacepb.KeyspaceMeta{Name: "test"}
+	manager := keyspace.NewMockManager(gomock.NewController(t))
+	manager.EXPECT().GetKeyspaceByID(ctx, uint32(1)).Return(meta, nil).AnyTimes()
+	manager.EXPECT().GetStorage(ctx, meta.Name).Return(store, nil).AnyTimes()
+	previous, _ := appcontext.TryGetService[keyspace.Manager](appcontext.KeyspaceManager)
+	defer appcontext.SetService(appcontext.KeyspaceManager, previous)
+	appcontext.SetService[keyspace.Manager](appcontext.KeyspaceManager, manager)
+
+	found := testutil.ToFloat64(metricResolveLockFoundCounter)
+	resolved := testutil.ToFloat64(metricResolveLockResolvedCounter)
+	r := NewDataLockResolver()
+	next, err := r.ResolveDataLocks(ctx, 1, regionID, 2000, nil)
+	require.NoError(t, err)
+	require.Equal(t, dataKey, next)
+	next, err = r.ResolveDataLocks(ctx, 1, regionID, 2000, next)
+	require.NoError(t, err)
+	require.Nil(t, next)
+	require.Len(t, starts, 2)
+	require.Empty(t, starts[0])
+	require.Equal(t, dataKey, starts[1])
+	require.Equal(t, found+1025, testutil.ToFloat64(metricResolveLockFoundCounter))
+	require.Equal(t, resolved+1, testutil.ToFloat64(metricResolveLockResolvedCounter))
+
+	_, err = r.ResolveDataLocks(ctx, 1, regionID, 2000, []byte("z"))
+	require.ErrorContains(t, err, "did not advance")
+}
+
+func TestProgressRepairSelectsOnlyDataLocks(t *testing.T) {
+	infos := []*kvrpcpb.LockInfo{
+		{LockType: kvrpcpb.Op_PessimisticLock}, {LockType: kvrpcpb.Op_SharedPessimisticLock},
+		{LockType: kvrpcpb.Op_Lock}, {LockType: kvrpcpb.Op_SharedLock},
+		{LockType: kvrpcpb.Op_Put}, {LockType: kvrpcpb.Op_Del},
+	}
+	locks := locksToResolve(infos, true)[0]
+	require.Len(t, locks, 2)
+	require.Equal(t, kvrpcpb.Op_Put, locks[0].LockType)
+	require.Equal(t, kvrpcpb.Op_Del, locks[1].LockType)
 }
