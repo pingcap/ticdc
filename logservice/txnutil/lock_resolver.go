@@ -165,7 +165,9 @@ func (r *resolver) resolve(ctx context.Context, keyspaceID uint32, regionID, max
 				if err != nil {
 					return nil, err
 				}
-				infos = append(infos[:len(infos)-1], holders...)
+				if len(holders) > 0 {
+					infos = append(infos[:len(infos)-1], holders...)
+				}
 			}
 			if len(page.EndKey) > 0 && bytes.Compare(nextKey, page.EndKey) >= 0 {
 				nextKey = nil

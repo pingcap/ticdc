@@ -543,7 +543,8 @@ func (s *subscriptionClient) handleResolveLockTasks(ctx context.Context) error {
 			}
 		}
 		if next := doResolve(task); next != nil {
-			for range min(len(s.resolveLockTaskCh), cap(s.resolveLockTaskCh)-ready.Length()) {
+			admit := max(1, cap(s.resolveLockTaskCh)-ready.Length())
+			for range min(len(s.resolveLockTaskCh), admit) {
 				ready.PushBack(<-s.resolveLockTaskCh)
 			}
 			task.startKey = next
