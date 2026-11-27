@@ -39,8 +39,10 @@ const kvEventsCacheMaxSize = 32
 // It contains a sub span of a table(or the total span of a table),
 // the startTs of the table, and the output event channel.
 type subscribedSpan struct {
-	subID   SubscriptionID
-	startTs uint64
+	// splitSubscription owns this internal span when splitting is enabled.
+	splitSubscription *splitSubscription
+	subID             SubscriptionID
+	startTs           uint64
 	// Whether to filter out the value written by TiCDC itself.
 	// It should be `true` in BDR mode.
 	filterLoop bool

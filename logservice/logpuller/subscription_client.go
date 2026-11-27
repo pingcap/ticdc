@@ -15,6 +15,7 @@ package logpuller
 
 import (
 	"context"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -82,6 +83,8 @@ type rangeTask struct {
 	subscribedSpan *subscribedSpan
 	filterLoop     bool
 	priority       ScanPriorityLevel
+	// splitSubscription is set only on the initial planning task.
+	splitSubscription *splitSubscription
 }
 
 // upstreamHandle contains the stable TiKV and PD dependencies shared by the
@@ -139,6 +142,9 @@ type subscriptionClient struct {
 	regionScheduler *regionRequestScheduler
 	// memoryQuota owns event-memory accounting and initial-scan admission.
 	memoryQuota *memoryQuotaController
+	// splitSubscriptions maps externally visible IDs to their internal spans.
+	splitSubscriptions sync.Map // SubscriptionID -> *splitSubscription
+	splitConfig        config.PullerSplitConfig
 
 	// rangeTaskCh is used to receive range tasks.
 	// The tasks will be handled in `handleRangeTask` goroutine.
@@ -170,6 +176,9 @@ func NewSubscriptionClient(
 	}
 	subClient.ctx, subClient.cancel = context.WithCancel(context.Background())
 	pullerConfig := config.GetGlobalServerConfig().Debug.Puller
+	if splitConfig := config.GetGlobalServerConfig().Puller; splitConfig != nil {
+		subClient.splitConfig = *splitConfig
+	}
 	subClient.memoryQuota = newMemoryQuotaController(
 		pullerConfig.MemoryQuota, pullerConfig.ScanBaseSize)
 	subClient.failureHandler = newRegionFailureHandler(
@@ -253,18 +262,25 @@ func (s *subscriptionClient) Subscribe(
 		time.Duration(config.GetGlobalServerConfig().Debug.Puller.OldStartTsScanLowPriorityThreshold),
 	)
 	rt.baseScanPriority = normalizeScanPriority(scanPriority)
-	s.spanRegistry.Add(rt)
-	s.eventSink.AddPath(rt)
-
-	select {
-	case <-s.ctx.Done():
-		log.Warn("subscribes span failed, the subscription client has closed")
-	case s.rangeTaskCh <- rangeTask{
+	task := rangeTask{
 		span:           span,
 		subscribedSpan: rt,
 		filterLoop:     rt.filterLoop,
 		priority:       rt.baseScanPriority,
-	}:
+	}
+	if s.splitConfig.EnableSpanSplit {
+		group := newSplitSubscription(s, rt)
+		s.splitSubscriptions.Store(subID, group)
+		task.splitSubscription = group
+	} else {
+		s.spanRegistry.Add(rt)
+		s.eventSink.AddPath(rt)
+	}
+
+	select {
+	case <-s.ctx.Done():
+		log.Warn("subscribes span failed, the subscription client has closed")
+	case s.rangeTaskCh <- task:
 		log.Info("subscribes span done", zap.Uint64("subscriptionID", uint64(subID)),
 			zap.Int64("tableID", span.TableID), zap.Uint64("startTs", startTs))
 	}
@@ -273,6 +289,10 @@ func (s *subscriptionClient) Subscribe(
 // Unsubscribe the given table span. All covered regions will be deregistered asynchronously.
 // NOTE: `span.TableID` must be set correctly.
 func (s *subscriptionClient) Unsubscribe(subID SubscriptionID) {
+	if value, ok := s.splitSubscriptions.Load(subID); ok {
+		value.(*splitSubscription).stop()
+		return
+	}
 	// NOTE: `subID` is cleared from `s.spanRegistry` in `onTableDrained`.
 	rt := s.spanRegistry.Get(subID)
 	if rt == nil {
@@ -340,6 +360,9 @@ func (s *subscriptionClient) onTableDrained(rt *subscribedSpan) {
 			zap.Error(err))
 	}
 	s.spanRegistry.Remove(rt.subID)
+	if rt.splitSubscription != nil {
+		rt.splitSubscription.drained(rt.subID)
+	}
 }
 
 func (s *subscriptionClient) handleRangeTasks(ctx context.Context) error {
@@ -352,6 +375,9 @@ func (s *subscriptionClient) handleRangeTasks(ctx context.Context) error {
 			return ctx.Err()
 		case task := <-s.rangeTaskCh:
 			g.Go(func() error {
+				if task.splitSubscription != nil {
+					return task.splitSubscription.run(ctx)
+				}
 				return s.divideSpanAndScheduleRegionRequests(ctx, task)
 			})
 		}
@@ -367,14 +393,45 @@ func (s *subscriptionClient) divideSpanAndScheduleRegionRequests(
 	ctx context.Context,
 	task rangeTask,
 ) error {
-	span := task.span
 	subscribedSpan := task.subscribedSpan
+	return s.forEachRegion(ctx, task.span, subscribedSpan, func(regionMeta *metapb.Region) {
+		regionSpan := heartbeatpb.TableSpan{
+			StartKey:   regionMeta.StartKey,
+			EndKey:     regionMeta.EndKey,
+			KeyspaceID: subscribedSpan.span.KeyspaceID,
+		}
+		regionSpan = common.HackTableSpan(regionSpan)
+		intersectSpan := common.GetIntersectSpan(subscribedSpan.span, regionSpan)
+		if common.IsEmptySpan(intersectSpan) {
+			log.Panic("subscription client check spans intersect shouldn't fail",
+				zap.Uint64("subscriptionID", uint64(subscribedSpan.subID)))
+		}
+		verID := tikv.NewRegionVerID(regionMeta.Id, regionMeta.RegionEpoch.ConfVer, regionMeta.RegionEpoch.Version)
+		regionInfo := newRegionInfo(verID, intersectSpan, nil, subscribedSpan, task.filterLoop)
+		regionInfo.scanPriority = normalizeScanPriority(task.priority)
+		s.scheduleRegionRequest(ctx, regionInfo)
+	})
+}
 
+// forEachRegion walks only a contiguous cover of span. Both initial split
+// planning and ordinary subscription/retry requests use the same discovery.
+func (s *subscriptionClient) forEachRegion(
+	ctx context.Context,
+	span heartbeatpb.TableSpan,
+	subscribedSpan *subscribedSpan,
+	visit func(*metapb.Region),
+) error {
 	// Limit the number of regions loaded at a time to make the load more stable.
 	limit := 1024
 	nextSpan := span
 	backoffBeforeLoad := false
 	for {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if subscribedSpan.stopped.Load() {
+			return nil
+		}
 		if backoffBeforeLoad {
 			if err := util.Hang(ctx, loadRegionRetryInterval); err != nil {
 				return err
@@ -415,29 +472,10 @@ func (s *subscriptionClient) divideSpanAndScheduleRegionRequests(
 		}
 
 		for _, regionMeta := range regionMetas {
-			regionSpan := heartbeatpb.TableSpan{
-				StartKey:   regionMeta.StartKey,
-				EndKey:     regionMeta.EndKey,
-				KeyspaceID: subscribedSpan.span.KeyspaceID,
+			if subscribedSpan.stopped.Load() {
+				return nil
 			}
-			// NOTE: the End key return by the PD API will be nil to represent the biggest key.
-			// So we need to fix it by calling spanz.HackSpan.
-			regionSpan = common.HackTableSpan(regionSpan)
-
-			// Find the intersection of the regionSpan returned by PD and the subscribedSpan.span.
-			// The intersection is the span that needs to be subscribed.
-			intersectSpan := common.GetIntersectSpan(subscribedSpan.span, regionSpan)
-			if common.IsEmptySpan(intersectSpan) {
-				log.Panic("subscription client check spans intersect shouldn't fail",
-					zap.Uint64("subscriptionID", uint64(subscribedSpan.subID)))
-			}
-
-			verID := tikv.NewRegionVerID(regionMeta.Id, regionMeta.RegionEpoch.ConfVer, regionMeta.RegionEpoch.Version)
-			regionInfo := newRegionInfo(verID, intersectSpan, nil, subscribedSpan, task.filterLoop)
-			regionInfo.scanPriority = normalizeScanPriority(task.priority)
-
-			// Schedule a region request to subscribe the region.
-			s.scheduleRegionRequest(ctx, regionInfo)
+			visit(regionMeta)
 
 			nextSpan.StartKey = regionMeta.EndKey
 			// If the nextSpan.StartKey is larger than the subscribedSpan.span.EndKey,

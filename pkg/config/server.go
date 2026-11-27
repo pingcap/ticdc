@@ -121,6 +121,7 @@ var defaultServerConfig = &ServerConfig{
 	},
 	Security:   &security.Credential{},
 	KVClient:   NewDefaultKVClientConfig(),
+	Puller:     NewDefaultPullerSplitConfig(),
 	Encryption: NewDefaultEncryptionConfig(),
 	Debug: &DebugConfig{
 		DB:       NewDefaultDBConfig(),
@@ -162,6 +163,7 @@ type ServerConfig struct {
 	Sorter     *SorterConfig        `toml:"sorter" json:"sorter"`
 	Security   *security.Credential `toml:"security" json:"security"`
 	KVClient   *KVClientConfig      `toml:"kv-client" json:"kv-client"`
+	Puller     *PullerSplitConfig   `toml:"puller" json:"puller"`
 	Encryption *EncryptionConfig    `toml:"encryption" json:"encryption"`
 	Debug      *DebugConfig         `toml:"debug" json:"debug"`
 	ClusterID  string               `toml:"cluster-id" json:"cluster-id"`
@@ -330,6 +332,12 @@ func (c *ServerConfig) ValidateAndAdjust() error {
 
 	if c.Encryption == nil {
 		c.Encryption = defaultCfg.Encryption
+	}
+	if c.Puller == nil {
+		c.Puller = defaultCfg.Puller
+	}
+	if err = c.Puller.Validate(); err != nil {
+		return err
 	}
 
 	if c.Debug == nil {

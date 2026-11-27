@@ -1,0 +1,8 @@
+# Server-local upstream subscription splitting. Applies to all changefeeds on
+# this server when their subscriptions are created. Keep nodes configured alike.
+[puller]
+enable-span-split = false
+# Split only when one original subscription covers more than this many regions.
+region-threshold = 500000
+# Target region count per internal span when the subscription is subdivided.
+region-count-per-span = 100000
