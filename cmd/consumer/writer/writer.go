@@ -92,6 +92,10 @@ func (w *Writer) Start(ctx context.Context) error {
 }
 
 // Writer owns the downstream sink, batching and checkpoint bookkeeping.
+//
+// AddDML, AddDDL, Advance, and Flush are single-goroutine owned by conductor
+// (Start only runs the sink loop), so pendingDML entries mutated in AddDML have
+// not entered selectBatch/writeBatch yet.
 type Writer struct {
 	target     sink.Sink
 	pendingDML []*event.DMLEvent
@@ -129,9 +133,80 @@ func (w *Writer) Checkpoint() uint64 {
 	return w.checkpoint
 }
 
-// AddDML queues one decoded row.
+// AddDML queues one decoded row, merging it into the table's latest pending
+// DMLEvent when CommitTs is non-zero and canMergeDML holds.
 func (w *Writer) AddDML(dml *event.DMLEvent) {
+	if dml == nil {
+		return
+	}
+	// The MySQL sink routes events through downstreamadapter/sink/mysql/causality,
+	// which hashes DispatcherID.GetLow() into conflict keys and uses it as the only
+	// key for tables without a primary or unique key. Codecs do not carry the field,
+	// so derive a table-scoped value; otherwise same-value rows of different tables
+	// collide onto one worker.
+	if dml.DispatcherID.IsZero() && dml.PhysicalTableID != 0 {
+		dml.DispatcherID = common.DispatcherID{Low: uint64(dml.PhysicalTableID)}
+	}
+	if dml.CommitTs != 0 {
+		// Scan backwards for this table's latest pending event and stop at the
+		// first match so an older CommitTs/schema never merges past a newer one.
+		for i := len(w.pendingDML) - 1; i >= 0; i-- {
+			prev := w.pendingDML[i]
+			if prev.PhysicalTableID != dml.PhysicalTableID {
+				continue
+			}
+			if canMergeDML(prev, dml) {
+				mergeDMLEvent(prev, dml)
+				return
+			}
+			break
+		}
+	}
+
 	w.pendingDML = append(w.pendingDML, dml)
+}
+
+func canMergeDML(prev, dml *event.DMLEvent) bool {
+	return prev != nil && dml != nil &&
+		prev.CommitTs == dml.CommitTs &&
+		prev.DispatcherID == dml.DispatcherID &&
+		// mergeDMLEvent appends src.Rows from index 0 and filterRows indexes Rows
+		// via PreviousTotalOffset + physicalOffset, which requires standalone chunks.
+		prev.PreviousTotalOffset == 0 &&
+		dml.PreviousTotalOffset == 0 &&
+		sameTableSchema(prev.TableInfo, dml.TableInfo)
+}
+
+func mergeDMLEvent(dst, src *event.DMLEvent) {
+	dstRowTypeCount := len(dst.RowTypes)
+	srcRowTypeCount := len(src.RowTypes)
+	if src.Rows != nil && src.Rows.NumRows() > 0 {
+		if dst.Rows == nil {
+			dst.Rows = src.Rows
+		} else {
+			dst.Rows.Append(src.Rows, 0, src.Rows.NumRows())
+		}
+	}
+	dst.RowTypes = append(dst.RowTypes, src.RowTypes...)
+	dst.RowKeys = appendOptionalDMLValues(dst.RowKeys, src.RowKeys, dstRowTypeCount, srcRowTypeCount)
+	// Checksums track logical rows (Length), whereas updates occupy two physical rows.
+	dst.Checksum = appendOptionalDMLValues(dst.Checksum, src.Checksum, int(dst.Length), int(src.Length))
+	dst.Length += src.Length
+	dst.ApproximateSize += src.ApproximateSize
+	dst.PostTxnEnqueued = append(dst.PostTxnEnqueued, src.PostTxnEnqueued...)
+	dst.PostTxnFlushed = append(dst.PostTxnFlushed, src.PostTxnFlushed...)
+}
+
+func appendOptionalDMLValues[T any](dst, src []T, dstCount, srcCount int) []T {
+	if len(dst) == 0 && len(src) == 0 {
+		return nil
+	}
+	if len(dst) == 0 && len(src) != 0 {
+		dst = make([]T, dstCount)
+	} else if len(dst) != 0 && len(src) == 0 {
+		src = make([]T, srcCount)
+	}
+	return append(dst, src...)
 }
 
 // AddDDL queues a block event.
@@ -213,7 +288,12 @@ func (w *Writer) Flush(ctx context.Context) error {
 	return nil
 }
 
-// selectBatch takes rows whose table schema consistency allows batching.
+// selectBatch takes pending events whose table schema consistency allows
+// batching. Merged CommitTs groups remain whole DMLEvents even if they exceed
+// batchRows or batchBytes, matching legacy storage consumer transaction
+// semantics. The price is that one such group is applied as one downstream
+// transaction, which the sink degrades to statement-by-statement execution once
+// it exceeds about half of max_allowed_packet.
 func (w *Writer) selectBatch() []*event.DMLEvent {
 	blocked := make(map[int64]bool)
 	tables := make(map[int64]*event.DMLEvent)

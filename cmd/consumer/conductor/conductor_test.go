@@ -509,3 +509,103 @@ func TestConductorWaitsWatermarkForOutOfOrderCreateDDLs(t *testing.T) {
 	require.NoError(t, c.flush(t.Context(), w))
 	require.Equal(t, []string{"create_db@100", "create_table@120"}, flushed)
 }
+
+type stubValidatorReader struct {
+	stubReader
+	onCheck func(dml *commonEvent.DMLEvent)
+}
+
+func (s *stubValidatorReader) CheckDML(dml *commonEvent.DMLEvent, _ int32, _ int64) {
+	if s.onCheck != nil {
+		s.onCheck(dml)
+	}
+}
+
+func TestConductorFlushDrainsWholeCommitTsGroupAndPreservesRoundBoundForZeroTs(t *testing.T) {
+	var flushedCount atomic.Int32
+	var drainedOrder []int64
+	var observedFlushedDuringT1 []int32
+
+	reader := &stubValidatorReader{}
+	c := New(reader, codecCommon.NewTableInfoProvider())
+	w := writer.New(t.Context(), writer.Options{
+		DownstreamURI: "blackhole://",
+		ReplicaConfig: config.GetDefaultReplicaConfig(),
+	})
+
+	writerCtx, cancel := context.WithCancel(t.Context())
+	writerDone := make(chan error, 1)
+	go func() {
+		writerDone <- w.Start(writerCtx)
+	}()
+	defer func() {
+		cancel()
+		<-writerDone
+	}()
+
+	reader.onCheck = func(dml *commonEvent.DMLEvent) {
+		if dml.CommitTs == 100 {
+			drainedOrder = append(drainedOrder, dml.PhysicalTableID)
+			if dml.PhysicalTableID == 1 {
+				observedFlushedDuringT1 = append(observedFlushedDuringT1, flushedCount.Load())
+			}
+			return
+		}
+		if dml.CommitTs == 0 {
+			observedFlushedDuringT1 = append(observedFlushedDuringT1, flushedCount.Load())
+		}
+	}
+
+	t1Info := commonType.WrapTableInfo("test", &timodel.TableInfo{ID: 1, Name: ast.NewCIStr("t1")})
+	t2Info := commonType.WrapTableInfo("test", &timodel.TableInfo{ID: 2, Name: ast.NewCIStr("t2")})
+	newDML := func(tableID int64, info *commonType.TableInfo, commitTs uint64, rt commonType.RowType) *commonEvent.DMLEvent {
+		dml := &commonEvent.DMLEvent{
+			PhysicalTableID: tableID,
+			CommitTs:        commitTs,
+			TableInfo:       info,
+			Rows:            chunk.NewChunkWithCapacity(nil, 0),
+			RowTypes:        []commonType.RowType{rt},
+			Length:          1,
+		}
+		dml.AddPostFlushFunc(func() {
+			flushedCount.Add(1)
+		})
+		return dml
+	}
+
+	// Queue roundRows+5 rows for t1@100 and 2 rows for t2@100 (both with Delete & Insert).
+	t1GroupRows := roundRows + 5
+	require.NoError(t, c.accept(newDML(1, t1Info, 100, commonType.RowTypeDelete), &source.Payload{}))
+	for i := 1; i < t1GroupRows; i++ {
+		require.NoError(t, c.accept(newDML(1, t1Info, 100, commonType.RowTypeInsert), &source.Payload{}))
+	}
+	require.NoError(t, c.accept(newDML(2, t2Info, 100, commonType.RowTypeInsert), &source.Payload{}))
+	require.NoError(t, c.accept(newDML(2, t2Info, 100, commonType.RowTypeDelete), &source.Payload{}))
+
+	c.advanceWatermark(100, 0)
+	require.NoError(t, c.flush(t.Context(), w))
+
+	// Entire t1@100 group (including rows past roundRows) must drain contiguously in a single
+	// flush round before t2@100 begins.
+	require.Len(t, drainedOrder, t1GroupRows+2)
+	for i := 0; i < t1GroupRows; i++ {
+		require.Equal(t, int64(1), drainedOrder[i])
+		require.Equal(t, int32(0), observedFlushedDuringT1[i])
+	}
+	require.Equal(t, int64(2), drainedOrder[t1GroupRows])
+	require.Equal(t, int64(2), drainedOrder[t1GroupRows+1])
+	require.Equal(t, int32(t1GroupRows+2), flushedCount.Load())
+
+	// CommitTs == 0 rows must still honor roundRows instead of draining unboundedly in one round.
+	flushedCount.Store(0)
+	observedFlushedDuringT1 = nil
+	zeroRows := roundRows + 10
+	for i := 0; i < zeroRows; i++ {
+		require.NoError(t, c.accept(newDML(1, t1Info, 0, commonType.RowTypeInsert), &source.Payload{}))
+	}
+	require.NoError(t, c.flush(t.Context(), w))
+	require.Len(t, observedFlushedDuringT1, zeroRows)
+	require.Equal(t, int32(0), observedFlushedDuringT1[roundRows-1])
+	require.Equal(t, int32(roundRows), observedFlushedDuringT1[roundRows])
+	require.Equal(t, int32(zeroRows), flushedCount.Load())
+}

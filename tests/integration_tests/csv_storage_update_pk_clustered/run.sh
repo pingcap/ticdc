@@ -17,6 +17,7 @@ function run_changefeed() {
 	run_consumer $WORK_DIR $SINK_URI $CUR/conf/$changefeed_id.toml $changefeed_id
 	sleep 8
 	check_sync_diff $WORK_DIR $CUR/conf/diff_config.toml 100
+	stop_consumer $WORK_DIR $changefeed_id
 
 	run_sql "drop database if exists test" ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT}
 }

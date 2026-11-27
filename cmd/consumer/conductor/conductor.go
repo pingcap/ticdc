@@ -517,14 +517,31 @@ func (c *Conductor) flush(ctx context.Context, w *writer.Writer) error {
 				break
 			}
 
-			c.popDML(row)
-			if c.validator != nil {
-				c.validator.CheckDML(row.dml, row.partition, row.offset)
-			}
+			tableID := row.dml.PhysicalTableID
+			commitTs := row.dml.CommitTs
+			for {
+				c.popDML(row)
+				if c.validator != nil {
+					c.validator.CheckDML(row.dml, row.partition, row.offset)
+				}
 
-			w.AddDML(row.dml)
-			rows += int(row.dml.Len())
-			bytes += row.dml.Rows.MemoryUsage()
+				w.AddDML(row.dml)
+				rows += int(row.dml.Len())
+				bytes += row.dml.Rows.MemoryUsage()
+
+				// Keep every row of a non-zero CommitTs transaction together so a
+				// large transaction can exceed roundRows/roundBytes instead of being
+				// split across flush rounds or interleaved across tables. Zero CommitTs
+				// rows (e.g. CSV without include-commit-ts) drain singly within bounds.
+				if commitTs == 0 {
+					break
+				}
+				q := c.pendingDML[tableID]
+				if q == nil || q.blocked || len(q.rows) == 0 || q.rows[0].dml.CommitTs != commitTs {
+					break
+				}
+				row = q.rows[0]
+			}
 		}
 
 		if rows == 0 && !addedDDL {

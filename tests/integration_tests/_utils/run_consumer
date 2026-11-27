@@ -25,3 +25,4 @@ fi
 echo "[$(date)] <<<<<< START consumer in ${TEST_NAME:-consumer} case >>>>>>"
 cd "$workdir"
 cdc_consumer "${args[@]}" >>"$workdir/cdc_consumer_stdout${log_suffix}.log" 2>&1 &
+echo $! >"$workdir/cdc_consumer${log_suffix}.pid"
