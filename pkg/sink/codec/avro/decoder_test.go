@@ -378,11 +378,11 @@ func TestNullTimeColumnPrecision(t *testing.T) {
 	require.Equal(t, 3, columns[1].GetDecimal())
 
 	cache := common.NewTableInfoProvider()
-	queryTableInfo(cache, "test", "t", 100, columns, nil, false)
+	queryTableInfo(cache, "test", "t", 100, columns, nil, true, false)
 	_, cached := cache.ReadAt("test", "t", 101)
 	require.Nil(t, cached)
 
-	queryTableInfo(cache, "test", "t", 100, columns, nil, true)
+	queryTableInfo(cache, "test", "t", 100, columns, nil, true, true)
 	_, cached = cache.ReadAt("test", "t", 101)
 	require.NotNil(t, cached)
 	require.Equal(t, 3, cached.GetColumns()[1].GetDecimal())

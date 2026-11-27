@@ -368,7 +368,7 @@ func assembleEvent(
 		lookupTs = math.MaxUint64
 	}
 	event := new(commonEvent.DMLEvent)
-	event.TableInfo = queryTableInfo(cache, schemaName, tableName, lookupTs, columns, keyMap, hasValue && precise)
+	event.TableInfo = queryTableInfo(cache, schemaName, tableName, lookupTs, columns, keyMap, hasValue, hasValue && precise)
 	event.StartTs = uint64(commitTs)
 	event.CommitTs = uint64(commitTs)
 	event.PhysicalTableID = event.TableInfo.TableName.TableID
@@ -521,19 +521,46 @@ func schemaAndTableName(schema map[string]any) (string, string) {
 
 func queryTableInfo(
 	cache *common.TableInfoProvider, schemaName, tableName string, commitTs uint64,
-	columns []*timodel.ColumnInfo, keyMap map[string]any, cacheable bool,
+	columns []*timodel.ColumnInfo, keyMap map[string]any, hasValue, cacheable bool,
 ) *commonType.TableInfo {
-	version, tableInfo := cache.ReadAt(schemaName, tableName, commitTs)
-	if tableInfo != nil {
-		return tableInfo
+	version, cached := cache.ReadAt(schemaName, tableName, commitTs)
+	if cached != nil && (!hasValue || tableInfoMatchesColumns(cached, columns, keyMap)) {
+		return cached
 	}
-	tableInfo = newTableInfo(cache, schemaName, tableName, columns, keyMap)
+	tableInfo := newTableInfo(cache, schemaName, tableName, columns, keyMap)
 	// A key-only delete has the handle columns alone, and a NULL time column
 	// has no decimal yet; neither may define the layout of later rows.
-	if cacheable {
+	// When a cached entry already exists for this version with a different
+	// column layout (for example, decoders straddling an unrecorded DDL),
+	// rebuild for this event without overwriting the entry needed by lagging
+	// decoders.
+	if cacheable && cached == nil {
 		cache.Write(schemaName, tableName, version, tableInfo)
 	}
 	return tableInfo
+}
+
+func tableInfoMatchesColumns(
+	tableInfo *commonType.TableInfo, columns []*timodel.ColumnInfo, keyMap map[string]any,
+) bool {
+	cachedCols := tableInfo.GetColumns()
+	if len(cachedCols) != len(columns) {
+		return false
+	}
+	for i, col := range columns {
+		cachedCol := cachedCols[i]
+		if cachedCol.Name.O != col.Name.O || cachedCol.GetType() != col.GetType() {
+			return false
+		}
+		if (cachedCol.GetFlag() &^ mysql.PriKeyFlag) != (col.GetFlag() &^ mysql.PriKeyFlag) {
+			return false
+		}
+		_, inKey := keyMap[col.Name.O]
+		if inKey != mysql.HasPriKeyFlag(cachedCol.GetFlag()) {
+			return false
+		}
+	}
+	return true
 }
 
 func newTableInfo(cache *common.TableInfoProvider, schemaName, tableName string, columns []*timodel.ColumnInfo, keyMap map[string]any) *commonType.TableInfo {
