@@ -671,6 +671,125 @@ func TestAvroDeleteAfterDDL(t *testing.T) {
 	require.Nil(t, cachedAfterDDL)
 }
 
+func TestAvroSharedTableInfoMismatchDoesNotDropColumns(t *testing.T) {
+	codecConfig := common.NewConfig(config.ProtocolAvro)
+	codecConfig.EnableTiDBExtension = true
+	ctx := t.Context()
+	encoder, err := SetupEncoderAndSchemaRegistry4Testing(ctx, codecConfig)
+	require.NoError(t, err)
+	t.Cleanup(TeardownEncoderAndSchemaRegistry4Testing)
+
+	idFieldType := parserTypes.NewFieldType(mysql.TypeLong)
+	idFieldType.SetFlag(mysql.PriKeyFlag | mysql.NotNullFlag)
+	vFieldType := parserTypes.NewFieldType(mysql.TypeLong)
+
+	oldTableInfo := commonType.WrapTableInfo("test", &timodel.TableInfo{
+		ID:       20,
+		Name:     ast.NewCIStr("person"),
+		UpdateTS: 100,
+		Columns: []*timodel.ColumnInfo{
+			{
+				ID:        1,
+				Name:      ast.NewCIStr("id"),
+				FieldType: *idFieldType,
+				State:     timodel.StatePublic,
+				Offset:    0,
+			},
+		},
+	})
+	newTableInfo := commonType.WrapTableInfo("test", &timodel.TableInfo{
+		ID:       20,
+		Name:     ast.NewCIStr("person"),
+		UpdateTS: 101,
+		Columns: []*timodel.ColumnInfo{
+			{
+				ID:        1,
+				Name:      ast.NewCIStr("id"),
+				FieldType: *idFieldType,
+				State:     timodel.StatePublic,
+				Offset:    0,
+			},
+			{
+				ID:        2,
+				Name:      ast.NewCIStr("v"),
+				FieldType: *vFieldType,
+				State:     timodel.StatePublic,
+				Offset:    1,
+			},
+		},
+	})
+
+	const topic = "shared-table-info-mismatch"
+	oldRow := chunk.MutRowFromValues(int64(1)).ToRow()
+	newRow := chunk.MutRowFromValues(int64(2), int64(42)).ToRow()
+
+	encodeInsert := func(tableInfo *commonType.TableInfo, commitTs uint64, row chunk.Row) *common.Message {
+		require.NoError(t, encoder.AppendRowChangedEvent(ctx, topic,
+			newAvroRowEventForTest(tableInfo, commitTs, chunk.Row{}, row)))
+		return encoder.Build()[0]
+	}
+
+	t.Run("new column after old cached layout", func(t *testing.T) {
+		provider := common.NewTableInfoProvider()
+		d1 := NewDecoder(codecConfig, encoder.schemaM, topic, nil).(*decoder)
+		d2 := NewDecoder(codecConfig, encoder.schemaM, topic, nil).(*decoder)
+		d1.ShareTableInfo(provider)
+		d2.ShareTableInfo(provider)
+
+		oldMsg1 := encodeInsert(oldTableInfo, 1024, oldRow)
+		d1.AddKeyValue(oldMsg1.Key, oldMsg1.Value)
+		oldEvent1 := d1.NextDMLMessage().ToDMLEvent()
+		t.Cleanup(oldEvent1.PostFlush)
+		require.Equal(t, 1, oldEvent1.Rows.NumCols())
+
+		newMsg := encodeInsert(newTableInfo, 1025, newRow)
+		d2.AddKeyValue(newMsg.Key, newMsg.Value)
+		newEvent := d2.NextDMLMessage().ToDMLEvent()
+		t.Cleanup(newEvent.PostFlush)
+		require.Len(t, newEvent.TableInfo.GetColumns(), 2)
+		require.Equal(t, "id", newEvent.TableInfo.GetColumns()[0].Name.O)
+		require.Equal(t, "v", newEvent.TableInfo.GetColumns()[1].Name.O)
+		require.Equal(t, 2, newEvent.Rows.NumCols())
+		require.Equal(t, int64(2), newEvent.Rows.GetRow(0).GetInt64(0))
+		require.Equal(t, int64(42), newEvent.Rows.GetRow(0).GetInt64(1))
+
+		oldMsg2 := encodeInsert(oldTableInfo, 1026, oldRow)
+		d1.AddKeyValue(oldMsg2.Key, oldMsg2.Value)
+		oldEvent2 := d1.NextDMLMessage().ToDMLEvent()
+		t.Cleanup(oldEvent2.PostFlush)
+		require.Same(t, oldEvent1.TableInfo, oldEvent2.TableInfo)
+	})
+
+	t.Run("old layout after new cached layout", func(t *testing.T) {
+		provider := common.NewTableInfoProvider()
+		d1 := NewDecoder(codecConfig, encoder.schemaM, topic, nil).(*decoder)
+		d2 := NewDecoder(codecConfig, encoder.schemaM, topic, nil).(*decoder)
+		d1.ShareTableInfo(provider)
+		d2.ShareTableInfo(provider)
+
+		newMsg1 := encodeInsert(newTableInfo, 1024, newRow)
+		d2.AddKeyValue(newMsg1.Key, newMsg1.Value)
+		newEvent1 := d2.NextDMLMessage().ToDMLEvent()
+		t.Cleanup(newEvent1.PostFlush)
+		require.Equal(t, 2, newEvent1.Rows.NumCols())
+
+		oldMsg := encodeInsert(oldTableInfo, 1025, oldRow)
+		d1.AddKeyValue(oldMsg.Key, oldMsg.Value)
+		oldEvent := d1.NextDMLMessage().ToDMLEvent()
+		t.Cleanup(oldEvent.PostFlush)
+		require.Len(t, oldEvent.TableInfo.GetColumns(), 1)
+		require.Equal(t, "id", oldEvent.TableInfo.GetColumns()[0].Name.O)
+		require.Equal(t, 1, oldEvent.Rows.NumCols())
+		require.Equal(t, int64(1), oldEvent.Rows.GetRow(0).GetInt64(0))
+
+		newMsg2 := encodeInsert(newTableInfo, 1026, newRow)
+		d2.AddKeyValue(newMsg2.Key, newMsg2.Value)
+		newEvent2 := d2.NextDMLMessage().ToDMLEvent()
+		t.Cleanup(newEvent2.PostFlush)
+		require.Same(t, newEvent1.TableInfo, newEvent2.TableInfo)
+	})
+}
+
 func TestAvroEnvelope(t *testing.T) {
 	t.Parallel()
 	avroCodec, err := GenCodec(`
