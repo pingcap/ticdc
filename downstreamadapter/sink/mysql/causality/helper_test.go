@@ -590,11 +590,17 @@ func TestConflictKeysScopedByPhysicalTableID(t *testing.T) {
 		return e
 	}
 
-	// Distinct PK tables with zero DispatcherID must produce disjoint conflict keys.
+	// Distinct PK tables with zero DispatcherID must produce completely disjoint conflict keys.
 	t100, t101 := makePKTable(100), makePKTable(101)
 	e100ZeroA := makeEvent(common.DispatcherID{}, 100, t100, 1, 10)
 	e101Zero := makeEvent(common.DispatcherID{}, 101, t101, 1, 10)
-	require.NotEqual(t, ConflictKeys(e100ZeroA, nil), ConflictKeys(e101Zero, nil))
+	keys100 := ConflictKeys(e100ZeroA, nil)
+	keys101 := ConflictKeys(e101Zero, nil)
+	require.Len(t, keys100, 2)
+	require.Len(t, keys101, 2)
+	for key := range keys100 {
+		require.NotContains(t, keys101, key)
+	}
 
 	// Same PhysicalTableID with distinct DispatcherIDs must produce identical conflict keys.
 	e100Disp1 := makeEvent(common.DispatcherID{Low: 1}, 100, t100, 1, 10)
