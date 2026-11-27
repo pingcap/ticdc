@@ -121,6 +121,10 @@ func endpointContainsSensitiveData(endpoint string) bool {
 	return parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != ""
 }
 
+func isEndpointQueryParameter(name string) bool {
+	return strings.EqualFold(name, "endpoint") || strings.EqualFold(name, "s3.endpoint")
+}
+
 // maskSensitiveDataInQueryLikeText handles fragment-like request target text
 // without rewriting ordinary URI fragments.
 func maskSensitiveDataInQueryLikeText(text string) (string, bool) {
@@ -178,7 +182,7 @@ func ContainsSensitiveDataInURI(uri string) bool {
 		if isSensitiveQueryParameter(name) {
 			return true
 		}
-		if strings.EqualFold(name, "endpoint") {
+		if isEndpointQueryParameter(name) {
 			for _, endpoint := range values {
 				if endpointContainsSensitiveData(endpoint) {
 					return true
@@ -204,7 +208,7 @@ func MaskSensitiveDataInURI(uri string) string {
 			queries.Set(key, "xxxxx")
 			continue
 		}
-		if strings.EqualFold(key, "endpoint") {
+		if isEndpointQueryParameter(key) {
 			for _, endpoint := range values {
 				if endpointContainsSensitiveData(endpoint) {
 					queries.Set(key, "xxxxx")
