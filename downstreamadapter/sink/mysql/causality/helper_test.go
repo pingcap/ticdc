@@ -115,9 +115,8 @@ func TestGenKeyListUsesSchemaIndexWithVirtualGeneratedColumn(t *testing.T) {
 	keys := tableInfo.GetIndexColumns()
 	require.Len(t, keys, 1)
 
-	dispatcherID := common.DispatcherID{Low: 1, High: 2}
 	indexColumns := []*timodel.IndexColumn{{Offset: tableInfo.MustGetColumnOffsetByID(keys[0][0]), Length: types.UnspecifiedLength}}
-	key := genKeyList(&row, 0, indexColumns, dispatcherID, tableInfo)
+	key := genKeyList(&row, 0, indexColumns, tableInfo.TableName.TableID, tableInfo)
 	require.NotNil(t, key)
 	require.True(t, len(key) > 0)
 	require.Equal(t, []byte("1\x00"), key[:2])
@@ -167,8 +166,6 @@ func TestGenRowKeysStableAcrossUpdateAndDeleteWithVirtualGeneratedColumn(t *test
 	})
 	require.NotNil(t, tableInfo)
 
-	dispatcherID := common.DispatcherID{Low: 1, High: 2}
-
 	// Update: (b=1,id=1) -> (b=NULL,id=1)
 	updateChunk := chunk.NewChunkWithCapacity(tableInfo.GetFieldSlice(), 2)
 	updateChunk.AppendInt64(0, 1)
@@ -196,8 +193,8 @@ func TestGenRowKeysStableAcrossUpdateAndDeleteWithVirtualGeneratedColumn(t *test
 		RowType: common.RowTypeDelete,
 	}
 
-	updateKeys := genRowKeys(update, tableInfo, dispatcherID)
-	deleteKeys := genRowKeys(del, tableInfo, dispatcherID)
+	updateKeys := genRowKeys(update, tableInfo, tableInfo.TableName.TableID)
+	deleteKeys := genRowKeys(del, tableInfo, tableInfo.TableName.TableID)
 	require.NotEmpty(t, updateKeys)
 	require.NotEmpty(t, deleteKeys)
 
@@ -373,7 +370,7 @@ func TestConflictKeysSecondaryUniqueIndexes(t *testing.T) {
 				row, ok := events[1].GetNextRow()
 				require.True(t, ok)
 				events[1].Rewind()
-				require.Len(t, genRowKeys(row, tableInfo, dispatcherID), 2, "generate exactly one PK and one UK dependency")
+				require.Len(t, genRowKeys(row, tableInfo, tableInfo.TableName.TableID), 2, "generate exactly one PK and one UK dependency")
 			}
 			hasConflict := func(keysA, keysB map[uint64]struct{}) bool {
 				for key := range keysA {
@@ -398,7 +395,6 @@ func TestConflictKeysSecondaryUniqueIndexes(t *testing.T) {
 				require.NoError(t, err)
 				require.Empty(t, remaining)
 				replayed := decoded.RedoRow.ToDMLEvent()
-				replayed.DispatcherID = dispatcherID
 				t.Cleanup(replayed.PostFlush)
 				return ConflictKeys(replayed, nil)
 			}
@@ -535,7 +531,6 @@ func TestConflictKeysReconstructedSchemas(t *testing.T) {
 					}
 					require.Len(t, events, len(rows))
 					for _, event := range events {
-						event.DispatcherID = common.DispatcherID{Low: 1, High: 2}
 						t.Cleanup(event.PostFlush)
 					}
 					first, second := ConflictKeys(events[0], nil), ConflictKeys(events[1], nil)
@@ -558,4 +553,78 @@ func TestConflictKeysReconstructedSchemas(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestConflictKeysScopedByPhysicalTableID(t *testing.T) {
+	t.Parallel()
+
+	pkType := types.NewFieldType(mysql.TypeLong)
+	pkType.AddFlag(mysql.PriKeyFlag | mysql.NotNullFlag)
+	ukType := types.NewFieldType(mysql.TypeLong)
+	ukType.AddFlag(mysql.UniqueKeyFlag | mysql.NotNullFlag)
+
+	makePKTable := func(id int64) *common.TableInfo {
+		return common.WrapTableInfo("test", &timodel.TableInfo{
+			ID: id, Name: ast.NewCIStr("t"), PKIsHandle: true,
+			Columns: []*timodel.ColumnInfo{
+				{ID: 1, Offset: 0, Name: ast.NewCIStr("id"), State: timodel.StatePublic, FieldType: *pkType},
+				{ID: 2, Offset: 1, Name: ast.NewCIStr("uk"), State: timodel.StatePublic, FieldType: *ukType},
+			},
+			Indices: []*timodel.IndexInfo{
+				{
+					ID: 1, Name: ast.NewCIStr("uk"), Unique: true, State: timodel.StatePublic,
+					Columns: []*timodel.IndexColumn{{Name: ast.NewCIStr("uk"), Offset: 1, Length: types.UnspecifiedLength}},
+				},
+			},
+		})
+	}
+	makeEvent := func(dispatcherID common.DispatcherID, tableID int64, info *common.TableInfo, vals ...int64) *commonEvent.DMLEvent {
+		e := commonEvent.NewDMLEvent(dispatcherID, tableID, 1, 2, info)
+		chk := chunk.NewChunkWithCapacity(info.GetFieldSlice(), 1)
+		for idx, v := range vals {
+			chk.AppendInt64(idx, v)
+		}
+		e.SetRows(chk)
+		e.RowTypes = []common.RowType{common.RowTypeInsert}
+		e.Length = 1
+		return e
+	}
+
+	// Distinct PK tables with zero DispatcherID must produce completely disjoint conflict keys.
+	t100, t101 := makePKTable(100), makePKTable(101)
+	e100ZeroA := makeEvent(common.DispatcherID{}, 100, t100, 1, 10)
+	e101Zero := makeEvent(common.DispatcherID{}, 101, t101, 1, 10)
+	keys100 := ConflictKeys(e100ZeroA, nil)
+	keys101 := ConflictKeys(e101Zero, nil)
+	require.Len(t, keys100, 2)
+	require.Len(t, keys101, 2)
+	for key := range keys100 {
+		require.NotContains(t, keys101, key)
+	}
+
+	// Same PhysicalTableID with distinct DispatcherIDs must produce identical conflict keys.
+	e100Disp1 := makeEvent(common.DispatcherID{Low: 1}, 100, t100, 1, 10)
+	e100Disp2 := makeEvent(common.DispatcherID{Low: 2}, 100, t100, 1, 10)
+	require.Equal(t, ConflictKeys(e100Disp1, nil), ConflictKeys(e100Disp2, nil))
+
+	// Distinct keyless tables with zero DispatcherID must produce disjoint fallback keys,
+	// while the same keyless table with distinct DispatcherIDs keeps the same fallback key.
+	valType := types.NewFieldType(mysql.TypeLong)
+	makeKeylessTable := func(id int64) *common.TableInfo {
+		return common.WrapTableInfo("test", &timodel.TableInfo{
+			ID: id, Name: ast.NewCIStr("keyless"), PKIsHandle: false,
+			Columns: []*timodel.ColumnInfo{
+				{ID: 1, Offset: 0, Name: ast.NewCIStr("v"), State: timodel.StatePublic, FieldType: *valType},
+			},
+		})
+	}
+
+	k200, k201 := makeKeylessTable(200), makeKeylessTable(201)
+	k200Zero := makeEvent(common.DispatcherID{}, 200, k200, 1)
+	k201Zero := makeEvent(common.DispatcherID{}, 201, k201, 1)
+	require.NotEqual(t, ConflictKeys(k200Zero, nil), ConflictKeys(k201Zero, nil))
+
+	k200Disp1 := makeEvent(common.DispatcherID{Low: 1}, 200, k200, 1)
+	k200Disp2 := makeEvent(common.DispatcherID{Low: 2}, 200, k200, 2)
+	require.Equal(t, ConflictKeys(k200Disp1, nil), ConflictKeys(k200Disp2, nil))
 }
