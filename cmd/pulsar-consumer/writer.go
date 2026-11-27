@@ -114,11 +114,7 @@ func newWriter(ctx context.Context, o *option) *writer {
 		if err != nil {
 			log.Panic("cannot create the decoder", zap.Error(err))
 		}
-		if sharer, ok := decoder.(interface {
-			ShareTableInfo(*common.TableInfoProvider)
-		}); ok {
-			sharer.ShareTableInfo(tableInfoProvider)
-		}
+		decoder.ShareTableInfo(tableInfoProvider)
 		w.progresses[i] = newPartitionProgress(int32(i), decoder)
 	}
 

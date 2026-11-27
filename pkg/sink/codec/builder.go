@@ -58,7 +58,7 @@ func NewEventEncoder(
 // NewEventDecoder will create a new event decoder
 func NewEventDecoder(
 	ctx context.Context, codecConfig *common.Config, topic string, upstreamTiDB *sql.DB,
-) (common.Decoder, error) {
+) (common.EventDecoder, error) {
 	switch codecConfig.Protocol {
 	case config.ProtocolOpen, config.ProtocolDefault:
 		return open.NewDecoder(ctx, codecConfig, upstreamTiDB)

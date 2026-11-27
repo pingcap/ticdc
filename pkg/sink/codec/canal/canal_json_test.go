@@ -1454,7 +1454,7 @@ func TestCanalJSONNextDDLEventInvalidatesSharedCache(t *testing.T) {
 	provider := common.NewTableInfoProvider()
 	dec, err := NewDecoder(ctx, cfg, nil)
 	require.NoError(t, err)
-	dec.(*decoder).ShareTableInfo(provider)
+	dec.ShareTableInfo(provider)
 
 	t1 := commonType.WrapTableInfo("test", &model.TableInfo{ID: 1, Name: ast.NewCIStr("t1"), UpdateTS: 100})
 	t2 := commonType.WrapTableInfo("other", &model.TableInfo{ID: 2, Name: ast.NewCIStr("t2"), UpdateTS: 100})
@@ -1541,4 +1541,82 @@ func TestTxnDecoderRebuildsTableInfoOnColumnSetChange(t *testing.T) {
 	require.True(t, ok)
 	require.Equal(t, int64(2), row.Row.GetInt64(0))
 	require.Equal(t, int64(20), row.Row.GetInt64(1))
+}
+
+func TestCanalJSONColdDeleteDoesNotPoisonSharedCache(t *testing.T) {
+	ctx := t.Context()
+	helper := commonEvent.NewEventTestHelper(t)
+	defer helper.Close()
+
+	helper.Tk().MustExec("use test")
+	_ = helper.DDL2Event("create table t1 (id int primary key, val varchar(32))")
+	deleteEvent := helper.DML2Event("test", "t1", "insert into test.t1 values (1, 'old')")
+	deleteEvent.CommitTs = 101
+	deleteRow, ok := deleteEvent.GetNextRow()
+	require.True(t, ok)
+	deleteRow.PreRow, deleteRow.Row = deleteRow.Row, chunk.Row{}
+	deleteRowEvent := &commonEvent.RowEvent{
+		TableInfo:      deleteEvent.TableInfo,
+		Event:          deleteRow,
+		CommitTs:       deleteEvent.CommitTs,
+		ColumnSelector: columnselector.NewDefaultColumnSelector(),
+		Callback:       func() {},
+	}
+	insertEvent := helper.DML2Event("test", "t1", "insert into test.t1 values (2, 'hello')")
+	insertEvent.CommitTs = 102
+	insertRow, ok := insertEvent.GetNextRow()
+	require.True(t, ok)
+	insertRowEvent := &commonEvent.RowEvent{
+		TableInfo:      insertEvent.TableInfo,
+		Event:          insertRow,
+		CommitTs:       insertEvent.CommitTs,
+		ColumnSelector: columnselector.NewDefaultColumnSelector(),
+		Callback:       func() {},
+	}
+
+	cfg := common.NewConfig(config.ProtocolCanalJSON)
+	cfg.EnableTiDBExtension = true
+	cfg.DeleteOnlyHandleKeyColumns = true
+
+	encoder, err := NewJSONRowEventEncoder(cfg, nil)
+	require.NoError(t, err)
+	require.NoError(t, encoder.AppendRowChangedEvent(ctx, "", deleteRowEvent))
+	deleteMsgs := encoder.Build()
+	require.Len(t, deleteMsgs, 1)
+	require.NoError(t, encoder.AppendRowChangedEvent(ctx, "", insertRowEvent))
+	insertMsgs := encoder.Build()
+	require.Len(t, insertMsgs, 1)
+
+	provider := common.NewTableInfoProvider()
+	decA, err := NewDecoder(ctx, cfg, nil)
+	require.NoError(t, err)
+	decA.ShareTableInfo(provider)
+	decB, err := NewDecoder(ctx, cfg, nil)
+	require.NoError(t, err)
+	decB.ShareTableInfo(provider)
+
+	decA.AddKeyValue(deleteMsgs[0].Key, deleteMsgs[0].Value)
+	tp, hasNext := decA.HasNext()
+	require.True(t, hasNext)
+	require.Equal(t, common.MessageTypeRow, tp)
+	decodedDelete := decA.NextDMLMessage().ToDMLEvent()
+	t.Cleanup(decodedDelete.PostFlush)
+	require.Len(t, decodedDelete.TableInfo.GetColumns(), 1)
+	_, cachedAfterDelete := provider.ReadAt("test", "t1", 102)
+	require.Nil(t, cachedAfterDelete)
+
+	decB.AddKeyValue(insertMsgs[0].Key, insertMsgs[0].Value)
+	tp, hasNext = decB.HasNext()
+	require.True(t, hasNext)
+	require.Equal(t, common.MessageTypeRow, tp)
+	decodedInsert := decB.NextDMLMessage().ToDMLEvent()
+	t.Cleanup(decodedInsert.PostFlush)
+	require.Len(t, decodedInsert.TableInfo.GetColumns(), 2)
+	row, ok := decodedInsert.GetNextRow()
+	require.True(t, ok)
+	require.Equal(t, int64(2), row.Row.GetInt64(0))
+	require.Equal(t, "hello", string(row.Row.GetBytes(1)))
+
+	_, cachedAfterInsert := provider.ReadAt("test", "t1", 103)
+	require.Same(t, decodedInsert.TableInfo, cachedAfterInsert)
 }

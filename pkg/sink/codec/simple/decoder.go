@@ -62,7 +62,7 @@ type Decoder struct {
 // NewDecoder returns a simple decoder, reusing externalStorage when provided.
 func NewDecoder(
 	ctx context.Context, config *common.Config, db *sql.DB, externalStorage ...storeapi.Storage,
-) (common.Decoder, error) {
+) (common.EventDecoder, error) {
 	var storage storeapi.Storage
 	if len(externalStorage) > 0 {
 		storage = externalStorage[0]

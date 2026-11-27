@@ -188,8 +188,7 @@ func (m *DMLMessage) SpillData() (*DMLMessageData, uint64) {
 	return m.spillData, m.dmlIndex
 }
 
-// Decoder is an abstraction for events decoder
-// this interface is only for testing now
+// Decoder is an abstraction for events decoder.
 type Decoder interface {
 	// AddKeyValue add the received key and values to the decoder,
 	// should be called before `HasNext`
@@ -210,4 +209,12 @@ type Decoder interface {
 
 	// NextDDLEvent returns the next DDL event if exists
 	NextDDLEvent() *commonEvent.DDLEvent
+}
+
+// EventDecoder is a Decoder whose instances can share a TableInfoProvider.
+type EventDecoder interface {
+	Decoder
+
+	// ShareTableInfo reads and caches table info through the shared provider.
+	ShareTableInfo(cache *TableInfoProvider)
 }

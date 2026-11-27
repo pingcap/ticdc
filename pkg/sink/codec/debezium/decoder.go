@@ -58,7 +58,7 @@ type decoder struct {
 func NewDecoder(
 	config *common.Config,
 	db *sql.DB,
-) common.Decoder {
+) common.EventDecoder {
 	return &decoder{
 		config:       config,
 		upstreamTiDB: db,

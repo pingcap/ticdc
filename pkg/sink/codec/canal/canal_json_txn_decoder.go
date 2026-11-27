@@ -23,8 +23,6 @@ import (
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"github.com/pingcap/ticdc/pkg/util"
-	timodel "github.com/pingcap/tidb/pkg/meta/model"
-	"github.com/pingcap/tidb/pkg/parser/ast"
 	"github.com/pingcap/tidb/pkg/util/chunk"
 	canal "github.com/pingcap/tiflow/proto/canal"
 	"go.uber.org/zap"
@@ -146,7 +144,7 @@ func (d *txnDecoder) canalJSONMessage2RowChange(msg canalJSONMessageInterface) *
 		d.tableInfo.GetTableName() != *msg.getTable() ||
 		!maps.Equal(d.tableMySQLTypes, mysqlTypes) ||
 		!maps.Equal(d.tablePKNames, pkNames) {
-		d.tableInfo = newTableInfo(msg)
+		d.tableInfo = newTableInfoFromCanalMessage(d.cache, msg)
 		d.tableMySQLTypes = mysqlTypes
 		d.tablePKNames = pkNames
 	}
@@ -199,17 +197,4 @@ func (d *txnDecoder) NextResolvedEvent() uint64 {
 // NextDDLEvent implements the Decoder interface
 func (d *txnDecoder) NextDDLEvent() *commonEvent.DDLEvent {
 	return nil
-}
-
-func newTableInfo(msg canalJSONMessageInterface) *commonType.TableInfo {
-	schemaName := *msg.getSchema()
-	tableName := *msg.getTable()
-	tableInfo := new(timodel.TableInfo)
-	tableInfo.Name = ast.NewCIStr(tableName)
-
-	columns := newTiColumns(msg)
-	tableInfo.Columns = columns
-	tableInfo.Indices = newTiIndices(columns, msg.pkNameSet())
-	commonType.SetHandleKeyFlags(tableInfo)
-	return commonType.NewTableInfo4Decoder(schemaName, tableInfo)
 }

@@ -92,7 +92,7 @@ type decoder struct {
 // NewDecoder returns a canal-json decoder, reusing externalStorage when provided.
 func NewDecoder(
 	ctx context.Context, codecConfig *common.Config, db *sql.DB, externalStorage ...storeapi.Storage,
-) (common.Decoder, error) {
+) (common.EventDecoder, error) {
 	var storage storeapi.Storage
 	if len(externalStorage) > 0 {
 		storage = externalStorage[0]
@@ -559,20 +559,43 @@ func (d *decoder) queryTableInfo(msg canalJSONMessageInterface) *commonType.Tabl
 	tableName := *msg.getTable()
 
 	version, tableInfo := d.cache.ReadAt(schemaName, tableName, msg.getCommitTs())
-	if tableInfo == nil {
-		tidbTableInfo := new(timodel.TableInfo)
-		tidbTableInfo.ID = d.cache.AllocateTableID(schemaName, tableName)
-		d.cache.AddBlockTableID(schemaName, tableName, tidbTableInfo.ID)
-		tidbTableInfo.Name = ast.NewCIStr(tableName)
-
-		columns := newTiColumns(msg)
-		tidbTableInfo.Columns = columns
-		tidbTableInfo.Indices = newTiIndices(columns, msg.pkNameSet())
-		commonType.SetHandleKeyFlags(tidbTableInfo)
-		tableInfo = commonType.NewTableInfo4Decoder(schemaName, tidbTableInfo)
+	if tableInfo != nil {
+		return tableInfo
+	}
+	tableInfo = newTableInfoFromCanalMessage(d.cache, msg)
+	d.cache.AddBlockTableID(schemaName, tableName, tableInfo.TableName.TableID)
+	if isCacheableCanalTableInfo(msg) {
 		d.cache.Write(schemaName, tableName, version, tableInfo)
 	}
 	return tableInfo
+}
+
+// isCacheableCanalTableInfo reports whether msg carries the full column layout.
+// With DeleteOnlyHandleKeyColumns enabled, DELETE carries only handle columns
+// without setting _tidb.onlyHandleKey; an unresolved OnlyHandleKey large
+// message does the same. Caching either would omit non-key columns for later rows.
+func isCacheableCanalTableInfo(msg canalJSONMessageInterface) bool {
+	if msg.eventType() == canal.EventType_DELETE {
+		return false
+	}
+	if withExt, ok := msg.(*canalJSONMessageWithTiDBExtension); ok && withExt.Extensions != nil && withExt.Extensions.OnlyHandleKey {
+		return false
+	}
+	return true
+}
+
+func newTableInfoFromCanalMessage(cache *common.TableInfoProvider, msg canalJSONMessageInterface) *commonType.TableInfo {
+	schemaName := *msg.getSchema()
+	tableName := *msg.getTable()
+	tidbTableInfo := new(timodel.TableInfo)
+	tidbTableInfo.ID = cache.AllocateTableID(schemaName, tableName)
+	tidbTableInfo.Name = ast.NewCIStr(tableName)
+
+	columns := newTiColumns(msg)
+	tidbTableInfo.Columns = columns
+	tidbTableInfo.Indices = newTiIndices(columns, msg.pkNameSet())
+	commonType.SetHandleKeyFlags(tidbTableInfo)
+	return commonType.NewTableInfo4Decoder(schemaName, tidbTableInfo)
 }
 
 func newTiColumns(msg canalJSONMessageInterface) []*timodel.ColumnInfo {
