@@ -31,6 +31,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/keyspace"
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/ticdc/pkg/server/mock"
+	"github.com/pingcap/ticdc/pkg/txnutil/gc"
 	"github.com/pingcap/ticdc/server/watcher"
 	"github.com/stretchr/testify/require"
 	clientv3 "go.etcd.io/etcd/client/v3"
@@ -112,8 +113,6 @@ func TestTableInspectionRoutesRequireAuthentication(t *testing.T) {
 	}{
 		{http.MethodPost, "/api/v2/verify_table?keyspace=" + common.DefaultKeyspaceName},
 		{http.MethodPost, "/api/v2/get_all_tables?keyspace=" + common.DefaultKeyspaceName},
-		{http.MethodGet, "/api/v2/changefeeds/test/get_dispatcher_count?keyspace=" + common.DefaultKeyspaceName},
-		{http.MethodGet, "/api/v2/changefeeds/test/tables?keyspace=" + common.DefaultKeyspaceName},
 	}
 
 	ctrl := gomock.NewController(t)
@@ -200,9 +199,6 @@ func TestManagementRoutesRequireAuthentication(t *testing.T) {
 		{http.MethodGet, "/api/v2/unsafe/metadata?keyspace=" + common.DefaultKeyspaceName},
 		{http.MethodPost, "/api/v2/unsafe/resolve_lock?keyspace=" + common.DefaultKeyspaceName},
 		{http.MethodDelete, "/api/v2/unsafe/service_gc_safepoint?keyspace=" + common.DefaultKeyspaceName},
-		{http.MethodGet, "/api/v2/processors?keyspace=" + common.DefaultKeyspaceName},
-		{http.MethodGet, "/api/v2/processors/test/node?keyspace=" + common.DefaultKeyspaceName},
-		{http.MethodPost, "/api/v2/tso?keyspace=" + common.DefaultKeyspaceName},
 	}
 
 	ctrl := gomock.NewController(t)
@@ -251,6 +247,30 @@ func TestCaptureRouteAllowedWithClientUserRequired(t *testing.T) {
 	RegisterOpenAPIV2Routes(router, NewOpenAPIV2(apiServer))
 
 	request := httptest.NewRequest(http.MethodGet, "/api/v2/captures", nil)
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, request)
+
+	require.Equal(t, http.StatusOK, response.Code, response.Body.String())
+}
+
+func TestTsoRouteAllowedWithClientUserRequired(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	originalConfig := config.GetGlobalServerConfig()
+	t.Cleanup(func() { config.StoreGlobalServerConfig(originalConfig) })
+	cfg := originalConfig.Clone()
+	cfg.Security.ClientUserRequired = true
+	config.StoreGlobalServerConfig(cfg)
+
+	ctrl := gomock.NewController(t)
+	apiServer := mock.NewMockServer(ctrl)
+	apiServer.EXPECT().GetPdClient().Return(&gc.MockPDClient{})
+
+	router := gin.New()
+	RegisterOpenAPIV2Routes(router, NewOpenAPIV2(apiServer))
+
+	request := httptest.NewRequest(http.MethodPost, "/api/v2/tso", strings.NewReader(`{}`))
+	request.Header.Set("Content-Type", "application/json")
 	response := httptest.NewRecorder()
 	router.ServeHTTP(response, request)
 

@@ -18,7 +18,6 @@ import (
 	"net/http/pprof"
 
 	"github.com/gin-gonic/gin"
-	"github.com/pingcap/ticdc/api/middleware"
 	v1 "github.com/pingcap/ticdc/api/v1"
 	v2 "github.com/pingcap/ticdc/api/v2"
 	"github.com/pingcap/ticdc/pkg/config"
@@ -33,17 +32,15 @@ func RegisterRoutes(
 	server server.Server,
 	registry prometheus.Gatherer,
 ) {
-	nodeAuthenticateMiddleware := middleware.AuthenticateNodeMiddleware(server)
 	// Open API V2
 	v2.RegisterOpenAPIV2Routes(router, v2.NewOpenAPIV2(server))
 	// Open API V1
 	v1.RegisterOpenAPIV1Routes(router, v1.NewOpenAPIV1(server))
-	router.GET("/config", nodeAuthenticateMiddleware, func(c *gin.Context) {
+	router.GET("/config", func(c *gin.Context) {
 		c.JSON(http.StatusOK, config.GetGlobalServerConfig().MaskedForDisplay())
 	})
 	// pprof debug API
 	pprofGroup := router.Group("/debug/pprof/")
-	pprofGroup.Use(nodeAuthenticateMiddleware)
 	pprofGroup.GET("", gin.WrapF(pprof.Index))
 	pprofGroup.GET("/:any", gin.WrapF(pprof.Index))
 	pprofGroup.GET("/cmdline", gin.WrapF(pprof.Cmdline))

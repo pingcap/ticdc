@@ -87,7 +87,6 @@ func RegisterOpenAPIV1Routes(router *gin.Engine, api OpenAPIV1) {
 
 	// processor API
 	processorGroup := v1.Group("/processors")
-	processorGroup.Use(nodeAuthenticateMiddleware)
 	processorGroup.GET("", coordinatorMiddleware, setV1Header, api.v2.ListProcessor)
 	processorGroup.GET("/:changefeed_id/:capture_id",
 		coordinatorMiddleware, setV1Header, api.v2.GetProcessor)
