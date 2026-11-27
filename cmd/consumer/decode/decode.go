@@ -68,8 +68,7 @@ type ResolvedDML struct {
 
 // Future carries one input and the events decoded from it. The decoder owning
 // the input populates its events, pending placeholders, and woken DMLs and
-// closes done; the conductor reads them after Ready. A nil event marks the end
-// of an input, including inputs that produce no events.
+// closes done; the conductor reads them after Ready.
 type Future struct {
 	Payload  *source.Payload
 	Events   []event.Event
@@ -313,7 +312,6 @@ func (f *Future) Ready(ctx context.Context) error {
 }
 
 func (f *Future) finish() {
-	f.Events = append(f.Events, nil)
 	close(f.done)
 }
 

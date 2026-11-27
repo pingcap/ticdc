@@ -206,11 +206,10 @@ func TestDecodeGroupConcurrentPoolPreservesOrderAndDynamicPartitions(t *testing.
 		f := <-group.Output()
 		require.NoError(t, f.Ready(t.Context()))
 		require.Equal(t, part, f.Payload.Partition)
-		require.Len(t, f.Events, 2)
+		require.Len(t, f.Events, 1)
 		dml := f.Events[0].(*event.DMLEvent)
 		dml.PostFlush()
 		require.Equal(t, uint64(100+i), dml.CommitTs)
-		require.Nil(t, f.Events[1])
 	}
 
 	// 2. Storage group decodes across multiple concurrent decoders while preserving submission order.
@@ -352,10 +351,9 @@ func TestDecodeGroupDebeziumAvroSharesSchemaManagerAndCloses(t *testing.T) {
 	for range payloads {
 		f := <-group.Output()
 		require.NoError(t, f.Ready(t.Context()))
-		require.Len(t, f.Events, 2)
+		require.Len(t, f.Events, 1)
 		resolved := f.Events[0].(*event.ResolvedEvent)
 		require.Equal(t, uint64(12345), resolved.ResolvedTs)
-		require.Nil(t, f.Events[1])
 	}
 	// Shared SchemaManager singleflights and caches lookup across all decoders.
 	require.Equal(t, int32(len(schemas)), lookupHits.Load())
@@ -457,7 +455,7 @@ func TestDecodeGroupSimpleCrossPartitionWakeupOutOfOrderAndOver128(t *testing.T)
 	for range t1Count + t2Count {
 		f := <-group.Output()
 		require.NoError(t, f.Ready(t.Context()))
-		require.Equal(t, []event.Event{nil}, f.Events)
+		require.Empty(t, f.Events)
 		require.Len(t, f.Pending, 1)
 		if f.Payload.Partition == 0 {
 			require.Equal(t, uint64(200), f.Pending[0].CommitTs)
@@ -477,7 +475,7 @@ func TestDecodeGroupSimpleCrossPartitionWakeupOutOfOrderAndOver128(t *testing.T)
 
 	fBoot2 := <-group.Output()
 	require.NoError(t, fBoot2.Ready(t.Context()))
-	require.Equal(t, []event.Event{nil}, fBoot2.Events)
+	require.Empty(t, fBoot2.Events)
 	require.Len(t, fBoot2.Resolved, t2Count)
 	for _, r := range fBoot2.Resolved {
 		expectedOffset, ok := t2Pending[r.ID]
@@ -491,7 +489,7 @@ func TestDecodeGroupSimpleCrossPartitionWakeupOutOfOrderAndOver128(t *testing.T)
 
 	fBoot1 := <-group.Output()
 	require.NoError(t, fBoot1.Ready(t.Context()))
-	require.Equal(t, []event.Event{nil}, fBoot1.Events)
+	require.Empty(t, fBoot1.Events)
 	require.Len(t, fBoot1.Resolved, t1Count)
 	for _, r := range fBoot1.Resolved {
 		expectedOffset, ok := t1Pending[r.ID]
@@ -595,11 +593,10 @@ func TestDecodeGroupSimpleDDLWakesPreAndPostSchemaWaiters(t *testing.T) {
 	fAlter := <-group.Output()
 	require.NoError(t, fAlter.Ready(t.Context()))
 	require.Zero(t, fAlter.Marker)
-	require.Len(t, fAlter.Events, 2)
+	require.Len(t, fAlter.Events, 1)
 	forwardedDDL := fAlter.Events[0].(*event.DDLEvent)
 	require.Equal(t, alterDDL.Query, forwardedDDL.Query)
 	require.Equal(t, uint64(200), forwardedDDL.GetCommitTs())
-	require.Nil(t, fAlter.Events[1])
 	require.Len(t, fAlter.Resolved, 2)
 
 	resolvedByID := make(map[uint64]ResolvedDML, 2)
@@ -622,7 +619,7 @@ func TestDecodeGroupSimpleDDLWakesPreAndPostSchemaWaiters(t *testing.T) {
 	}))
 	fDup := <-group.Output()
 	require.NoError(t, fDup.Ready(t.Context()))
-	require.Equal(t, []event.Event{nil}, fDup.Events)
+	require.Empty(t, fDup.Events)
 	require.Equal(t, uint64(200), fDup.Marker)
 	require.Empty(t, fDup.Resolved)
 

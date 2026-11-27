@@ -19,6 +19,7 @@ import (
 	"context"
 	"encoding/binary"
 	"reflect"
+	"slices"
 	"sync/atomic"
 
 	"github.com/pingcap/log"
@@ -93,13 +94,12 @@ func (w *Writer) Start(ctx context.Context) error {
 
 // Writer owns the downstream sink, batching and checkpoint bookkeeping.
 //
-// AddDML, AddDDL, Advance, and Flush are single-goroutine owned by conductor
+// AddDML, WriteDDL, Advance, and Flush are single-goroutine owned by conductor
 // (Start only runs the sink loop), so pendingDML entries mutated in AddDML have
 // not entered selectBatch/writeBatch yet.
 type Writer struct {
 	target     sink.Sink
 	pendingDML []*event.DMLEvent
-	pendingDDL []*event.DDLEvent
 	mutations  map[mutationKey]bool
 	ddlWrites  map[ddl.Key]bool
 
@@ -150,8 +150,7 @@ func (w *Writer) AddDML(dml *event.DMLEvent) {
 	if dml.CommitTs != 0 {
 		// Scan backwards for this table's latest pending event and stop at the
 		// first match so an older CommitTs/schema never merges past a newer one.
-		for i := len(w.pendingDML) - 1; i >= 0; i-- {
-			prev := w.pendingDML[i]
+		for _, prev := range slices.Backward(w.pendingDML) {
 			if prev.PhysicalTableID != dml.PhysicalTableID {
 				continue
 			}
@@ -209,42 +208,28 @@ func appendOptionalDMLValues[T any](dst, src []T, dstCount, srcCount int) []T {
 	return append(dst, src...)
 }
 
-// AddDDL queues a block event.
-func (w *Writer) AddDDL(block *event.DDLEvent) {
-	w.pendingDDL = append(w.pendingDDL, block)
-}
-
-func (w *Writer) writeDDL(ctx context.Context, block *event.DDLEvent) error {
-	if err := context.Cause(ctx); err != nil {
+// WriteDDL drains all pending DML batches before writing block and advances the
+// checkpoint. Replays of an already written DDL are skipped.
+func (w *Writer) WriteDDL(ctx context.Context, block *event.DDLEvent) error {
+	if err := w.flushDML(ctx); err != nil {
 		return err
 	}
 
-	if err := w.target.FlushDMLBeforeBlock(block); err != nil {
-		return err
-	}
-
-	return w.target.WriteBlockEvent(block)
-}
-
-func (w *Writer) flushDDL(ctx context.Context) error {
-	for len(w.pendingDDL) != 0 {
-		block := w.pendingDDL[0]
-		// Failover can resend an old DDL after a newer one. Query is part of
-		// its identity because split DDLs can share the timestamp and table.
-		// The global checkpoint covers rows, not DDL visibility: a schema file
-		// or Kafka DDL can become visible after progress has passed it, so only
-		// the in-process write record can prove it was applied.
-		key := ddl.KeyOf(block)
-		if w.ddlWrites[key] {
-			w.pendingDDL[0] = nil
-			w.pendingDDL = w.pendingDDL[1:]
-			continue
+	// Failover can resend an old DDL after a newer one. Query is part of
+	// its identity because split DDLs can share the timestamp and table.
+	// The global checkpoint covers rows, not DDL visibility: a schema file
+	// or Kafka DDL can become visible after progress has passed it, so only
+	// the in-process write record can prove it was applied.
+	key := ddl.KeyOf(block)
+	if !w.ddlWrites[key] {
+		err := context.Cause(ctx)
+		if err == nil {
+			err = w.target.FlushDMLBeforeBlock(block)
 		}
-
-		w.pendingDDL[0] = nil
-		w.pendingDDL = w.pendingDDL[1:]
-
-		if err := w.writeDDL(ctx, block); err != nil {
+		if err == nil {
+			err = w.target.WriteBlockEvent(block)
+		}
+		if err != nil {
 			if ctx.Err() == nil {
 				log.Error("consumer DDL write failed",
 					zap.String("schema", block.SchemaName),
@@ -255,18 +240,14 @@ func (w *Writer) flushDDL(ctx context.Context) error {
 			return err
 		}
 
-		if w.ddlWrites == nil {
-			w.ddlWrites = make(map[ddl.Key]bool)
-		}
 		w.ddlWrites[key] = true
 	}
 
+	w.advanceCheckpoint()
 	return nil
 }
 
-// Flush drains all pending DML batches before executing pending DDLs, waits
-// for sink acceptance, and advances the checkpoint.
-func (w *Writer) Flush(ctx context.Context) error {
+func (w *Writer) flushDML(ctx context.Context) error {
 	for len(w.pendingDML) != 0 {
 		if err := context.Cause(ctx); err != nil {
 			return err
@@ -280,7 +261,13 @@ func (w *Writer) Flush(ctx context.Context) error {
 		w.removeDML(items)
 	}
 
-	if err := w.flushDDL(ctx); err != nil {
+	return nil
+}
+
+// Flush drains all pending DML batches, waits for sink acceptance, and advances
+// the checkpoint.
+func (w *Writer) Flush(ctx context.Context) error {
+	if err := w.flushDML(ctx); err != nil {
 		return err
 	}
 
@@ -408,18 +395,6 @@ func (w *Writer) advanceCheckpoint() {
 	through := w.watermark
 	if w.pending != 0 {
 		through = min(w.watermark, w.pending-1)
-	}
-
-	lower := func(ts uint64) {
-		if ts != 0 {
-			through = min(through, ts-1)
-		}
-	}
-	for _, dml := range w.pendingDML {
-		lower(dml.CommitTs)
-	}
-	for _, block := range w.pendingDDL {
-		lower(block.GetCommitTs())
 	}
 
 	previous := w.checkpoint

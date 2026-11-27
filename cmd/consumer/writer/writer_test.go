@@ -144,8 +144,7 @@ func TestWriterFlushOrdersDMLBeforeDDLAndRetainsDDLWrites(t *testing.T) {
 	}
 
 	w.AddDML(dml100)
-	w.AddDDL(ddlEvent)
-	require.NoError(t, w.Flush(t.Context()))
+	require.NoError(t, w.WriteDDL(t.Context(), ddlEvent))
 
 	w.Advance(Progress{Watermark: 200})
 	require.NoError(t, w.Flush(t.Context()))
@@ -153,8 +152,7 @@ func TestWriterFlushOrdersDMLBeforeDDLAndRetainsDDLWrites(t *testing.T) {
 	require.True(t, w.ddlWrites[ddl.KeyOf(ddlEvent)])
 
 	// Historical DDL replay after checkpoint advancement is still deduplicated.
-	w.AddDDL(ddlEvent)
-	require.NoError(t, w.Flush(t.Context()))
+	require.NoError(t, w.WriteDDL(t.Context(), ddlEvent))
 }
 
 func TestWriterFilterRowsPartialMultiRowWithUpdate(t *testing.T) {

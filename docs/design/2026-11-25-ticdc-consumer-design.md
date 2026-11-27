@@ -91,7 +91,7 @@ To confirm external progress safely under concurrent or out-of-order downstream 
 - **DDL Barrier readiness**: A DDL statement waits until both conditions hold before execution:
   1. **Watermark readiness**: $W_{\text{eff}} \ge \text{ddl.commit-ts}$, guaranteeing no slower partition or file still holds an earlier or pending-decode DML targeting the affected tables.
   2. **Preceding DML persistence**: All previously dispatched DML events for affected tables finish persisting downstream.
-  While a DDL executes, subsequent DML events on affected tables are held back; unrelated tables continue progressing concurrently.
+  While a DDL waits for its barrier, subsequent DML events on affected tables are held back and unrelated tables continue dispatching DML events. Once the DDL becomes ready and enters `writer.Flush`, `conductor` drains the buffered DML batch and executes the DDL synchronously before resuming the next dispatch round.
 
 ---
 

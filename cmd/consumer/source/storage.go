@@ -199,8 +199,10 @@ func (c *storageReader) walkStorage(
 				files[cloudstorage.NewSchemaFileDMLPathKey(key)] = nil
 			}
 		case strings.HasSuffix(normalized, ".index"):
-			if _, err := c.addIndex(ctx, normalized, files); err != nil {
-				return err
+			if key, ok := c.parseIndexPath(normalized); ok {
+				if err := c.addIndex(ctx, key, normalized, files); err != nil {
+					return err
+				}
 			}
 		}
 
@@ -249,13 +251,14 @@ func (c *storageReader) discoverDir(
 		if len(indices) > 0 {
 			matched := false
 			for _, indexPath := range indices {
-				ok, err := c.addIndex(ctx, indexPath, files)
-				if err != nil {
-					return err
+				key, ok := c.parseIndexPath(indexPath)
+				if !ok {
+					continue
 				}
 
-				if ok {
-					matched = true
+				matched = true
+				if err := c.addIndex(ctx, key, indexPath, files); err != nil {
+					return err
 				}
 			}
 
@@ -286,26 +289,28 @@ func (c *storageReader) discoverDir(
 	return nil
 }
 
-// addIndex records any new DML file range referenced by indexPath.
-// It reports whether indexPath matched a valid TiCDC DML index path (including
-// versions skipped by checkpoint or watermark) so discoverDir can stop descending.
-func (c *storageReader) addIndex(
-	ctx context.Context, indexPath string,
-	files map[cloudstorage.DMLPathKey]map[cloudstorage.FileIndexKey]storageIndexRange,
-) (bool, error) {
+func (c *storageReader) parseIndexPath(indexPath string) (cloudstorage.DMLPathKey, bool) {
 	var key cloudstorage.DMLPathKey
-	if err := key.ParseIndexFilePath(c.dateSeparator, indexPath); err != nil {
-		return false, nil
+	if key.ParseIndexFilePath(c.dateSeparator, indexPath) != nil {
+		return key, false
 	}
 
+	return key, true
+}
+
+// addIndex records any new DML file range referenced by indexPath.
+func (c *storageReader) addIndex(
+	ctx context.Context, key cloudstorage.DMLPathKey, indexPath string,
+	files map[cloudstorage.DMLPathKey]map[cloudstorage.FileIndexKey]storageIndexRange,
+) error {
 	if (c.sourceCheckpoint > 0 && key.TableVersion > c.sourceCheckpoint) ||
 		key.TableVersion < c.schemaWatermark(key.SchemaPathKey, c.schemas[key.SchemaPathKey]) {
-		return true, nil
+		return nil
 	}
 
 	index, err := c.readIndex(ctx, indexPath)
 	if err != nil {
-		return false, err
+		return err
 	}
 
 	indices := c.fileIndices[key]
@@ -327,7 +332,7 @@ func (c *storageReader) addIndex(
 		}
 	}
 
-	return true, nil
+	return nil
 }
 
 // listEntries returns the immediate child directories and files of dir.

@@ -169,9 +169,6 @@ func (c *Conductor) resolvePendingDecode(resolved decode.ResolvedDML) {
 
 func (c *Conductor) acceptBatch(events []event.Event, payload *source.Payload) error {
 	for _, e := range events {
-		if e == nil {
-			continue
-		}
 		if err := c.accept(e, payload); err != nil {
 			return err
 		}
@@ -201,8 +198,6 @@ func (c *Conductor) accept(e event.Event, payload *source.Payload) error {
 		}
 
 		c.queueDDL(e)
-	case nil:
-		c.recordPosition(payload)
 	}
 
 	return nil
@@ -334,16 +329,13 @@ func (c *Conductor) rowBlockedByDDL(item *dmlTask) bool {
 func (c *Conductor) syncTable(q *tableQueue) {
 	blocked := c.rowBlockedByDDL(q.rows[0])
 	if blocked == q.blocked {
-		if blocked {
-			heap.Fix(&c.blockedHeap, q.heapIndex)
-		} else {
+		if !blocked {
 			heap.Fix(&c.readyHeap, q.heapIndex)
 		}
 		return
 	}
 
 	if q.blocked {
-		heap.Remove(&c.blockedHeap, q.heapIndex)
 		q.blocked = false
 		heap.Push(&c.readyHeap, q)
 		return
@@ -351,7 +343,6 @@ func (c *Conductor) syncTable(q *tableQueue) {
 
 	heap.Remove(&c.readyHeap, q.heapIndex)
 	q.blocked = true
-	heap.Push(&c.blockedHeap, q)
 }
 
 // queueDML records a decoded row until the writer can accept it.
@@ -361,15 +352,14 @@ func (c *Conductor) queueDML(item *dmlTask) {
 	q := c.pendingDML[tableID]
 	if q == nil {
 		q = &tableQueue{
-			tableID: tableID,
-			rows:    []*dmlTask{item},
-			blocked: c.rowBlockedByDDL(item),
+			tableID:   tableID,
+			rows:      []*dmlTask{item},
+			blocked:   c.rowBlockedByDDL(item),
+			heapIndex: -1,
 		}
 		c.pendingDML[tableID] = q
 
-		if q.blocked {
-			heap.Push(&c.blockedHeap, q)
-		} else {
+		if !q.blocked {
 			heap.Push(&c.readyHeap, q)
 		}
 		return
@@ -412,7 +402,6 @@ func (c *Conductor) queueDDL(ddlEvent *event.DDLEvent) {
 	for _, q := range blocked {
 		heap.Remove(&c.readyHeap, q.heapIndex)
 		q.blocked = true
-		heap.Push(&c.blockedHeap, q)
 	}
 }
 
@@ -465,9 +454,7 @@ func (c *Conductor) popDML(row *dmlTask) {
 	q.rows = q.rows[1:]
 
 	if len(q.rows) == 0 {
-		if q.blocked {
-			heap.Remove(&c.blockedHeap, q.heapIndex)
-		} else {
+		if !q.blocked {
 			heap.Remove(&c.readyHeap, q.heapIndex)
 		}
 		delete(c.pendingDML, q.tableID)
@@ -483,17 +470,11 @@ func (c *Conductor) popDDL() *event.DDLEvent {
 	c.pendingDDL[0] = nil
 	c.pendingDDL = c.pendingDDL[1:]
 
-	var unblocked []*tableQueue
-	for _, q := range c.blockedHeap {
-		if !c.rowBlockedByDDL(q.rows[0]) {
-			unblocked = append(unblocked, q)
+	for _, q := range c.pendingDML {
+		if q.blocked && !c.rowBlockedByDDL(q.rows[0]) {
+			q.blocked = false
+			heap.Push(&c.readyHeap, q)
 		}
-	}
-
-	for _, q := range unblocked {
-		heap.Remove(&c.blockedHeap, q.heapIndex)
-		q.blocked = false
-		heap.Push(&c.readyHeap, q)
 	}
 
 	return head
@@ -502,22 +483,15 @@ func (c *Conductor) popDDL() *event.DDLEvent {
 // flush hands every ready task to the writer and lets it write.
 func (c *Conductor) flush(ctx context.Context, w *writer.Writer) error {
 	for {
-		c.advanceWriter(w)
-		if err := w.Flush(ctx); err != nil {
-			return err
-		}
-
 		var (
 			rows     int
 			bytes    int64
-			addedDDL bool
+			readyDDL *event.DDLEvent
 		)
 		for rows < roundRows && bytes < roundBytes {
-			ddl, row := c.nextReady()
-			if ddl != nil {
-				c.popDDL()
-				w.AddDDL(ddl)
-				addedDDL = true
+			ddlEvent, row := c.nextReady()
+			if ddlEvent != nil {
+				readyDDL = c.popDDL()
 				break
 			}
 
@@ -552,7 +526,18 @@ func (c *Conductor) flush(ctx context.Context, w *writer.Writer) error {
 			}
 		}
 
-		if rows == 0 && !addedDDL {
+		c.advanceWriter(w)
+		if readyDDL != nil {
+			if err := w.WriteDDL(ctx, readyDDL); err != nil {
+				return err
+			}
+			continue
+		}
+
+		if err := w.Flush(ctx); err != nil {
+			return err
+		}
+		if rows == 0 {
 			return nil
 		}
 	}
@@ -565,13 +550,12 @@ type Conductor struct {
 	positions   map[int32][]sourcePosition
 	positionsMu sync.Mutex
 
-	reader    source.Reader
 	schemas   *codecCommon.TableInfoProvider
 	validator source.Validator
 	notifier  source.SchemaNotifier
 
 	confirmable chan struct{}
-	checkpoint  *atomic.Uint64
+	checkpoint  atomic.Uint64
 
 	partitionWatermarks []uint64
 	watermark           uint64
@@ -579,19 +563,16 @@ type Conductor struct {
 	resolvedDecodes     map[uint64]struct{}
 	minPendingDecode    uint64
 
-	pendingDML  map[int64]*tableQueue
-	readyHeap   tableHeap
-	blockedHeap tableHeap
-	pendingDDL  []*event.DDLEvent
-	queuedDDLs  map[ddl.Key]struct{}
+	pendingDML map[int64]*tableQueue
+	readyHeap  tableHeap
+	pendingDDL []*event.DDLEvent
+	queuedDDLs map[ddl.Key]struct{}
 }
 
 func New(reader source.Reader, schemas *codecCommon.TableInfoProvider) *Conductor {
 	c := &Conductor{
-		reader:              reader,
 		schemas:             schemas,
 		confirmable:         make(chan struct{}, 1),
-		checkpoint:          new(atomic.Uint64),
 		positions:           make(map[int32][]sourcePosition),
 		partitionWatermarks: make([]uint64, reader.Partitions()),
 		pendingDecodes:      make(map[uint64]uint64),
@@ -658,9 +639,6 @@ func (c *Conductor) advanceWriter(w *writer.Writer) {
 	var pending uint64
 	if len(c.readyHeap) != 0 {
 		pending = earliest(pending, c.readyHeap[0].rows[0].dml.CommitTs)
-	}
-	if len(c.blockedHeap) != 0 {
-		pending = earliest(pending, c.blockedHeap[0].rows[0].dml.CommitTs)
 	}
 	if len(c.pendingDDL) != 0 {
 		pending = earliest(pending, c.pendingDDL[0].GetCommitTs())

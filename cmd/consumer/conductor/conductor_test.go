@@ -103,25 +103,25 @@ func TestConductorPositionsNonMonotonicIdleAndBoundedMemory(t *testing.T) {
 
 	dmlHigh := &commonEvent.DMLEvent{CommitTs: 500, PhysicalTableID: 1}
 	require.NoError(t, c.accept(dmlHigh, &source.Payload{Partition: 0, Offset: 1}))
-	require.NoError(t, c.accept(nil, &source.Payload{Partition: 0, Offset: 1, Ack: func(context.Context) error {
+	c.recordPosition(&source.Payload{Partition: 0, Offset: 1, Ack: func(context.Context) error {
 		acked0.Store(1)
 		return nil
-	}}))
+	}})
 
 	dmlLow := &commonEvent.DMLEvent{CommitTs: 150, PhysicalTableID: 1}
 	require.NoError(t, c.accept(dmlLow, &source.Payload{Partition: 0, Offset: 2}))
-	require.NoError(t, c.accept(nil, &source.Payload{Partition: 0, Offset: 2, Ack: func(context.Context) error {
+	c.recordPosition(&source.Payload{Partition: 0, Offset: 2, Ack: func(context.Context) error {
 		acked0.Store(2)
 		return nil
-	}}))
+	}})
 
 	// Partition 1: idle partition receives only ResolvedEvent.
 	var acked1 atomic.Int64
 	require.NoError(t, c.accept(&commonEvent.ResolvedEvent{ResolvedTs: 200}, &source.Payload{Partition: 1, Offset: 10}))
-	require.NoError(t, c.accept(nil, &source.Payload{Partition: 1, Offset: 10, Ack: func(context.Context) error {
+	c.recordPosition(&source.Payload{Partition: 1, Offset: 10, Ack: func(context.Context) error {
 		acked1.Store(10)
 		return nil
-	}}))
+	}})
 
 	// At checkpoint 200, Partition 0 must NOT skip past through=500 to ack offset 2.
 	// Partition 1's idle resolved payload (through=0 <= 200) must ack offset 10.
@@ -137,7 +137,7 @@ func TestConductorPositionsNonMonotonicIdleAndBoundedMemory(t *testing.T) {
 	// Repeated enqueue + partial confirm keeps slice capacity bounded.
 	for i := uint64(1); i <= 2000; i++ {
 		require.NoError(t, c.accept(&commonEvent.DMLEvent{CommitTs: 1000 + i, PhysicalTableID: 1}, &source.Payload{Partition: 0}))
-		require.NoError(t, c.accept(nil, &source.Payload{Partition: 0, Ack: func(context.Context) error { return nil }}))
+		c.recordPosition(&source.Payload{Partition: 0, Ack: func(context.Context) error { return nil }})
 		if i%10 == 0 {
 			c.confirmPositions(t.Context(), 1000+i-1)
 			require.LessOrEqual(t, cap(c.positions[0]), 64)
@@ -252,21 +252,20 @@ func TestConductorUnifiedWatermarkGateRowOrderAndHeapBlocking(t *testing.T) {
 	require.Equal(t, []string{"t2:insert@130"}, flushed)
 	require.Equal(t, uint64(140), w.Checkpoint())
 	require.Len(t, c.readyHeap, 1)
-	require.Empty(t, c.blockedHeap)
+	require.Equal(t, len(c.readyHeap), len(c.pendingDML))
 
 	c.advanceWatermark(150, 0)
 	require.NoError(t, c.flush(t.Context(), w))
 	require.Equal(t, []string{"t2:insert@130", "t1:delete@150", "t1:insert@150", "t1:ddl@150"}, flushed)
 	require.Equal(t, uint64(150), w.Checkpoint())
 	require.Len(t, c.readyHeap, 1)
-	require.Empty(t, c.blockedHeap)
+	require.Equal(t, len(c.readyHeap), len(c.pendingDML))
 
 	c.advanceWatermark(160, 0)
 	require.NoError(t, c.flush(t.Context(), w))
 	require.Equal(t, []string{"t2:insert@130", "t1:delete@150", "t1:insert@150", "t1:ddl@150", "t1:insert@160"}, flushed)
 	require.Equal(t, uint64(160), w.Checkpoint())
 	require.Empty(t, c.readyHeap)
-	require.Empty(t, c.blockedHeap)
 	require.Empty(t, c.pendingDML)
 }
 
@@ -314,7 +313,6 @@ func TestConductorEffectiveWatermarkPendingDecodeAndInvertedOrder(t *testing.T) 
 	require.NoError(t, c.acceptFuture(&decode.Future{
 		Payload: &source.Payload{Partition: 0, Offset: 1},
 		Pending: []decode.PendingDecode{{ID: 1, CommitTs: 200}},
-		Events:  []commonEvent.Event{nil},
 	}))
 	ddl220 := &commonEvent.DDLEvent{
 		FinishedTs: 220,
@@ -330,12 +328,11 @@ func TestConductorEffectiveWatermarkPendingDecodeAndInvertedOrder(t *testing.T) 
 			ddl220,
 			newDML(250, "t1:dml@250"),
 			&commonEvent.ResolvedEvent{ResolvedTs: 300},
-			nil,
 		},
 	}))
 	require.NoError(t, c.acceptFuture(&decode.Future{
 		Payload: &source.Payload{Partition: 1, Offset: 1},
-		Events:  []commonEvent.Event{&commonEvent.ResolvedEvent{ResolvedTs: 300}, nil},
+		Events:  []commonEvent.Event{&commonEvent.ResolvedEvent{ResolvedTs: 300}},
 	}))
 
 	require.NoError(t, c.flush(t.Context(), w))
@@ -348,7 +345,6 @@ func TestConductorEffectiveWatermarkPendingDecodeAndInvertedOrder(t *testing.T) 
 	require.NoError(t, c.acceptFuture(&decode.Future{
 		Payload:  &source.Payload{Partition: 1, Offset: 2},
 		Resolved: []decode.ResolvedDML{{ID: 1, DML: newDML(200, "t1:dml@200"), Partition: 0, Offset: 1}},
-		Events:   []commonEvent.Event{nil},
 	}))
 	require.NoError(t, c.flush(t.Context(), w))
 	require.Equal(t, uint64(300), c.effectiveWatermark())
@@ -360,12 +356,10 @@ func TestConductorEffectiveWatermarkPendingDecodeAndInvertedOrder(t *testing.T) 
 	require.NoError(t, c.acceptFuture(&decode.Future{
 		Payload:  &source.Payload{Partition: 1, Offset: 3},
 		Resolved: []decode.ResolvedDML{{ID: 2, DML: newDML(305, "t1:dml@305"), Partition: 0, Offset: 3}},
-		Events:   []commonEvent.Event{nil},
 	}))
 	require.NoError(t, c.acceptFuture(&decode.Future{
 		Payload: &source.Payload{Partition: 0, Offset: 3},
 		Pending: []decode.PendingDecode{{ID: 2, CommitTs: 305}},
-		Events:  []commonEvent.Event{nil},
 	}))
 	require.Empty(t, c.pendingDecodes)
 	require.Empty(t, c.resolvedDecodes)
@@ -409,7 +403,7 @@ func TestConductorBlockedTableReentersReadyHeapAndCreateTableLike(t *testing.T) 
 		return dml
 	}
 
-	// Queue ALTER@150 and DML@160 first so t1 sits in blockedHeap, then deliver an earlier DML@140.
+	// Queue ALTER@150 and DML@160 first so t1 stays blocked, then deliver an earlier DML@140.
 	ddl150 := &commonEvent.DDLEvent{
 		FinishedTs: 150,
 		Type:       byte(timodel.ActionAddColumn),
@@ -421,11 +415,12 @@ func TestConductorBlockedTableReentersReadyHeapAndCreateTableLike(t *testing.T) 
 	require.NoError(t, c.accept(ddl150, &source.Payload{}))
 	require.NoError(t, c.accept(newDML(160, "t1:dml@160"), &source.Payload{}))
 	require.Empty(t, c.readyHeap)
-	require.Len(t, c.blockedHeap, 1)
+	require.Len(t, c.pendingDML, 1)
+	require.True(t, c.pendingDML[1].blocked)
 
 	require.NoError(t, c.accept(newDML(140, "t1:dml@140"), &source.Payload{}))
 	require.Len(t, c.readyHeap, 1)
-	require.Empty(t, c.blockedHeap)
+	require.False(t, c.pendingDML[1].blocked)
 
 	c.advanceWatermark(150, 0)
 	require.NoError(t, c.flush(t.Context(), w))
