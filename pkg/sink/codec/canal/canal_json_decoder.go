@@ -562,7 +562,7 @@ func (d *decoder) queryTableInfo(msg canalJSONMessageInterface) *commonType.Tabl
 	if tableInfo != nil {
 		return tableInfo
 	}
-	tableInfo = newTableInfoFromCanalMessage(d.cache, msg)
+	tableInfo = newTableInfo(d.cache, msg)
 	d.cache.AddBlockTableID(schemaName, tableName, tableInfo.TableName.TableID)
 	if isCacheableCanalTableInfo(msg) {
 		d.cache.Write(schemaName, tableName, version, tableInfo)
@@ -584,7 +584,7 @@ func isCacheableCanalTableInfo(msg canalJSONMessageInterface) bool {
 	return true
 }
 
-func newTableInfoFromCanalMessage(cache *common.TableInfoProvider, msg canalJSONMessageInterface) *commonType.TableInfo {
+func newTableInfo(cache *common.TableInfoProvider, msg canalJSONMessageInterface) *commonType.TableInfo {
 	schemaName := *msg.getSchema()
 	tableName := *msg.getTable()
 	tidbTableInfo := new(timodel.TableInfo)

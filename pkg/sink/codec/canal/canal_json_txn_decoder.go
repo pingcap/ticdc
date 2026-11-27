@@ -144,7 +144,7 @@ func (d *txnDecoder) canalJSONMessage2RowChange(msg canalJSONMessageInterface) *
 		d.tableInfo.GetTableName() != *msg.getTable() ||
 		!maps.Equal(d.tableMySQLTypes, mysqlTypes) ||
 		!maps.Equal(d.tablePKNames, pkNames) {
-		d.tableInfo = newTableInfoFromCanalMessage(d.cache, msg)
+		d.tableInfo = newTableInfo(d.cache, msg)
 		d.tableMySQLTypes = mysqlTypes
 		d.tablePKNames = pkNames
 	}
