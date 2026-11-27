@@ -33,7 +33,7 @@ func init() {
 }
 
 func TestModifyTableComment(t *testing.T) {
-	allocator := NewTableIDAllocator()
+	allocator := NewTableInfoProvider()
 	allocator.AddBlockTableID("test", "t", 1)
 	ddl := &commonEvent.DDLEvent{
 		Type:       byte(timodel.ActionModifyTableComment),
@@ -48,7 +48,7 @@ func TestModifyTableComment(t *testing.T) {
 }
 
 func TestGetBlockedTablesForRecoverSchema(t *testing.T) {
-	allocator := NewTableIDAllocator()
+	allocator := NewTableInfoProvider()
 	ddl := &commonEvent.DDLEvent{
 		Type:       byte(timodel.ActionRecoverSchema),
 		SchemaName: "test",
@@ -253,4 +253,34 @@ func TestGetDDLActionType(t *testing.T) {
 	//modifySchemaCharsetSQL := `alter database test character set utf8mb4`
 	//ddl = helper.DDL2Event(modifySchemaCharsetSQL)
 	//require.Equal(t, timodel.ActionType(ddl.Type), GetDDLActionType(modifySchemaCharsetSQL))
+}
+
+func TestRenameBlockedTables(t *testing.T) {
+	allocator := NewTableInfoProvider()
+	allocator.AddBlockTableID("test", "t1", 1)
+	allocator.AddBlockTableID("test", "t2", 2)
+	allocator.AddBlockTableID("test", "t3", 3)
+	allocator.AddBlockTableID("test", "t4", 4)
+
+	alterRename := &commonEvent.DDLEvent{
+		Type:       byte(timodel.ActionRenameTable),
+		SchemaName: "test",
+		TableName:  "t2",
+		Query:      "ALTER TABLE test.t1 RENAME TO test.t2",
+	}
+	blocked := GetBlockedTables(allocator, alterRename)
+	require.Equal(t, commonEvent.InfluenceTypeNormal, blocked.InfluenceType)
+	require.Equal(t, "test", alterRename.ExtraSchemaName)
+	require.Equal(t, "t1", alterRename.ExtraTableName)
+	require.ElementsMatch(t, []int64{1, 2}, blocked.TableIDs)
+
+	renameTables := &commonEvent.DDLEvent{
+		Type:       byte(timodel.ActionRenameTables),
+		SchemaName: "test",
+		TableName:  "t3",
+		Query:      "RENAME TABLE test.t1 TO test.t3, test.t2 TO test.t4",
+	}
+	blocked = GetBlockedTables(allocator, renameTables)
+	require.Equal(t, commonEvent.InfluenceTypeNormal, blocked.InfluenceType)
+	require.ElementsMatch(t, []int64{1, 2, 3, 4}, blocked.TableIDs)
 }

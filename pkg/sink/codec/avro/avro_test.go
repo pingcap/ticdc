@@ -354,7 +354,7 @@ func TestAvroEncodeIncludeBeforeValue(t *testing.T) {
 			require.NoError(t, err)
 			decoderConfig := *codecConfig
 			decoderConfig.AvroIncludeBeforeValue = false
-			decoder := NewDecoder(&decoderConfig, 0, encoder.schemaM, topic, nil)
+			decoder := NewDecoder(&decoderConfig, encoder.schemaM, topic, nil)
 			decoder.AddKeyValue(key, bin)
 
 			messageType, exist := decoder.HasNext()
@@ -506,7 +506,7 @@ func TestAvroEncodeDeleteEventWithWatermarkCarriesCommitTs(t *testing.T) {
 	require.NotEmpty(t, messages[0].Value)
 	require.Equal(t, deleteByte, messages[0].Value[0])
 
-	decoder := NewDecoder(codecConfig, 0, encoder.schemaM, topic, nil)
+	decoder := NewDecoder(codecConfig, encoder.schemaM, topic, nil)
 	decoder.AddKeyValue(messages[0].Key, messages[0].Value)
 
 	messageType, exists := decoder.HasNext()
@@ -544,7 +544,7 @@ func TestAvroLegacyDeleteUsesCachedValueSchema(t *testing.T) {
 
 	for _, withWatermark := range []bool{false, true} {
 		t.Run("watermark="+strconv.FormatBool(withWatermark), func(t *testing.T) {
-			decoder := NewDecoder(codecConfig, 0, encoder.schemaM, topic, nil)
+			decoder := NewDecoder(codecConfig, encoder.schemaM, topic, nil)
 			decoder.AddKeyValue(insert.Key, insert.Value)
 			// The consumer may defer materialization until after receiving the delete.
 			insertMessage := decoder.NextDMLMessage()
@@ -569,6 +569,106 @@ func TestAvroLegacyDeleteUsesCachedValueSchema(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestAvroDeleteSharesTableInfo(t *testing.T) {
+	codecConfig := common.NewConfig(config.ProtocolAvro)
+	codecConfig.EnableTiDBExtension = true
+	codecConfig.AvroEnableWatermark = true
+	ctx := t.Context()
+	encoder, err := SetupEncoderAndSchemaRegistry4Testing(ctx, codecConfig)
+	require.NoError(t, err)
+	t.Cleanup(TeardownEncoderAndSchemaRegistry4Testing)
+
+	tableInfo := newAvroTableInfoForTest()
+	row := chunk.MutRowFromValues(int64(1), int64(18)).ToRow()
+	const topic = "shared-table-info"
+	require.NoError(t, encoder.AppendRowChangedEvent(ctx, topic,
+		newAvroRowEventForTest(tableInfo, 1024, chunk.Row{}, row)))
+	insert := encoder.Build()[0]
+	require.NoError(t, encoder.AppendRowChangedEvent(ctx, topic,
+		newAvroRowEventForTest(tableInfo, 1025, row, chunk.Row{})))
+	deleted := encoder.Build()[0]
+
+	for _, withWatermark := range []bool{false, true} {
+		t.Run("watermark="+strconv.FormatBool(withWatermark), func(t *testing.T) {
+			provider := common.NewTableInfoProvider()
+			d1 := NewDecoder(codecConfig, encoder.schemaM, topic, nil).(*decoder)
+			d2 := NewDecoder(codecConfig, encoder.schemaM, topic, nil).(*decoder)
+			d1.ShareTableInfo(provider)
+			d2.ShareTableInfo(provider)
+
+			d1.AddKeyValue(insert.Key, insert.Value)
+			insertEvent := d1.NextDMLMessage().ToDMLEvent()
+			t.Cleanup(insertEvent.PostFlush)
+
+			value := deleted.Value
+			if !withWatermark {
+				value = nil
+			}
+			d2.AddKeyValue(deleted.Key, value)
+			deleteEvent := d2.NextDMLMessage().ToDMLEvent()
+			t.Cleanup(deleteEvent.PostFlush)
+
+			require.Same(t, insertEvent.TableInfo, deleteEvent.TableInfo)
+			require.Equal(t, []commonType.RowType{commonType.RowTypeDelete}, deleteEvent.RowTypes)
+			require.Equal(t, 2, deleteEvent.Rows.NumCols())
+			require.Equal(t, int64(1), deleteEvent.Rows.GetRow(0).GetInt64(0))
+			require.True(t, deleteEvent.Rows.GetRow(0).IsNull(1))
+			common.RequireRowLocatorByPrimaryKey(t, deleteEvent.TableInfo, "id")
+		})
+	}
+}
+
+func TestAvroDeleteAfterDDL(t *testing.T) {
+	codecConfig := common.NewConfig(config.ProtocolAvro)
+	codecConfig.EnableTiDBExtension = true
+	codecConfig.AvroEnableWatermark = true
+	ctx := t.Context()
+	encoder, err := SetupEncoderAndSchemaRegistry4Testing(ctx, codecConfig)
+	require.NoError(t, err)
+	t.Cleanup(TeardownEncoderAndSchemaRegistry4Testing)
+
+	tableInfo := newAvroTableInfoForTest()
+	row := chunk.MutRowFromValues(int64(1), int64(18)).ToRow()
+	const topic = "ddl-invalidation"
+	require.NoError(t, encoder.AppendRowChangedEvent(ctx, topic,
+		newAvroRowEventForTest(tableInfo, 1024, chunk.Row{}, row)))
+	insert := encoder.Build()[0]
+
+	encodeDelete := func(ts uint64) *common.Message {
+		require.NoError(t, encoder.AppendRowChangedEvent(ctx, topic,
+			newAvroRowEventForTest(tableInfo, ts, row, chunk.Row{})))
+		return encoder.Build()[0]
+	}
+
+	provider := common.NewTableInfoProvider()
+	d1 := NewDecoder(codecConfig, encoder.schemaM, topic, nil).(*decoder)
+	d2 := NewDecoder(codecConfig, encoder.schemaM, topic, nil).(*decoder)
+	d1.ShareTableInfo(provider)
+	d2.ShareTableInfo(provider)
+
+	d1.AddKeyValue(insert.Key, insert.Value)
+	insertEvent := d1.NextDMLMessage().ToDMLEvent()
+	t.Cleanup(insertEvent.PostFlush)
+
+	provider.AddDDL("test", "person", 1025)
+
+	// A delete at the DDL commit ts still sees the pre-DDL full layout.
+	beforeDDL := encodeDelete(1025)
+	d2.AddKeyValue(beforeDDL.Key, beforeDDL.Value)
+	beforeEvent := d2.NextDMLMessage().ToDMLEvent()
+	t.Cleanup(beforeEvent.PostFlush)
+	require.Equal(t, 2, beforeEvent.Rows.NumCols())
+
+	// After the DDL the delete falls back to the key-only layout without polluting the cache.
+	afterDDL := encodeDelete(1026)
+	d2.AddKeyValue(afterDDL.Key, afterDDL.Value)
+	afterEvent := d2.NextDMLMessage().ToDMLEvent()
+	t.Cleanup(afterEvent.PostFlush)
+	require.Equal(t, 1, afterEvent.Rows.NumCols())
+	_, cachedAfterDDL := provider.ReadAt("test", "person", 1026)
+	require.Nil(t, cachedAfterDDL)
 }
 
 func TestAvroEnvelope(t *testing.T) {

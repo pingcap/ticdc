@@ -41,7 +41,7 @@ func TestDecoderCodecCacheIsBounded(t *testing.T) {
 	const schema = "{\"type\":\"record\",\"name\":\"test\",\"fields\":[{\"name\":\"id\",\"type\":\"int\"}]}"
 	codec, err := GenCodec(schema)
 	require.NoError(t, err)
-	decoder := NewDecoder(nil, 0, nil, "topic", nil).(*decoder)
+	decoder := NewDecoder(nil, nil, "topic", nil).(*decoder)
 
 	var firstID, secondID schemamanager.SchemaID
 	for i := 1; i <= decoderCodecCacheSize; i++ {
@@ -87,7 +87,7 @@ func TestDecodedTableInfoLocatesRowByPrimaryKey(t *testing.T) {
 				keyMap[key] = nil
 			}
 
-			tableInfo := newTableInfo("test", "t", columns, keyMap)
+			tableInfo := newTableInfo(common.NewTableInfoProvider(), "test", "t", columns, keyMap)
 			require.Equal(t, primaryKeys, tableInfo.GetPrimaryKeyColumnNames())
 			require.True(t, tableInfo.HasPKOrNotNullUK)
 			common.RequireRowLocatorByPrimaryKey(t, tableInfo, primaryKeys...)
@@ -234,7 +234,7 @@ func TestAvroTemporalChecksum(t *testing.T) {
 					require.NoError(t, encoder.AppendRowChangedEvent(ctx, topic, event))
 					messages := encoder.Build()
 					require.Len(t, messages, 1)
-					dec := NewDecoder(cfg, 0, encoder.schemaM, topic, nil)
+					dec := NewDecoder(cfg, encoder.schemaM, topic, nil)
 					dec.AddKeyValue(messages[0].Key, messages[0].Value)
 					messageType, hasNext := dec.HasNext()
 					require.True(t, hasNext)
@@ -305,7 +305,7 @@ func TestAvroChecksumAfterColumnTypeChange(t *testing.T) {
 			require.Equal(t, []string{"id", "c1", "c2"}, []string{
 				columns[0].Name.O, columns[1].Name.O, columns[2].Name.O,
 			})
-			dec := NewDecoder(cfg, 0, encoder.schemaM, topic, nil)
+			dec := NewDecoder(cfg, encoder.schemaM, topic, nil)
 			dec.AddKeyValue(messages[0].Key, messages[0].Value)
 			messageType, hasNext := dec.HasNext()
 			require.True(t, hasNext)
@@ -350,7 +350,7 @@ func TestDecodedTableInfoWithoutKeyColumnsHasNoRowLocator(t *testing.T) {
 	columns, _, _, err := avroData2Columns(map[string]any{"a": int64(1), "b": int64(2)}, fields)
 	require.NoError(t, err)
 
-	tableInfo := newTableInfo("test", "t", columns, nil)
+	tableInfo := newTableInfo(common.NewTableInfoProvider(), "test", "t", columns, nil)
 	require.False(t, tableInfo.PKIsHandle())
 	require.Empty(t, tableInfo.GetIndices())
 	require.Empty(t, tableInfo.GetOrderedHandleKeyColumnIDs())

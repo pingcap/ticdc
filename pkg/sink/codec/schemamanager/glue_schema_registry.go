@@ -125,38 +125,37 @@ func (m *glueSchemaManager) Lookup(
 	schemaName string,
 	schemaID SchemaID,
 ) (string, error) {
-	cacheKey := newDecodeCacheKey(schemaName)
-	entry, exists := m.cache.load(cacheKey)
-	if exists && entry.schemaID.glueSchemaID == schemaID.glueSchemaID {
-		return entry.schemaDefinition, nil
-	}
+	cacheKey := newDecodeCacheKey(schemaName, schemaID)
+	entry, err := m.cache.getOrLoadDecode(cacheKey, func() (*schemaCacheEntry, error) {
+		log.Info("Avro schema lookup cache miss",
+			zap.String("key", schemaName),
+			zap.String("schemaID", schemaID.glueSchemaID))
 
-	log.Info("Avro schema lookup cache miss",
-		zap.String("key", schemaName),
-		zap.String("schemaID", schemaID.glueSchemaID))
+		ok, schema, err := m.getSchemaByID(ctx, schemaID.glueSchemaID)
+		if err != nil {
+			return nil, errors.Trace(err)
+		}
+		if !ok {
+			return nil, errors.ErrAvroSchemaAPIError.
+				GenWithStackByArgs("schema not found in registry, name: %s, id: %s", schemaName, schemaID.glueSchemaID)
+		}
 
-	ok, schema, err := m.getSchemaByID(ctx, schemaID.glueSchemaID)
-	if err != nil {
-		return "", errors.Trace(err)
-	}
-	if !ok {
-		return "", errors.ErrAvroSchemaAPIError.
-			GenWithStackByArgs("schema not found in registry, name: %s, id: %s", schemaName, schemaID.glueSchemaID)
-	}
+		header, err := m.getMsgHeader(schemaID.glueSchemaID)
+		if err != nil {
+			log.Error("could not get message header", zap.Error(err))
+			return nil, errors.WrapError(errors.ErrAvroSchemaAPIError, err)
+		}
 
-	header, err := m.getMsgHeader(schemaID.glueSchemaID)
-	if err != nil {
-		log.Error("could not get message header", zap.Error(err))
-		return "", errors.WrapError(errors.ErrAvroSchemaAPIError, err)
-	}
-
-	m.cache.store(cacheKey, &schemaCacheEntry{
-		schemaID:         schemaID,
-		schemaDefinition: schema,
-		header:           header,
+		return &schemaCacheEntry{
+			schemaID:         schemaID,
+			schemaDefinition: schema,
+			header:           header,
+		}, nil
 	})
-
-	return schema, nil
+	if err != nil {
+		return "", err
+	}
+	return entry.schemaDefinition, nil
 }
 
 // GetCachedOrRegister checks if the suitable Avro schema has been cached.
@@ -222,6 +221,9 @@ func (m *glueSchemaManager) ClearRegistry(ctx context.Context, schemaSubject str
 func (m *glueSchemaManager) RegistryType() string {
 	return m.registryType
 }
+
+// Close satisfies SchemaManager. The AWS SDK v2 client needs no explicit close.
+func (m *glueSchemaManager) Close() {}
 
 func (m *glueSchemaManager) createSchema(ctx context.Context, schemaName, schemaDefinition string) (string, error) {
 	createSchemaInput := &glue.CreateSchemaInput{

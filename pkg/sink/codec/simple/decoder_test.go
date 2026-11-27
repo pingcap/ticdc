@@ -104,7 +104,7 @@ func TestChecksumFailureStopsDecode(t *testing.T) {
 				Type: DMLTypeUpdate, Data: map[string]any{"id": int64(1)},
 				Old: map[string]any{"id": int64(1)}, Checksum: &value,
 			}
-			decoder := &Decoder{config: common.NewConfig(config.ProtocolSimple)}
+			decoder := &Decoder{config: common.NewConfig(config.ProtocolSimple), memo: common.NewTableInfoProvider()}
 			decoder.config.EnableRowChecksum = true
 			require.PanicsWithValue(t, "consumer detect checksum corrupted", func() {
 				decoder.newDMLMessage(msg, ddl.TableInfo).ToDMLEvent()
@@ -122,8 +122,6 @@ func TestCachedDMLReturnsMessage(t *testing.T) {
 		schemaVersion   = uint64(100)
 		commitTs        = uint64(90)
 	)
-	tableIDAllocator.Clean()
-	t.Cleanup(tableIDAllocator.Clean)
 
 	decoder := &Decoder{
 		config:         common.NewConfig(config.ProtocolSimple),
@@ -179,7 +177,7 @@ func TestCachedDMLReturnsMessage(t *testing.T) {
 	require.Equal(t, table, dmlMessage.Table)
 	require.Equal(t, commitTs, dmlMessage.GetCommitTs())
 	require.Equal(t, commonType.RowTypeInsert, dmlMessage.RowType)
-	require.ElementsMatch(t, []int64{logicalTableID, physicalTableID}, decoder.GetTableIDs(schema, table))
+	require.ElementsMatch(t, []int64{logicalTableID, physicalTableID}, decoder.memo.GetBlockedTables(schema, table))
 
 	decoder.msg = &message{
 		Version:  defaultVersion,
@@ -225,4 +223,57 @@ func TestDecodedTableInfoLocatesRowByPrimaryKey(t *testing.T) {
 		require.NotContains(t, indexIDs, index.ID)
 		indexIDs[index.ID] = struct{}{}
 	}
+}
+
+func TestDecodeDDLKeepsMemo(t *testing.T) {
+	const (
+		schema  = "test"
+		table   = "t"
+		tableID = int64(42)
+		version = uint64(100)
+	)
+	tableSchema := &TableSchema{
+		Schema:  schema,
+		Table:   table,
+		TableID: tableID,
+		Version: version,
+		Columns: []*columnSchema{
+			{
+				Name: "id",
+				DataType: dataType{
+					MySQLType: "bigint",
+					Charset:   "binary",
+					Collate:   "binary",
+					Length:    20,
+				},
+			},
+		},
+	}
+
+	decoder := &Decoder{
+		config:         common.NewConfig(config.ProtocolSimple),
+		memo:           common.NewTableInfoProvider(),
+		cachedMessages: list.New(),
+	}
+	decoder.msg = &message{
+		Version:     defaultVersion,
+		Type:        MessageTypeBootstrap,
+		CommitTs:    version,
+		TableSchema: tableSchema,
+	}
+	bootstrap := decoder.DecodeDDLEvent()
+	require.True(t, bootstrap.IsBootstrap)
+	require.Empty(t, decoder.memo.GetBlockedTables(schema, table))
+	require.Nil(t, decoder.memo.Read(schema, table, version))
+
+	decoder.msg = &message{
+		Version:     defaultVersion,
+		Type:        DDLTypeCreate,
+		SQL:         "ALTER TABLE test.t ADD COLUMN d INT",
+		CommitTs:    version + 20,
+		TableSchema: tableSchema,
+	}
+	ddlViaNext := decoder.NextDDLEvent()
+	require.ElementsMatch(t, []int64{tableID}, decoder.memo.GetBlockedTables(schema, table))
+	require.ElementsMatch(t, []int64{tableID}, ddlViaNext.BlockedTables.TableIDs)
 }

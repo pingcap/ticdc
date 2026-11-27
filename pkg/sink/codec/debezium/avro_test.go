@@ -47,8 +47,7 @@ func newAvroBatchEncoderForTest(
 func TestDebeziumAvroDecoderSchemaCacheIsBounded(t *testing.T) {
 	cfg := common.NewConfig(config.ProtocolDebeziumAvro)
 	cfg.AvroConfluentSchemaRegistry = "http://127.0.0.1:8081"
-	decoder, err := NewAvroDecoder(t.Context(), cfg, 0, nil)
-	require.NoError(t, err)
+	decoder := NewAvroDecoderWithSchemaManager(t.Context(), cfg, nil, nil)
 	avroDecoder := decoder.(*avroDecoder)
 	schema := &registeredDebeziumAvroSchema{}
 
@@ -265,7 +264,7 @@ func TestDebeziumConfluentAvroDecodeRowEvent(t *testing.T) {
 	messages := encoder.Build()
 	require.Len(t, messages, 1)
 
-	decoder, err := NewAvroDecoder(ctx, cfg, 0, nil)
+	decoder, err := NewAvroDecoder(ctx, cfg, nil)
 	require.NoError(t, err)
 	decoder.AddKeyValue(messages[0].Key, messages[0].Value)
 
@@ -336,7 +335,7 @@ func TestDebeziumConfluentAvroDecodeAccountDMLEvents(t *testing.T) {
 	messages := encoder.Build()
 	require.Len(t, messages, 3)
 	for idx, message := range messages {
-		decoder, err := NewAvroDecoder(ctx, cfg, 0, nil)
+		decoder, err := NewAvroDecoder(ctx, cfg, nil)
 		require.NoError(t, err)
 		decoder.AddKeyValue(message.Key, message.Value)
 
@@ -596,7 +595,7 @@ func TestDebeziumConfluentAvroEncodeDDLEvent(t *testing.T) {
 	require.Equal(t, byte(0), message.Key[0])
 	require.Equal(t, byte(0), message.Value[0])
 
-	decoder, err := NewAvroDecoder(ctx, cfg, 0, nil)
+	decoder, err := NewAvroDecoder(ctx, cfg, nil)
 	require.NoError(t, err)
 	decoder.AddKeyValue(message.Key, message.Value)
 
@@ -634,7 +633,7 @@ func TestDebeziumConfluentAvroEncodeCheckpointEvent(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, message)
 
-	decoder, err := NewAvroDecoder(ctx, cfg, 0, nil)
+	decoder, err := NewAvroDecoder(ctx, cfg, nil)
 	require.NoError(t, err)
 	decoder.AddKeyValue(message.Key, message.Value)
 

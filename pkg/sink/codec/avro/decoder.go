@@ -19,6 +19,7 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	"maps"
+	"math"
 	"math/big"
 	"strconv"
 	"strings"
@@ -41,14 +42,11 @@ import (
 	"go.uber.org/zap"
 )
 
-var tableIDAllocator = common.NewTableIDAllocator()
-
 // decoderCodecCacheSize bounds the compiled codecs retained by each partition decoder.
 // It keeps recently active routed-table schemas without retaining every historical version.
 const decoderCodecCacheSize = 128
 
 type decoder struct {
-	idx    int
 	config *common.Config
 	topic  string
 
@@ -68,15 +66,12 @@ type decoder struct {
 // NewDecoder return an avro decoder
 func NewDecoder(
 	config *common.Config,
-	idx int,
 	schemaM schemamanager.SchemaManager,
 	topic string,
 	db *sql.DB,
-) common.Decoder {
-	tableIDAllocator.Clean()
+) common.EventDecoder {
 	codecs, _ := lru.New(decoderCodecCacheSize)
 	return &decoder{
-		idx:          idx,
 		config:       config,
 		topic:        topic,
 		schemaM:      schemaM,
@@ -85,6 +80,11 @@ func NewDecoder(
 		cache:        common.NewTableInfoProvider(),
 		valueSchemas: make(map[[2]string]map[string]any),
 	}
+}
+
+// ShareTableInfo reads table info through the cache shared by all partitions.
+func (d *decoder) ShareTableInfo(cache *common.TableInfoProvider) {
+	d.cache = cache
 }
 
 func (d *decoder) AddKeyValue(key, value []byte) {
@@ -144,7 +144,7 @@ func (d *decoder) NextDMLMessage() *common.DMLMessage {
 	} else if operation, ok := valueMap[tidbOp]; ok && operation == updateOperation {
 		rowType = commonType.RowTypeUpdate
 	}
-	tableID := tableIDAllocator.Allocate(schemaName, tableName)
+	tableID := d.cache.AllocateTableID(schemaName, tableName)
 	return common.NewDMLMessage(tableID, schemaName, tableName, commitTs, rowType, func() *commonEvent.DMLEvent {
 		return d.assembleDMLEventFromDecoded(keyMap, valueMap, valueSchema, isDelete, hasValue, deleteCommitTs)
 	})
@@ -361,8 +361,14 @@ func assembleEvent(
 		commitTs = int64(deleteCommitTs)
 	}
 
+	lookupTs := uint64(commitTs)
+	if !hasValue && lookupTs == 0 {
+		// Legacy tombstones without watermark carry no commit-ts; use the
+		// newest active layout if no subsequent DDL invalidated it.
+		lookupTs = math.MaxUint64
+	}
 	event := new(commonEvent.DMLEvent)
-	event.TableInfo = queryTableInfo(cache, schemaName, tableName, uint64(commitTs), columns, keyMap, hasValue && precise)
+	event.TableInfo = queryTableInfo(cache, schemaName, tableName, lookupTs, columns, keyMap, hasValue && precise)
 	event.StartTs = uint64(commitTs)
 	event.CommitTs = uint64(commitTs)
 	event.PhysicalTableID = event.TableInfo.TableName.TableID
@@ -521,7 +527,7 @@ func queryTableInfo(
 	if tableInfo != nil {
 		return tableInfo
 	}
-	tableInfo = newTableInfo(schemaName, tableName, columns, keyMap)
+	tableInfo = newTableInfo(cache, schemaName, tableName, columns, keyMap)
 	// A key-only delete has the handle columns alone, and a NULL time column
 	// has no decimal yet; neither may define the layout of later rows.
 	if cacheable {
@@ -530,10 +536,10 @@ func queryTableInfo(
 	return tableInfo
 }
 
-func newTableInfo(schemaName, tableName string, columns []*timodel.ColumnInfo, keyMap map[string]any) *commonType.TableInfo {
+func newTableInfo(cache *common.TableInfoProvider, schemaName, tableName string, columns []*timodel.ColumnInfo, keyMap map[string]any) *commonType.TableInfo {
 	tidbTableInfo := new(timodel.TableInfo)
-	tidbTableInfo.ID = tableIDAllocator.Allocate(schemaName, tableName)
-	tableIDAllocator.AddBlockTableID(schemaName, tableName, tidbTableInfo.ID)
+	tidbTableInfo.ID = cache.AllocateTableID(schemaName, tableName)
+	cache.AddBlockTableID(schemaName, tableName, tidbTableInfo.ID)
 	tidbTableInfo.Name = ast.NewCIStr(tableName)
 	tidbTableInfo.Columns = columns
 	indexColumns := make([]*timodel.IndexColumn, 0)
@@ -716,11 +722,9 @@ func (d *decoder) NextDDLEvent() *commonEvent.DDLEvent {
 	actionType := common.GetDDLActionType(result.Query)
 	result.Type = byte(actionType)
 
-	if d.idx == 0 {
-		tableIDAllocator.AddBlockTableID(result.SchemaName, result.TableName, tableIDAllocator.Allocate(result.SchemaName, result.TableName))
-		result.BlockedTables = common.GetBlockedTables(tableIDAllocator, result)
-	}
-	d.cache.AddDDL(result.SchemaName, result.TableName, result.FinishedTs)
+	d.cache.AddBlockTableID(result.SchemaName, result.TableName, d.cache.AllocateTableID(result.SchemaName, result.TableName))
+	result.BlockedTables = common.GetBlockedTables(d.cache, result)
+	d.cache.RecordDDL(result)
 	return result
 }
 

@@ -14,6 +14,9 @@
 package common
 
 import (
+	"cmp"
+	"slices"
+
 	"github.com/pingcap/log"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	timodel "github.com/pingcap/tidb/pkg/meta/model"
@@ -157,47 +160,39 @@ func GetBlockedTables(
 	accessor blockedTableProvider,
 	ddl *commonEvent.DDLEvent,
 ) *commonEvent.InfluencedTables {
-	var (
-		schemaName = ddl.SchemaName
-		tableName  = ddl.TableName
-		action     = timodel.ActionType(ddl.Type)
-	)
-	if action == timodel.ActionRenameTable {
+	action := timodel.ActionType(ddl.Type)
+	var blockedTableIDs []int64
+	switch action {
+	case timodel.ActionRenameTable, timodel.ActionRenameTables, timodel.ActionExchangeTablePartition:
 		stmt, err := parser.New().ParseOneStmt(ddl.Query, "", "")
 		if err != nil {
 			log.Panic("parse statement failed", zap.String("DDL", ddl.GetDDLQuery()), zap.Error(err))
 		}
-		// The query in job maybe "RENAME TABLE table1 to table2"
-		oldSchemaName := stmt.(*ast.RenameTableStmt).TableToTables[0].OldTable.Schema.O
-		if oldSchemaName != "" {
-			schemaName = oldSchemaName
+		switch s := stmt.(type) {
+		case *ast.RenameTableStmt:
+			if action == timodel.ActionRenameTable {
+				oldTable := s.TableToTables[0].OldTable
+				ddl.ExtraSchemaName = cmp.Or(oldTable.Schema.O, ddl.SchemaName)
+				ddl.ExtraTableName = oldTable.Name.O
+			}
+			for _, pair := range s.TableToTables {
+				blockedTableIDs = appendBlockedTableIDs(accessor, blockedTableIDs, ddl.SchemaName, pair.OldTable)
+				blockedTableIDs = appendBlockedTableIDs(accessor, blockedTableIDs, ddl.SchemaName, pair.NewTable)
+			}
+		case *ast.AlterTableStmt:
+			if action == timodel.ActionRenameTable {
+				ddl.ExtraSchemaName = cmp.Or(s.Table.Schema.O, ddl.SchemaName)
+				ddl.ExtraTableName = s.Table.Name.O
+			}
+			blockedTableIDs = appendBlockedTableIDs(accessor, blockedTableIDs, ddl.SchemaName, s.Table)
+			for _, spec := range s.Specs {
+				if spec.Tp == ast.AlterTableExchangePartition || spec.Tp == ast.AlterTableRenameTable {
+					blockedTableIDs = appendBlockedTableIDs(accessor, blockedTableIDs, ddl.SchemaName, spec.NewTable)
+				}
+			}
 		}
-		tableName = stmt.(*ast.RenameTableStmt).TableToTables[0].OldTable.Name.O
-
-		ddl.ExtraSchemaName = schemaName
-		ddl.ExtraTableName = tableName
-	}
-	blockedTableIDs := accessor.GetBlockedTables(schemaName, tableName)
-
-	if action == timodel.ActionExchangeTablePartition {
-		stmt, err := parser.New().ParseOneStmt(ddl.Query, "", "")
-		if err != nil {
-			log.Panic("parse statement failed", zap.String("DDL", ddl.GetDDLQuery()), zap.Error(err))
-		}
-		sourceSchemaName := stmt.(*ast.AlterTableStmt).Table.Schema.O
-		if sourceSchemaName == "" {
-			sourceSchemaName = ddl.SchemaName
-		}
-		sourceTableName := stmt.(*ast.AlterTableStmt).Table.Name.O
-		blockedTableIDs = accessor.GetBlockedTables(sourceSchemaName, sourceTableName)
-
-		exchangedSchemaName := stmt.(*ast.AlterTableStmt).Specs[0].NewTable.Schema.O
-		if exchangedSchemaName == "" {
-			exchangedSchemaName = ddl.SchemaName
-		}
-		exchangedTableName := stmt.(*ast.AlterTableStmt).Specs[0].NewTable.Name.O
-		exchangedTableID := accessor.GetBlockedTables(exchangedSchemaName, exchangedTableName)
-		blockedTableIDs = append(blockedTableIDs, exchangedTableID...)
+	default:
+		blockedTableIDs = accessor.GetBlockedTables(ddl.SchemaName, ddl.TableName)
 	}
 
 	switch action {
@@ -215,19 +210,16 @@ func GetBlockedTables(
 		return &commonEvent.InfluencedTables{
 			InfluenceType: commonEvent.InfluenceTypeAll,
 		}
-	case timodel.ActionTruncateTable, timodel.ActionRenameTable, timodel.ActionDropTable, timodel.ActionRecoverTable,
+	case timodel.ActionTruncateTable, timodel.ActionRenameTable, timodel.ActionRenameTables,
+		timodel.ActionDropTable, timodel.ActionRecoverTable,
 		timodel.ActionAddColumn, timodel.ActionDropColumn,
 		timodel.ActionModifyColumn, timodel.ActionSetDefaultValue,
 		timodel.ActionAddIndex, timodel.ActionDropIndex, timodel.ActionRenameIndex,
 		timodel.ActionAddForeignKey, timodel.ActionDropForeignKey,
 		timodel.ActionAddPrimaryKey, timodel.ActionDropPrimaryKey,
 		timodel.ActionModifyTableCharsetAndCollate, timodel.ActionModifyTableComment, timodel.ActionAlterIndexVisibility,
-		timodel.ActionRebaseAutoID, timodel.ActionMultiSchemaChange, timodel.ActionDropView:
-		return &commonEvent.InfluencedTables{
-			InfluenceType: commonEvent.InfluenceTypeNormal,
-			TableIDs:      blockedTableIDs,
-		}
-	case timodel.ActionAddTablePartition, timodel.ActionDropTablePartition,
+		timodel.ActionRebaseAutoID, timodel.ActionMultiSchemaChange, timodel.ActionDropView,
+		timodel.ActionAddTablePartition, timodel.ActionDropTablePartition,
 		timodel.ActionTruncateTablePartition, timodel.ActionReorganizePartition,
 		timodel.ActionAlterTablePartitioning, timodel.ActionRemovePartitioning,
 		timodel.ActionExchangeTablePartition, timodel.ActionAlterTTLInfo, timodel.ActionAlterTTLRemove:
@@ -239,4 +231,22 @@ func GetBlockedTables(
 		log.Panic("unsupported DDL action", zap.String("DDL", ddl.Query), zap.String("action", action.String()))
 	}
 	return nil
+}
+
+func appendBlockedTableIDs(
+	accessor blockedTableProvider,
+	dst []int64,
+	defaultSchema string,
+	table *ast.TableName,
+) []int64 {
+	if table == nil {
+		return dst
+	}
+	schemaName := cmp.Or(table.Schema.O, defaultSchema)
+	for _, id := range accessor.GetBlockedTables(schemaName, table.Name.O) {
+		if !slices.Contains(dst, id) {
+			dst = append(dst, id)
+		}
+	}
+	return dst
 }

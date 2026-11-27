@@ -1,0 +1,112 @@
+// Copyright 2026 PingCAP, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+package common
+
+import (
+	"testing"
+
+	commonType "github.com/pingcap/ticdc/pkg/common"
+	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
+	timodel "github.com/pingcap/tidb/pkg/meta/model"
+	"github.com/pingcap/tidb/pkg/parser/ast"
+	"github.com/stretchr/testify/require"
+)
+
+func TestRecordDDL(t *testing.T) {
+	provider := NewTableInfoProvider()
+	t1 := commonType.WrapTableInfo("test", &timodel.TableInfo{ID: 1, Name: ast.NewCIStr("t1"), UpdateTS: 100})
+	t2 := commonType.WrapTableInfo("test", &timodel.TableInfo{ID: 2, Name: ast.NewCIStr("t2"), UpdateTS: 100})
+	t3 := commonType.WrapTableInfo("other", &timodel.TableInfo{ID: 3, Name: ast.NewCIStr("t3"), UpdateTS: 100})
+	provider.WriteTableInfo(t1, 0)
+	provider.WriteTableInfo(t2, 0)
+	provider.WriteTableInfo(t3, 0)
+
+	// Normal DDL invalidates only its target table.
+	provider.RecordDDL(&commonEvent.DDLEvent{
+		FinishedTs: 110,
+		Type:       byte(timodel.ActionAddColumn),
+		SchemaName: "test",
+		TableName:  "t1",
+	})
+	_, info := provider.ReadAt("test", "t1", 111)
+	require.Nil(t, info)
+	_, info = provider.ReadAt("test", "t2", 111)
+	require.Same(t, t2, info)
+
+	// Layout-moving DDLs invalidate all cached tables after their commit ts,
+	// while earlier commits still see the cached version.
+	for _, action := range []timodel.ActionType{
+		timodel.ActionRenameTable,
+		timodel.ActionRenameTables,
+		timodel.ActionExchangeTablePartition,
+	} {
+		t.Run(action.String(), func(t *testing.T) {
+			p := NewTableInfoProvider()
+			p.WriteTableInfo(t1, 0)
+			p.WriteTableInfo(t2, 0)
+			p.WriteTableInfo(t3, 0)
+
+			p.RecordDDL(&commonEvent.DDLEvent{
+				FinishedTs: 120,
+				Type:       byte(action),
+				SchemaName: "test",
+				TableName:  "t2",
+			})
+			_, before := p.ReadAt("other", "t3", 120)
+			require.Same(t, t3, before)
+
+			for _, key := range [][2]string{{"test", "t1"}, {"test", "t2"}, {"other", "t3"}} {
+				_, after := p.ReadAt(key[0], key[1], 121)
+				require.Nil(t, after)
+			}
+		})
+	}
+}
+
+func TestTableIDIsolation(t *testing.T) {
+	p1 := NewTableInfoProvider()
+	id := p1.AllocateTableID("test", "t1")
+	p1.AddBlockTableID("test", "t1", id)
+	p1.AddBlockTableID("test", "t1", id)
+
+	p2 := NewTableInfoProvider()
+	p2.AllocateTableID("test", "t1")
+
+	require.Equal(t, []int64{id}, p1.GetBlockedTables("test", "t1"))
+	require.Empty(t, p2.GetBlockedTables("test", "t1"))
+}
+
+func TestReleaseBefore(t *testing.T) {
+	provider := NewTableInfoProvider()
+	oldestT1 := commonType.WrapTableInfo("test", &timodel.TableInfo{ID: 1, Name: ast.NewCIStr("t1"), UpdateTS: 20})
+	oldT1 := commonType.WrapTableInfo("test", &timodel.TableInfo{ID: 2, Name: ast.NewCIStr("t1"), UpdateTS: 100})
+	// A resumed decoder can report a lower version than one already seen.
+	newT1 := commonType.WrapTableInfo("test", &timodel.TableInfo{ID: 3, Name: ast.NewCIStr("t1"), UpdateTS: 50})
+
+	provider.WriteTableInfo(oldestT1, 20)
+	provider.WriteTableInfo(oldT1, 100)
+	provider.WriteTableInfo(newT1, 300)
+
+	// Retention follows effectiveTs while ReadAt resolves by version, so both
+	// floors stay: newT1 survives a watermark above its version, and ReadAt at a
+	// later commit ts still finds oldT1.
+	provider.ReleaseBefore(350)
+	require.Equal(t, uint64(350), provider.ReleasedWatermark())
+	require.Nil(t, provider.Read("test", "t1", 20))
+	require.Same(t, newT1, provider.Read("test", "t1", 50))
+	version, info := provider.ReadAt("test", "t1", 400)
+	require.Equal(t, uint64(100), version)
+	require.Same(t, oldT1, info)
+}
