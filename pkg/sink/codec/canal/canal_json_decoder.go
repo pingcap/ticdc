@@ -564,11 +564,17 @@ func (d *decoder) queryTableInfo(
 	schemaName := *msg.getSchema()
 	tableName := *msg.getTable()
 
-	version, tableInfo := d.cache.ReadAt(schemaName, tableName, msg.getCommitTs())
-	if tableInfo != nil {
-		return tableInfo
+	// A message rebuilt from a snapshot describes its own layout: the snapshot
+	// reports enum/set as labels, while the shared layout holds the wire types.
+	var version uint64
+	if cacheable {
+		var tableInfo *commonType.TableInfo
+		version, tableInfo = d.cache.ReadAt(schemaName, tableName, msg.getCommitTs())
+		if tableInfo != nil {
+			return tableInfo
+		}
 	}
-	tableInfo = newTableInfo(d.cache, msg)
+	tableInfo := newTableInfo(d.cache, msg)
 	d.cache.AddBlockTableID(schemaName, tableName, tableInfo.TableName.TableID)
 	if cacheable && isCacheableCanalTableInfo(msg) {
 		d.cache.Write(schemaName, tableName, version, tableInfo)

@@ -31,6 +31,7 @@ import (
 	"github.com/pingcap/tidb/pkg/kv"
 	"github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/tidb/pkg/parser/ast"
+	"github.com/pingcap/tidb/pkg/parser/mysql"
 	"github.com/pingcap/tidb/pkg/tablecodec"
 	"github.com/pingcap/tidb/pkg/util/chunk"
 	"github.com/stretchr/testify/require"
@@ -1609,26 +1610,28 @@ func TestColdDelete(t *testing.T) {
 // columns as varchar for the snapshot rows, so caching that layout would decode
 // every later row of the table with the wrong column types.
 func TestSnapshotLayoutNotCached(t *testing.T) {
-	dec := &decoder{cache: common.NewTableInfoProvider()}
-	msg := &canalJSONMessageWithTiDBExtension{
-		JSONMessage: &JSONMessage{
-			Schema:  "test",
-			Table:   "t1",
-			PKNames: []string{"id"},
-			MySQLType: map[string]string{
-				"id":  "int",
-				"val": "varchar(32)",
+	newMsg := func(mysqlType map[string]string) *canalJSONMessageWithTiDBExtension {
+		return &canalJSONMessageWithTiDBExtension{
+			JSONMessage: &JSONMessage{
+				Schema:    "test",
+				Table:     "t1",
+				PKNames:   []string{"id"},
+				MySQLType: mysqlType,
 			},
-		},
-		Extensions: &tidbExtension{CommitTs: 100},
+			Extensions: &tidbExtension{CommitTs: 100},
+		}
 	}
+	dec := &decoder{cache: common.NewTableInfoProvider()}
+	shared := dec.queryTableInfo(newMsg(map[string]string{"id": "int", "val": "enum('a','b')"}), true)
 
-	built := dec.queryTableInfo(msg, false)
-	require.NotNil(t, built)
+	built := dec.queryTableInfo(newMsg(map[string]string{"id": "int", "val": "varchar(32)"}), false)
+	require.NotSame(t, shared, built)
+	require.Equal(t, mysql.TypeEnum, shared.GetColumns()[1].FieldType.GetType())
+	require.Equal(t, mysql.TypeVarchar, built.GetColumns()[1].FieldType.GetType())
 	_, cached := dec.cache.ReadAt("test", "t1", 101)
-	require.Nil(t, cached)
+	require.Same(t, shared, cached)
 
-	cachedInfo := dec.queryTableInfo(msg, true)
+	cachedInfo := dec.queryTableInfo(newMsg(map[string]string{"id": "int", "val": "varchar(32)"}), true)
 	_, cached = dec.cache.ReadAt("test", "t1", 101)
 	require.Same(t, cachedInfo, cached)
 }
