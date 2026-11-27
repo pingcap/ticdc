@@ -155,3 +155,42 @@ func TestMeteringCollectorRecoveryAndMixedUpgrade(t *testing.T) {
 	require.Zero(t, res.cmdEpoch)
 	require.Zero(t, calls)
 }
+
+func TestMeteringCollectorOnAckClearsPartialRound(t *testing.T) {
+	var mc meteringCollector
+	mc.SetInitialState(10, 5)
+
+	n1 := node.ID("node-1")
+	n2 := node.ID("node-2")
+	active := func() []node.ID { return []node.ID{n1, n2} }
+	now := time.Now()
+
+	mc.MarkNodeSupported(n1)
+	mc.MarkNodeSupported(n2)
+
+	// node-1 reports partial round 6, then a catch-up ACK advances targetSeq to 7.
+	res := mc.OnHeartbeat(n1, true, 10, 6, 450, active, now)
+	require.False(t, res.roundCompleted)
+
+	mc.OnAck(10, 6, now)
+
+	// node-2 reporting round 7 must NOT complete round 7 using node-1's stale seq=6 bytes.
+	next := now.Add(defaultMeteringRoundInterval)
+	res = mc.OnHeartbeat(n2, true, 10, 7, 200, active, next)
+	require.False(t, res.roundCompleted)
+	epoch, _, _ := mc.CompletedRound()
+	require.Zero(t, epoch)
+
+	// node-1 receives seal command for (10, 7) and completes round 7 cleanly.
+	res = mc.OnHeartbeat(n1, true, 10, 6, 450, active, next)
+	require.Equal(t, uint64(10), res.cmdEpoch)
+	require.Equal(t, uint64(7), res.cmdSeq)
+	require.False(t, res.roundCompleted)
+
+	res = mc.OnHeartbeat(n1, true, 10, 7, 100, active, next)
+	require.True(t, res.roundCompleted)
+	epoch, seq, bytes := mc.CompletedRound()
+	require.Equal(t, uint64(10), epoch)
+	require.Equal(t, uint64(7), seq)
+	require.Equal(t, uint64(300), bytes)
+}

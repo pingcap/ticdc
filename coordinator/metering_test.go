@@ -15,12 +15,18 @@
 package coordinator
 
 import (
+	"bytes"
 	"compress/gzip"
 	"context"
 	"encoding/json"
+	"io"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
+	"sync"
 	"testing"
 	"testing/synctest"
 	"time"
@@ -34,6 +40,7 @@ import (
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/messaging"
+	"github.com/pingcap/ticdc/pkg/metering"
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/ticdc/pkg/pdutil"
 	"github.com/pingcap/ticdc/server/watcher"
@@ -146,7 +153,7 @@ func TestMeteringCoordinatorTerm(t *testing.T) {
 			config.StoreGlobalServerConfig(cfg)
 			c := &coordinator{
 				gcTickInterval:     time.Hour,
-				controller:         &Controller{},
+				controller:         &Controller{metering: newMeteringAccumulator()},
 				gcCleaner:          gccleaner.New(nil, "test"),
 				eventCh:            chann.NewAutoDrainChann[*Event](),
 				changefeedChangeCh: make(chan []*changefeedChange),
@@ -349,7 +356,7 @@ func TestNewControllerBootstrapAdvertisesMetering(t *testing.T) {
 		1,
 		time.Minute,
 		nil,
-		true,
+		newMeteringAccumulator(),
 	)
 	t.Cleanup(func() {
 		ctrl.taskScheduler.Stop()
@@ -431,4 +438,100 @@ func TestControllerMeteringAckAndAddMaintainerRecovery(t *testing.T) {
 	_, total = ctrl.metering.Snapshot()
 	require.Equal(t, uint64(640), total)
 	require.Equal(t, rejectedBefore+1, testutil.ToFloat64(meteringRejectedStatusCounter))
+}
+
+func TestCoordinatorMeteringResolvesUncertainUpload(t *testing.T) {
+	for _, tc := range []struct {
+		name            string
+		persistOnFinal  bool
+		expectedNextVal uint64
+	}{
+		{name: "persisted on final attempt commits prior batch", persistOnFinal: true, expectedNextVal: 250},
+		{name: "not persisted merges prior batch into next minute", persistOnFinal: false, expectedNextVal: 750},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t1 := time.Now().Truncate(time.Minute)
+			t2 := t1.Add(time.Minute)
+			t1Seg := "/" + strconv.FormatInt(t1.Unix(), 10) + "/"
+			t2Seg := "/" + strconv.FormatInt(t2.Unix(), 10) + "/"
+
+			var mu sync.Mutex
+			objects := make(map[string]decodedMeteringFile)
+			t1PutCount := 0
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				mu.Lock()
+				defer mu.Unlock()
+				switch r.Method {
+				case http.MethodHead:
+					if _, ok := objects[r.URL.Path]; ok {
+						w.WriteHeader(http.StatusOK)
+					} else {
+						w.WriteHeader(http.StatusNotFound)
+					}
+				case http.MethodPut:
+					body, err := io.ReadAll(r.Body)
+					require.NoError(t, err)
+					gz, err := gzip.NewReader(bytes.NewReader(body))
+					require.NoError(t, err)
+					var payload decodedMeteringFile
+					require.NoError(t, json.NewDecoder(gz).Decode(&payload))
+					require.NoError(t, gz.Close())
+
+					if strings.Contains(r.URL.Path, t1Seg) {
+						t1PutCount++
+						if tc.persistOnFinal && t1PutCount == 3 {
+							objects[r.URL.Path] = payload
+						}
+						w.WriteHeader(http.StatusBadRequest)
+						return
+					}
+					objects[r.URL.Path] = payload
+					w.WriteHeader(http.StatusOK)
+				default:
+					w.WriteHeader(http.StatusMethodNotAllowed)
+				}
+			}))
+			defer server.Close()
+
+			cfg := meteringconfig.NewMeteringConfig().WithS3("us-east-1", "bucket").WithEndpoint(server.URL).
+				WithAWSConfig(&meteringconfig.MeteringAWSConfig{AccessKey: "test", SecretAccessKey: "test", S3ForcePathStyle: true})
+			rep, err := metering.NewReporter(cfg, "cluster-1")
+			require.NoError(t, err)
+			defer rep.Close()
+
+			acc := newMeteringAccumulator()
+			mr := newMeteringReporter(rep, acc)
+			cf := common.NewChangeFeedIDWithName("cf-a", "ks-a")
+			_, ok := acc.Accept(cf, 1, 500)
+			require.True(t, ok)
+
+			// All attempts fail on t1, leaving upload persistence uncertain.
+			err = mr.reportAt(t.Context(), t1)
+			require.Error(t, err)
+			require.True(t, rep.HasUncertainUpload())
+			require.Len(t, mr.uncertainRecords, 1)
+
+			// Additional bytes arrive before t2; reportAt(t2) must probe t1 first.
+			_, ok = acc.Accept(cf, 2, 250)
+			require.True(t, ok)
+			require.NoError(t, mr.reportAt(t.Context(), t2))
+			require.False(t, rep.HasUncertainUpload())
+			require.Empty(t, mr.uncertainRecords)
+			_, remaining := acc.Snapshot()
+			require.Zero(t, remaining)
+
+			mu.Lock()
+			defer mu.Unlock()
+			var t2Payload *decodedMeteringFile
+			for p, f := range objects {
+				if strings.Contains(p, t2Seg) {
+					cp := f
+					t2Payload = &cp
+				}
+			}
+			require.NotNil(t, t2Payload)
+			require.Len(t, t2Payload.Data, 1)
+			require.Equal(t, tc.expectedNextVal, t2Payload.Data[0].EffectiveBytes.Value)
+		})
+	}
 }

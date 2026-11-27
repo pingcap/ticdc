@@ -126,9 +126,9 @@ func (m *meteringAccumulator) Commit(records []metering.Record) uint64 {
 		cur := m.pending[key]
 		if cur <= r.EffectiveBytes {
 			delete(m.pending, key)
-		} else {
-			m.pending[key] = cur - r.EffectiveBytes
+			continue
 		}
+		m.pending[key] = cur - r.EffectiveBytes
 	}
 	var remaining uint64
 	for _, bytes := range m.pending {
@@ -139,8 +139,10 @@ func (m *meteringAccumulator) Commit(records []metering.Record) uint64 {
 
 // meteringReporter schedules per-minute delta uploads and shutdown flush for one coordinator term.
 type meteringReporter struct {
-	reporter    *metering.Reporter
-	accumulator *meteringAccumulator
+	reporter         *metering.Reporter
+	accumulator      *meteringAccumulator
+	uncertainTS      int64
+	uncertainRecords []metering.Record
 }
 
 func newMeteringReporter(reporter *metering.Reporter, accumulator *meteringAccumulator) *meteringReporter {
@@ -181,9 +183,32 @@ func waitUntil(ctx context.Context, deadline time.Time) bool {
 	}
 }
 
-func (r *meteringReporter) reportAt(ctx context.Context, reportTime time.Time) error {
-	if r.reporter == nil || r.accumulator == nil {
+func (r *meteringReporter) resolveUncertain(ctx context.Context) error {
+	if len(r.uncertainRecords) == 0 {
 		return nil
+	}
+	persisted, err := r.reporter.ResolveUncertainUpload(ctx)
+	if err != nil {
+		meteringReportCounter.WithLabelValues("failure").Inc()
+		log.Warn("failed to verify uncertain traffic metering upload",
+			zap.Int64("timestamp", r.uncertainTS),
+			zap.Int("recordCount", len(r.uncertainRecords)),
+			zap.Error(err))
+		return err
+	}
+	if persisted {
+		meteringPendingBytesGauge.Set(float64(r.accumulator.Commit(r.uncertainRecords)))
+		meteringReportCounter.WithLabelValues("success").Inc()
+		meteringLastSuccessTimestampGauge.Set(float64(r.uncertainTS))
+	}
+	r.uncertainTS = 0
+	r.uncertainRecords = nil
+	return nil
+}
+
+func (r *meteringReporter) reportAt(ctx context.Context, reportTime time.Time) error {
+	if err := r.resolveUncertain(ctx); err != nil {
+		return err
 	}
 	records, pending := r.accumulator.Snapshot()
 	meteringPendingBytesGauge.Set(float64(pending))
@@ -196,11 +221,15 @@ func (r *meteringReporter) reportAt(ctx context.Context, reportTime time.Time) e
 	err := r.reporter.Report(ctx, ts, records)
 	meteringReportDuration.Observe(time.Since(start).Seconds())
 	if err != nil {
-		if errors.Is(err, writer.ErrFileExists) {
-			meteringReportCounter.WithLabelValues("exists").Inc()
-		} else {
-			meteringReportCounter.WithLabelValues("failure").Inc()
+		if r.reporter.HasUncertainUpload() {
+			r.uncertainTS = ts
+			r.uncertainRecords = records
 		}
+		reason := "failure"
+		if errors.Is(err, writer.ErrFileExists) {
+			reason = "exists"
+		}
+		meteringReportCounter.WithLabelValues(reason).Inc()
 		log.Warn("failed to upload traffic metering delta",
 			zap.Int64("timestamp", ts),
 			zap.Int("recordCount", len(records)),
@@ -215,11 +244,8 @@ func (r *meteringReporter) reportAt(ctx context.Context, reportTime time.Time) e
 }
 
 func (r *meteringReporter) FlushOnShutdown() {
-	if r.reporter == nil || r.accumulator == nil {
-		return
-	}
 	records, _ := r.accumulator.Snapshot()
-	if len(records) == 0 {
+	if len(records) == 0 && len(r.uncertainRecords) == 0 {
 		return
 	}
 	flushTS := time.Now().Truncate(time.Minute).Add(time.Minute)
@@ -242,7 +268,5 @@ func (r *meteringReporter) FlushOnShutdown() {
 }
 
 func (r *meteringReporter) Close() {
-	if r.reporter != nil {
-		r.reporter.Close()
-	}
+	r.reporter.Close()
 }

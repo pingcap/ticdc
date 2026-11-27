@@ -150,16 +150,20 @@ func TestReporterRecords(t *testing.T) {
 
 func TestReporterUploadFailuresAndExists(t *testing.T) {
 	for _, tc := range []struct {
-		name         string
-		failures     int
-		fileExists   bool
-		putPersisted bool
-		cancelUpload bool
+		name          string
+		failures      int
+		headFailures  int
+		fileExists    bool
+		putPersisted  bool
+		persistOnPutN int
+		cancelUpload  bool
 	}{
 		{name: "transient failure", failures: 1},
 		{name: "last attempt succeeds", failures: 2},
 		{name: "retry exhausted", failures: 3},
+		{name: "last attempt persisted before transient error", failures: 3, persistOnPutN: 3},
 		{name: "file already exists", fileExists: true},
+		{name: "head failure before pre-existing file", headFailures: 1, fileExists: true},
 		{name: "put persisted before transient error", failures: 1, putPersisted: true},
 		{name: "cancel in-flight upload", cancelUpload: true},
 	} {
@@ -178,6 +182,10 @@ func TestReporterUploadFailuresAndExists(t *testing.T) {
 				switch r.Method {
 				case http.MethodHead:
 					heads++
+					if heads <= tc.headFailures {
+						w.WriteHeader(http.StatusInternalServerError)
+						return
+					}
 					if tc.fileExists || persistedOnPut {
 						w.WriteHeader(http.StatusOK)
 						return
@@ -197,7 +205,7 @@ func TestReporterUploadFailuresAndExists(t *testing.T) {
 						<-r.Context().Done()
 						return
 					}
-					if tc.putPersisted {
+					if tc.putPersisted || (tc.persistOnPutN > 0 && len(paths) >= tc.persistOnPutN) {
 						persistedOnPut = true
 					}
 					if len(paths) <= tc.failures {
@@ -222,30 +230,42 @@ func TestReporterUploadFailuresAndExists(t *testing.T) {
 				{KeyspaceName: "tenant-a", ChangefeedName: "payments", EffectiveBytes: 42},
 			})
 			mu.Lock()
-			defer mu.Unlock()
-			require.Greater(t, heads, 0, "OverwriteExisting = false must check object existence first")
+			gotHeads := heads
+			gotPaths := append([]string(nil), paths...)
+			gotPayloads := append([][]byte(nil), payloads...)
+			mu.Unlock()
+			require.Greater(t, gotHeads, 0, "OverwriteExisting = false must check object existence first")
 			switch {
 			case tc.fileExists:
 				require.ErrorIs(t, err, writer.ErrFileExists)
-				require.Equal(t, 1, heads, "ErrFileExists on first attempt must not be retried")
-				require.Empty(t, paths)
+				require.Equal(t, tc.headFailures+1, gotHeads, "ErrFileExists must not be retried")
+				require.Empty(t, gotPaths)
+				require.False(t, reporter.HasUncertainUpload())
 			case tc.putPersisted:
 				require.NoError(t, err)
-				require.Equal(t, 2, heads)
-				require.Len(t, paths, 1, "already-persisted batch must commit without duplicate PUT")
+				require.Equal(t, 2, gotHeads)
+				require.Len(t, gotPaths, 1, "already-persisted batch must commit without duplicate PUT")
+				require.False(t, reporter.HasUncertainUpload())
 			case tc.cancelUpload:
 				require.ErrorIs(t, err, context.Canceled)
-				require.Len(t, paths, 1, "cancellation must stop further uploads")
+				require.Len(t, gotPaths, 1, "cancellation must stop further uploads")
+				require.True(t, reporter.HasUncertainUpload())
 			case tc.failures == 3:
 				require.ErrorContains(t, err, "injected upload failure")
-				require.Len(t, paths, 3, "report must terminate after the configured retry budget")
+				require.Len(t, gotPaths, 3, "report must terminate after the configured retry budget")
+				require.True(t, reporter.HasUncertainUpload())
+				persisted, probeErr := reporter.ResolveUncertainUpload(t.Context())
+				require.NoError(t, probeErr)
+				require.Equal(t, tc.persistOnPutN > 0, persisted)
+				require.False(t, reporter.HasUncertainUpload())
 			default:
 				require.NoError(t, err)
-				require.Len(t, paths, tc.failures+1)
+				require.Len(t, gotPaths, tc.failures+1)
+				require.False(t, reporter.HasUncertainUpload())
 			}
-			for i := 1; i < len(paths); i++ {
-				require.Equal(t, paths[0], paths[i], "retry must retain the batch identity")
-				require.Equal(t, payloads[0], payloads[i], "retry must retain the batch content")
+			for i := 1; i < len(gotPaths); i++ {
+				require.Equal(t, gotPaths[0], gotPaths[i], "retry must retain the batch identity")
+				require.Equal(t, gotPayloads[0], gotPayloads[i], "retry must retain the batch content")
 			}
 		})
 	}

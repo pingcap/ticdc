@@ -70,10 +70,9 @@ func (m *meteringCollector) SetEpoch(epoch uint64) {
 
 func (m *meteringCollector) resetLocked(epoch, lastSeq uint64) {
 	m.epoch = epoch
+	m.targetSeq = 0
 	if epoch > 0 {
 		m.targetSeq = lastSeq + 1
-	} else {
-		m.targetSeq = 0
 	}
 	m.completedSeq = 0
 	m.completedBytes = 0
@@ -105,6 +104,13 @@ func (m *meteringCollector) RemoveNode(id node.ID, activeNodes []node.ID) bool {
 	return m.tryCompleteRoundLocked(activeNodes)
 }
 
+// roundBlockedLocked reports whether a heartbeat must not start or advance a
+// metering round. m.mu must be held.
+func (m *meteringCollector) roundBlockedLocked(now time.Time) bool {
+	return m.epoch == 0 || m.completedSeq > 0 ||
+		(!m.nextRoundAt.IsZero() && now.Before(m.nextRoundAt))
+}
+
 func (m *meteringCollector) OnHeartbeat(
 	from node.ID,
 	supported bool,
@@ -119,7 +125,7 @@ func (m *meteringCollector) OnHeartbeat(
 		}
 		m.supportedNodes[from] = struct{}{}
 	}
-	if m.epoch == 0 || m.completedSeq > 0 || (!m.nextRoundAt.IsZero() && now.Before(m.nextRoundAt)) {
+	if m.roundBlockedLocked(now) {
 		m.mu.Unlock()
 		return meteringHeartbeatResult{}
 	}
@@ -132,6 +138,8 @@ func (m *meteringCollector) OnHeartbeat(
 		}
 		m.roundBytes[from] = msgBytes
 	}
+	// Collecting active nodes takes the bootstrapper and span controller locks,
+	// so it must run without m.mu held.
 	m.mu.Unlock()
 
 	var activeNodes []node.ID
@@ -141,7 +149,7 @@ func (m *meteringCollector) OnHeartbeat(
 
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if m.epoch == 0 || m.completedSeq > 0 || (!m.nextRoundAt.IsZero() && now.Before(m.nextRoundAt)) {
+	if m.roundBlockedLocked(now) {
 		return meteringHeartbeatResult{}
 	}
 	if m.tryCompleteRoundLocked(activeNodes) {
@@ -226,8 +234,9 @@ func (m *meteringCollector) OnAck(epoch, ackedSeq uint64, now time.Time) {
 		m.completedSeq = 0
 		m.completedBytes = 0
 		m.nextRoundAt = now.Add(defaultMeteringRoundInterval)
-		m.roundStartedAt = time.Time{}
-		m.lastStallLogAt = time.Time{}
 	}
+	clear(m.roundBytes)
+	m.roundStartedAt = time.Time{}
+	m.lastStallLogAt = time.Time{}
 	m.targetSeq = ackedSeq + 1
 }

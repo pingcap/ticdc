@@ -18,7 +18,11 @@ import (
 	"sync"
 	"sync/atomic"
 
+	"github.com/pingcap/ticdc/downstreamadapter/sink/columnselector"
 	"github.com/pingcap/ticdc/pkg/common"
+	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
+	"github.com/pingcap/ticdc/pkg/config"
+	"github.com/pingcap/ticdc/pkg/errors"
 )
 
 // meteringSealer manages node-local traffic byte accumulation and monotonic
@@ -65,4 +69,23 @@ func appliesColumnSelector(sinkType common.SinkType) bool {
 	default:
 		return false
 	}
+}
+
+// newMeteringColumnSelector returns the column selector used by traffic
+// metering, or nil when the sink or config does not define one.
+func newMeteringColumnSelector(
+	sinkType common.SinkType,
+	cfConfig *config.ChangefeedConfig,
+) (func(*common.TableInfo) commonEvent.Selector, error) {
+	if !appliesColumnSelector(sinkType) || cfConfig.SinkConfig == nil ||
+		len(cfConfig.SinkConfig.ColumnSelectors) == 0 {
+		return nil, nil
+	}
+	selectors, err := columnselector.New(cfConfig.SinkConfig, cfConfig.CaseSensitive)
+	if err != nil {
+		return nil, errors.Trace(err)
+	}
+	return func(tableInfo *common.TableInfo) commonEvent.Selector {
+		return selectors.GetForTableInfo(tableInfo)
+	}, nil
 }

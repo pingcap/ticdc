@@ -18,6 +18,7 @@ package metering
 
 import (
 	"context"
+	"io"
 	"strings"
 	"sync"
 	"time"
@@ -55,10 +56,22 @@ type Record struct {
 // The caller retains responsibility for in-memory accumulation, scheduling, and
 // retaining deltas across unsuccessful Report attempts.
 type Reporter struct {
-	mu     sync.Mutex
-	inner  *meteringwriter.MeteringWriter
-	selfID string
-	closed bool
+	mu            sync.Mutex
+	inner         *meteringwriter.MeteringWriter
+	tracker       *uploadTracker
+	selfID        string
+	uncertainPath string
+	closed        bool
+}
+
+type uploadTracker struct {
+	storage.ObjectStorageProvider
+	lastUploadPath string
+}
+
+func (u *uploadTracker) Upload(ctx context.Context, path string, data io.Reader) error {
+	u.lastUploadPath = path
+	return u.ObjectStorageProvider.Upload(ctx, path, data)
 }
 
 // NewReporter initializes the SDK writer without starting background goroutines.
@@ -81,9 +94,11 @@ func NewReporter(c *config.MeteringConfig, clusterID string) (*Reporter, error) 
 	if err != nil {
 		return nil, errors.WrapError(errors.ErrExternalStorageAPI, util.MaskSensitiveDataInURLError(err))
 	}
+	tracker := &uploadTracker{ObjectStorageProvider: provider}
 	return &Reporter{
-		inner:  meteringwriter.NewMeteringWriterFromConfig(provider, config.DefaultConfig().WithOverwriteExisting(false), c),
-		selfID: selfID,
+		inner:   meteringwriter.NewMeteringWriterFromConfig(tracker, config.DefaultConfig().WithOverwriteExisting(false), c),
+		tracker: tracker,
+		selfID:  selfID,
 	}, nil
 }
 
@@ -127,8 +142,45 @@ func (r *Reporter) Report(ctx context.Context, timestamp int64, records []Record
 	})
 }
 
-func (r *Reporter) write(ctx context.Context, data *common.MeteringData) error {
-	var err error
+// HasUncertainUpload reports whether the last failed Report invoked storage Upload
+// and its persistence could not be confirmed before returning an error.
+func (r *Reporter) HasUncertainUpload() bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.uncertainPath != ""
+}
+
+// ResolveUncertainUpload checks storage to determine whether an uncertain upload
+// actually persisted. On success, it clears the pending probe path and returns
+// whether the object exists; on error, it preserves the path for a later probe.
+func (r *Reporter) ResolveUncertainUpload(ctx context.Context) (bool, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.uncertainPath == "" {
+		return false, nil
+	}
+	if r.closed {
+		return false, errors.ErrMeteringReporterClosed.GenWithStackByArgs()
+	}
+	probeCtx, cancel := context.WithTimeout(ctx, writeTimeout)
+	exists, err := r.tracker.Exists(probeCtx, r.uncertainPath)
+	cancel()
+	if err != nil {
+		return false, errors.WrapError(errors.ErrExternalStorageAPI, util.MaskSensitiveDataInURLError(err))
+	}
+	r.uncertainPath = ""
+	return exists, nil
+}
+
+func (r *Reporter) write(ctx context.Context, data *common.MeteringData) (err error) {
+	r.tracker.lastUploadPath = ""
+	r.uncertainPath = ""
+	defer func() {
+		if err != nil && r.tracker.lastUploadPath != "" {
+			r.uncertainPath = r.tracker.lastUploadPath
+		}
+	}()
+
 	for attempt := range writeAttempts {
 		if attempt > 0 {
 			timer := time.NewTimer(time.Duration(attempt) * time.Second)
@@ -148,14 +200,15 @@ func (r *Reporter) write(ctx context.Context, data *common.MeteringData) error {
 		if err == nil {
 			return nil
 		}
-		if errors.Is(err, writer.ErrFileExists) {
-			if attempt > 0 {
-				// attempt==0 HEAD confirmed absence before our PUT, so ErrFileExists on retry
-				// means the earlier PUT succeeded on storage; avoid re-uploading under next minute.
-				return nil
-			}
-			break
+		if !errors.Is(err, writer.ErrFileExists) {
+			continue
 		}
+		if r.tracker.lastUploadPath != "" {
+			// A prior attempt confirmed absence before calling Upload, so ErrFileExists on
+			// retry means that earlier Upload succeeded on storage.
+			return nil
+		}
+		break
 	}
 	return errors.WrapError(errors.ErrExternalStorageAPI, util.MaskSensitiveDataInURLError(err))
 }

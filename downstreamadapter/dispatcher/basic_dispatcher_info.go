@@ -99,7 +99,7 @@ func (s *SharedInfo) SetTrafficMetering(
 
 // IsTrafficMeteringEnabled reports whether traffic metering collection is attached.
 func (s *SharedInfo) IsTrafficMeteringEnabled() bool {
-	return s != nil && s.addMeteredBytes != nil
+	return s.addMeteredBytes != nil
 }
 
 // NewSharedInfo creates a new SharedInfo with the given parameters

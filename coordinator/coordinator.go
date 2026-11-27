@@ -130,6 +130,10 @@ func New(node *node.Info,
 	// handle messages from message center
 	mc.RegisterHandler(messaging.CoordinatorTopic, c.recvMessages)
 	reporter := createMeteringReporter()
+	var accumulator *meteringAccumulator
+	if reporter != nil {
+		accumulator = newMeteringAccumulator()
+	}
 	c.controller = NewController(
 		c.version,
 		c.nodeInfo,
@@ -139,10 +143,10 @@ func New(node *node.Info,
 		batchSize,
 		balanceCheckInterval,
 		c.pdClient,
-		reporter != nil,
+		accumulator,
 	)
 	if reporter != nil {
-		c.metering = newMeteringReporter(reporter, c.controller.metering)
+		c.metering = newMeteringReporter(reporter, accumulator)
 	}
 
 	nodeManager := appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName)

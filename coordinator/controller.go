@@ -150,7 +150,7 @@ func NewController(
 	batchSize int,
 	balanceInterval time.Duration,
 	pdClient pd.Client,
-	meteringEnabled bool,
+	accumulator *meteringAccumulator,
 ) *Controller {
 	changefeedDB := changefeed.NewChangefeedDB(version)
 
@@ -199,8 +199,8 @@ func NewController(
 		writeLease:         newCaptureWriteLeaseController(version, selfNode.ID),
 	}
 	c.nodeChanged.changed = false
-	if meteringEnabled {
-		c.metering = newMeteringAccumulator()
+	if accumulator != nil {
+		c.metering = accumulator
 		if version > 0 {
 			changefeedDB.SetMeteringEpoch(uint64(version))
 		}
@@ -768,38 +768,49 @@ func (c *Controller) handleSingleMaintainerStatus(
 		return nil
 	}
 
-	if c.metering != nil && c.version > 0 &&
-		status.MeteringEpoch == uint64(c.version) && status.MeteringSeq > 0 {
-		if ackedSeq, ok := c.metering.Accept(cfID, status.MeteringSeq, status.MeteringBytes); ok {
-			cf.SetMeteringLastSeq(ackedSeq)
-			if c.messageCenter != nil {
-				// Reuse CheckpointTsMessage with CheckpointTs=0 as a metering-only ACK
-				// carrier so Maintainer drops it before forwarding downstream.
-				_ = c.messageCenter.SendCommand(messaging.NewSingleTargetMessage(
-					from,
-					messaging.MaintainerManagerTopic,
-					&heartbeatpb.CheckpointTsMessage{
-						ChangefeedID:     cfID.ToPB(),
-						CheckpointTs:     0,
-						MeteringEpoch:    uint64(c.version),
-						MeteringAckedSeq: ackedSeq,
-					},
-				))
-			}
-		} else {
-			meteringRejectedStatusCounter.Inc()
-			log.Warn("drop out-of-order traffic metering status",
-				zap.Stringer("changefeedID", cfID),
-				zap.Stringer("from", from),
-				zap.Uint64("meteringEpoch", status.MeteringEpoch),
-				zap.Uint64("reportedSeq", status.MeteringSeq),
-				zap.Uint64("lastAcceptedSeq", ackedSeq),
-				zap.Uint64("meteringBytes", status.MeteringBytes))
-		}
-	}
+	c.acceptMeteringStatus(cf, from, status)
+	return c.updateChangefeedStatus(cf, cfID, status)
+}
 
-	change := c.updateChangefeedStatus(cf, cfID, status)
-	return change
+// acceptMeteringStatus records one sealed traffic delta from a maintainer and
+// acknowledges the cumulative sequence. Stale or out-of-order reports are dropped.
+func (c *Controller) acceptMeteringStatus(
+	cf *changefeed.Changefeed,
+	from node.ID,
+	status *heartbeatpb.MaintainerStatus,
+) {
+	if c.metering == nil || c.version == 0 ||
+		status.MeteringEpoch != uint64(c.version) || status.MeteringSeq == 0 {
+		return
+	}
+	ackedSeq, ok := c.metering.Accept(cf.ID, status.MeteringSeq, status.MeteringBytes)
+	if !ok {
+		meteringRejectedStatusCounter.Inc()
+		log.Warn("drop out-of-order traffic metering status",
+			zap.Stringer("changefeedID", cf.ID),
+			zap.Stringer("from", from),
+			zap.Uint64("meteringEpoch", status.MeteringEpoch),
+			zap.Uint64("reportedSeq", status.MeteringSeq),
+			zap.Uint64("lastAcceptedSeq", ackedSeq),
+			zap.Uint64("meteringBytes", status.MeteringBytes))
+		return
+	}
+	cf.SetMeteringLastSeq(ackedSeq)
+	if c.messageCenter == nil {
+		return
+	}
+	// Reuse CheckpointTsMessage with CheckpointTs=0 as a metering-only ACK
+	// carrier so Maintainer drops it before forwarding downstream.
+	_ = c.messageCenter.SendCommand(messaging.NewSingleTargetMessage(
+		from,
+		messaging.MaintainerManagerTopic,
+		&heartbeatpb.CheckpointTsMessage{
+			ChangefeedID:     cf.ID.ToPB(),
+			CheckpointTs:     0,
+			MeteringEpoch:    uint64(c.version),
+			MeteringAckedSeq: ackedSeq,
+		},
+	))
 }
 
 // markChangefeedBootstrapped serializes the acknowledgement with API lifecycle

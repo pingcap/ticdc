@@ -25,7 +25,6 @@ import (
 	"github.com/pingcap/ticdc/downstreamadapter/dispatcher"
 	"github.com/pingcap/ticdc/downstreamadapter/eventcollector"
 	"github.com/pingcap/ticdc/downstreamadapter/sink"
-	"github.com/pingcap/ticdc/downstreamadapter/sink/columnselector"
 	"github.com/pingcap/ticdc/downstreamadapter/sink/mysql"
 	"github.com/pingcap/ticdc/downstreamadapter/syncpoint"
 	"github.com/pingcap/ticdc/eventpb"
@@ -361,16 +360,12 @@ func NewDispatcherManager(
 		blockStatusBufferSize,
 		make(chan error, 1),
 	)
-	if serverCfg := config.GetGlobalServerConfig(); serverCfg != nil && serverCfg.Metering != nil && serverCfg.Metering.Type != "" {
+	if serverCfg := config.GetGlobalServerConfig(); serverCfg != nil &&
+		serverCfg.Metering != nil && serverCfg.Metering.Type != "" {
 		var meteringSelectorFn func(*common.TableInfo) commonEvent.Selector
-		if appliesColumnSelector(sinkType) && manager.config.SinkConfig != nil && len(manager.config.SinkConfig.ColumnSelectors) > 0 {
-			meteringSelectors, err := columnselector.New(manager.config.SinkConfig, manager.config.CaseSensitive)
-			if err != nil {
-				return nil, errors.Trace(err)
-			}
-			meteringSelectorFn = func(tableInfo *common.TableInfo) commonEvent.Selector {
-				return meteringSelectors.GetForTableInfo(tableInfo)
-			}
+		meteringSelectorFn, err = newMeteringColumnSelector(sinkType, manager.config)
+		if err != nil {
+			return nil, err
 		}
 		sharedInfo.SetTrafficMetering(meteringSelectorFn, manager.metering.Add)
 	}
@@ -1022,7 +1017,7 @@ func (e *DispatcherManager) aggregateDispatcherHeartbeats(needCompleteStatus boo
 
 // IsTrafficMeteringEnabled reports whether local traffic metering collection is attached.
 func (e *DispatcherManager) IsTrafficMeteringEnabled() bool {
-	return e.sharedInfo != nil && e.sharedInfo.IsTrafficMeteringEnabled()
+	return e.sharedInfo.IsTrafficMeteringEnabled()
 }
 
 func (e *DispatcherManager) MergeDispatcher(dispatcherIDs []common.DispatcherID, mergedDispatcherID common.DispatcherID, mode int64) *MergeCheckTask {
