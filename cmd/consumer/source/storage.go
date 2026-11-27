@@ -262,6 +262,9 @@ func (c *storageReader) discoverDir(
 	return nil
 }
 
+// addIndex records any new DML file range referenced by indexPath.
+// It reports whether indexPath matched a valid TiCDC DML index path (including
+// versions skipped by checkpoint or watermark) so discoverDir can stop descending.
 func (c *storageReader) addIndex(
 	ctx context.Context, indexPath string,
 	files map[cloudstorage.DMLPathKey]map[cloudstorage.FileIndexKey]storageIndexRange,
@@ -405,68 +408,70 @@ func (c *storageReader) readSchema(ctx context.Context, path string) (cloudstora
 }
 
 func (c *storageReader) Read(ctx context.Context) ([]*Payload, error) {
-	if err := context.Cause(ctx); err != nil {
-		return nil, err
-	}
-	if len(c.ranges) == 0 {
-		if c.scanned && c.sourceCheckpoint > c.watermark {
-			c.watermark = c.sourceCheckpoint
-			// The metadata checkpoint covers every file in the completed scan.
-			return []*Payload{{Watermark: c.sourceCheckpoint}}, nil
-		}
-		if err := c.scanInputs(ctx); err != nil {
+	for {
+		if err := context.Cause(ctx); err != nil {
 			return nil, err
 		}
-		if len(c.ranges) == 0 && c.sourceCheckpoint > c.watermark {
-			c.watermark = c.sourceCheckpoint
-			return []*Payload{{Watermark: c.sourceCheckpoint}}, nil
+		if len(c.ranges) == 0 {
+			if c.scanned && c.sourceCheckpoint > c.watermark {
+				c.watermark = c.sourceCheckpoint
+				// The metadata checkpoint covers every file in the completed scan.
+				return []*Payload{{Watermark: c.sourceCheckpoint}}, nil
+			}
+			if err := c.scanInputs(ctx); err != nil {
+				return nil, err
+			}
+			if len(c.ranges) == 0 && c.sourceCheckpoint > c.watermark {
+				c.watermark = c.sourceCheckpoint
+				return []*Payload{{Watermark: c.sourceCheckpoint}}, nil
+			}
+			continue
 		}
-		return nil, nil
+		item := c.ranges[0]
+		key := item.key
+		schema := c.schemas[key.SchemaPathKey]
+		ddlWatermark := c.schemaWatermark(key.SchemaPathKey, schema)
+		switch {
+		case item.index.Idx < item.end && key.TableVersion >= ddlWatermark:
+			c.ranges[0].index.Idx++
+		default:
+			c.ranges[0] = storageRange{}
+			c.ranges = c.ranges[1:]
+		}
+		if schema == nil {
+			log.Panic("storage DML file has no matching schema", zap.String("schema", key.Schema), zap.String("table", key.Table), zap.Uint64("tableVersion", key.TableVersion))
+		}
+		if key.IsSchemaFileDMLPathKey() && (schema.Query == "" || key.TableVersion <= ddlWatermark) {
+			continue
+		}
+		if key.TableVersion < ddlWatermark {
+			c.fileIndices[key][item.index.FileIndexKey] = max(item.index.Idx, item.end)
+			continue
+		}
+		if key.IsSchemaFileDMLPathKey() {
+			return []*Payload{{File: &File{Schema: schema}}}, nil
+		}
+		schemaName, tableName := key.Schema, key.Table
+		if schema.Schema != "" {
+			schemaName, tableName = schema.Schema, schema.Table
+		}
+		idKey := storageTableKey{
+			schema:    schemaName,
+			table:     tableName,
+			partition: key.PartitionNum,
+		}
+		tableID := c.tableIDs[idKey]
+		if tableID == 0 {
+			c.nextTableID++
+			tableID = c.nextTableID
+			c.tableIDs[idKey] = tableID
+		}
+		data, err := c.readDMLFile(ctx, item, schema, tableID)
+		if err != nil {
+			return nil, err
+		}
+		return []*Payload{data}, nil
 	}
-	item := c.ranges[0]
-	key := item.key
-	schema := c.schemas[key.SchemaPathKey]
-	ddlWatermark := c.schemaWatermark(key.SchemaPathKey, schema)
-	switch {
-	case item.index.Idx < item.end && key.TableVersion >= ddlWatermark:
-		c.ranges[0].index.Idx++
-	default:
-		c.ranges[0] = storageRange{}
-		c.ranges = c.ranges[1:]
-	}
-	if schema == nil {
-		log.Panic("storage DML file has no matching schema", zap.String("schema", key.Schema), zap.String("table", key.Table), zap.Uint64("tableVersion", key.TableVersion))
-	}
-	if key.IsSchemaFileDMLPathKey() && (schema.Query == "" || key.TableVersion <= ddlWatermark) {
-		return nil, nil
-	}
-	if key.TableVersion < ddlWatermark {
-		c.fileIndices[key][item.index.FileIndexKey] = max(item.index.Idx, item.end)
-		return nil, nil
-	}
-	if key.IsSchemaFileDMLPathKey() {
-		return []*Payload{{File: &File{Schema: schema}}}, nil
-	}
-	schemaName, tableName := key.Schema, key.Table
-	if schema.Schema != "" {
-		schemaName, tableName = schema.Schema, schema.Table
-	}
-	idKey := storageTableKey{
-		schema:    schemaName,
-		table:     tableName,
-		partition: key.PartitionNum,
-	}
-	tableID := c.tableIDs[idKey]
-	if tableID == 0 {
-		c.nextTableID++
-		tableID = c.nextTableID
-		c.tableIDs[idKey] = tableID
-	}
-	data, err := c.readDMLFile(ctx, item, schema, tableID)
-	if err != nil {
-		return nil, err
-	}
-	return []*Payload{data}, nil
 }
 
 func (c *storageReader) scanInputs(ctx context.Context) error {
@@ -503,7 +508,20 @@ func (c *storageReader) scanInputs(ctx context.Context) error {
 			c.ranges = append(c.ranges, storageRange{key: key})
 			continue
 		}
-		for indexKey, span := range files[key] {
+		indexKeys := slices.SortedFunc(maps.Keys(files[key]), func(a, b cloudstorage.FileIndexKey) int {
+			if c := cmp.Compare(a.DispatcherID, b.DispatcherID); c != 0 {
+				return c
+			}
+			if a.EnableTableAcrossNodes == b.EnableTableAcrossNodes {
+				return 0
+			}
+			if a.EnableTableAcrossNodes {
+				return 1
+			}
+			return -1
+		})
+		for _, indexKey := range indexKeys {
+			span := files[key][indexKey]
 			c.ranges = append(c.ranges, storageRange{
 				key: key,
 				index: cloudstorage.FileIndex{

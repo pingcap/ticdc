@@ -102,8 +102,8 @@ To confirm external progress safely under concurrent or out-of-order downstream 
   1. Decode and update the shared schema cache;
   2. Synchronously wake and decode all pending DMLs waiting on that schema across any partition;
   3. Drop schema-only metadata (`Bootstrap`) and deduplicate broadcast DDLs by DDL identity so the first-arriving partition forwards the DDL to `conductor` while duplicate copies on other partitions are dropped (retaining the DDL's `commit-ts` as each partition's marker so offsets are not acknowledged before the DDL persists).
-- **Fail-fast error handling**: Unrecoverable decoding errors or downstream write failures abort the pipeline immediately without advancing $C$ or committing unpersisted offsets; as a test and verification tool, the Consumer does not support cross-restart recovery.
-- **Three-layer in-process replay deduplication and sink batching**: `writer` passes ready DML events directly to the downstream DB sink for native batching and filters duplicate deliveries (such as MQ redelivery or Storage rescans) via three checks:
+- **Fail-fast error handling**: Unrecoverable decoding errors or downstream write failures abort the pipeline immediately without advancing $C$ or committing unpersisted offsets; as a test and verification tool, the Consumer itself does not support cross-restart recovery.
+- **Three-layer replay deduplication and sink batching**: `writer` passes ready DML events directly to the downstream DB sink for native batching and filters duplicate events via three checks:
   1. Drops events with `commit-ts <= C` as already durable;
   2. Tracks written Handle keys in the `commit-ts > C` window to drop duplicates, reclaiming keys with `commit-ts <= C` once $C$ advances;
   3. Retains an in-memory `(commit-ts, schema, table, query)` set for executed DDLs so non-idempotent DDLs never re-execute across replay windows.
@@ -114,4 +114,4 @@ To confirm external progress safely under concurrent or out-of-order downstream 
 
 - **Source-agnostic correctness**: Unifying Kafka, Pulsar, and Cloud Storage behind one `commit-ts` <= $W_{\text{eff}}$ gate, `DDL Barrier`, and $C$-driven acknowledgement model eliminates per-source consistency gaps.
 - **High throughput without sacrificing safety**: Concurrent decoding and cross-table/cross-row dispatch avoid single-partition or whole-table bottlenecks while keeping per-row order and `DDL Barrier` invariants intact.
-- **Safe in-process deduplication**: Bounding $C$ by downstream persistence callbacks and pairing offset commits with `writer` deduplication handles redeliveries and rescans cleanly within a run.
+- **Safe deduplication**: Bounding $C$ by downstream persistence callbacks and pairing offset commits with `writer` deduplication handles duplicate events cleanly within a Consumer run.
