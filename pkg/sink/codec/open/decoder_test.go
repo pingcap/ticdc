@@ -17,6 +17,7 @@ import (
 	"database/sql/driver"
 	"encoding/json"
 	"fmt"
+	"regexp"
 	"testing"
 
 	"github.com/DATA-DOG/go-sqlmock"
@@ -66,6 +67,34 @@ func TestDecoderReusesTableInfo(t *testing.T) {
 	require.Equal(t, mysql.TypeLong, first.GetColumns()[0].GetType())
 }
 
+func TestRenameTableInvalidatesCachedTableInfo(t *testing.T) {
+	d := &decoder{config: common.NewConfig(config.ProtocolOpen), cache: common.NewTableInfoProvider()}
+	key := &messageKey{Schema: "test", Table: "a", Ts: 100}
+	cols := map[string]column{"id": {Type: mysql.TypeLong, Flag: primaryKeyFlag, Value: json.Number("1")}}
+	first := d.queryTableInfo(key, &messageRow{Update: cols})
+	require.Same(t, first, d.queryTableInfo(key, &messageRow{Update: cols}))
+
+	k, v, err := encodeDDLEvent(&commonEvent.DDLEvent{
+		SchemaName: "test", TableName: "a", FinishedTs: 200,
+		Type: byte(timodel.ActionRenameTable), Query: "rename table test.a to test.b",
+	}, d.config)
+	require.NoError(t, err)
+	d.AddKeyValue(k, v)
+	typ, ok := d.HasNext()
+	require.True(t, ok)
+	require.Equal(t, common.MessageTypeDDL, typ)
+	d.NextDDLEvent()
+
+	// A row at the DDL commit ts still reads the previous layout.
+	require.Same(t, first, d.queryTableInfo(key, &messageRow{Update: cols}))
+	// Rows after the DDL rebuild, even when they arrive under the old name.
+	key.Ts = 201
+	cols["e"] = column{Type: mysql.TypeVarchar}
+	second := d.queryTableInfo(key, &messageRow{Update: cols})
+	require.NotSame(t, first, second)
+	require.Len(t, second.GetColumns(), 2)
+}
+
 func TestDeleteReusesCompleteTableInfo(t *testing.T) {
 	d := &decoder{cache: common.NewTableInfoProvider()}
 	key := &messageKey{Schema: "test", Table: "t", Ts: 100}
@@ -101,7 +130,9 @@ func TestHandleKeyOnlyPreservesEnumSetTypes(t *testing.T) {
 	insert := d.assembleDMLEvent(key, &messageRow{Update: cols})
 	for _, ts := range []string{"99", "100"} {
 		mock.ExpectExec("set @@tidb_snapshot=" + ts).WillReturnResult(sqlmock.NewResult(0, 0))
-		mock.ExpectQuery("select CAST\\(`e` AS UNSIGNED\\) AS `e`,`id`,CAST\\(`s` AS UNSIGNED\\) AS `s` from test.t where id = 1").WillReturnRows(sqlmock.NewRows([]string{"e", "id", "s"}).AddRow(int64(2), int64(1), []byte("9223372036854775808")))
+		mock.ExpectQuery(regexp.QuoteMeta("select CAST(`e` AS UNSIGNED) AS `e`,`id`,CAST(`s` AS UNSIGNED) AS `s` from `test`.`t` where `id` = ?")).
+			WithArgs("1").
+			WillReturnRows(sqlmock.NewRows([]string{"e", "id", "s"}).AddRow(int64(2), int64(1), []byte("9223372036854775808")))
 	}
 	update := d.assembleHandleKeyOnlyDMLEvent(t.Context(), key, &messageRow{
 		Update: map[string]column{"id": cols["id"]}, PreColumns: map[string]column{"id": cols["id"]},
@@ -132,16 +163,20 @@ func TestHandleKeyOnlyColdCache(t *testing.T) {
 			}})
 			d.cache.AddDDL("test", "t", 90)
 			mock.ExpectExec("set @@tidb_snapshot=100").WillReturnResult(sqlmock.NewResult(0, 0))
-			mock.ExpectQuery(`select \* from test.t where id = 1`).WillReturnRows(sqlmock.NewRowsWithColumnDefinition(
-				sqlmock.NewColumn("e").OfType("ENUM", "").Nullable(true),
-				sqlmock.NewColumn("id").OfType("INT", int64(0)),
-			).AddRow("second", int64(1)))
+			mock.ExpectQuery(regexp.QuoteMeta("select * from `test`.`t` where `id` = ?")).
+				WithArgs("1").
+				WillReturnRows(sqlmock.NewRowsWithColumnDefinition(
+					sqlmock.NewColumn("e").OfType("ENUM", "").Nullable(true),
+					sqlmock.NewColumn("id").OfType("INT", int64(0)),
+				).AddRow("second", int64(1)))
 			var enumValue driver.Value = int64(2)
 			if nullable {
 				enumValue = nil
 			}
 			mock.ExpectExec("set @@tidb_snapshot=100").WillReturnResult(sqlmock.NewResult(0, 0))
-			mock.ExpectQuery("select CAST\\(`e` AS UNSIGNED\\) AS `e`,`id` from test.t where id = 1").WillReturnRows(sqlmock.NewRows([]string{"e", "id"}).AddRow(enumValue, int64(1)))
+			mock.ExpectQuery(regexp.QuoteMeta("select CAST(`e` AS UNSIGNED) AS `e`,`id` from `test`.`t` where `id` = ?")).
+				WithArgs("1").
+				WillReturnRows(sqlmock.NewRows([]string{"e", "id"}).AddRow(enumValue, int64(1)))
 			event := d.assembleHandleKeyOnlyDMLEvent(t.Context(), &messageKey{Schema: "test", Table: "t", Ts: 100}, &messageRow{Update: map[string]column{
 				"id": {Type: mysql.TypeLong, Flag: primaryKeyFlag, Value: json.Number("1")},
 			}})

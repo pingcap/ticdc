@@ -58,7 +58,7 @@ type decoder struct {
 func NewDecoder(
 	config *common.Config,
 	db *sql.DB,
-) common.Decoder {
+) common.EventDecoder {
 	return &decoder{
 		config:       config,
 		upstreamTiDB: db,
@@ -151,7 +151,6 @@ func (d *decoder) NextDDLEvent() *commonEvent.DDLEvent {
 	d.cache.AddBlockTableID(event.SchemaName, event.TableName, d.cache.AllocateTableID(event.SchemaName, event.TableName))
 	event.BlockedTables = common.GetBlockedTables(d.cache, event)
 	d.cache.RecordDDL(event)
-
 	return event
 }
 
@@ -177,24 +176,6 @@ func (d *decoder) NextDMLEvent() *commonEvent.DMLEvent {
 	valueSchema := d.valueSchema
 	d.clear()
 	return d.assembleDMLEventFromPayload(keyPayload, valuePayload, valueSchema)
-}
-
-func rowTypeFromPayload(valuePayload map[string]any) commonType.RowType {
-	op, ok := valuePayload["op"]
-	if !ok {
-		log.Panic("DML message op not found")
-	}
-	switch op {
-	case "c":
-		return commonType.RowTypeInsert
-	case "u":
-		return commonType.RowTypeUpdate
-	case "d":
-		return commonType.RowTypeDelete
-	default:
-		log.Panic("unknown op for the DML message", zap.Any("op", op))
-	}
-	return commonType.RowTypeInsert
 }
 
 func (d *decoder) assembleDMLEventFromPayload(

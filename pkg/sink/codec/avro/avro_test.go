@@ -566,7 +566,7 @@ func TestAvroLegacyDeleteUsesCachedValueSchema(t *testing.T) {
 	}
 }
 
-func TestAvroLegacyDeleteSharesTableInfoAcrossDecoders(t *testing.T) {
+func TestAvroDeleteSharesTableInfo(t *testing.T) {
 	codecConfig := common.NewConfig(config.ProtocolAvro)
 	codecConfig.EnableTiDBExtension = true
 	codecConfig.AvroEnableWatermark = true
@@ -615,7 +615,7 @@ func TestAvroLegacyDeleteSharesTableInfoAcrossDecoders(t *testing.T) {
 	}
 }
 
-func TestAvroLegacyDeleteRespectsDDLInvalidation(t *testing.T) {
+func TestAvroDeleteAfterDDL(t *testing.T) {
 	codecConfig := common.NewConfig(config.ProtocolAvro)
 	codecConfig.EnableTiDBExtension = true
 	codecConfig.AvroEnableWatermark = true

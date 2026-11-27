@@ -15,7 +15,6 @@
 package common
 
 import (
-	"sync"
 	"testing"
 
 	commonType "github.com/pingcap/ticdc/pkg/common"
@@ -25,14 +24,14 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestTableInfoProviderRecordDDL(t *testing.T) {
+func TestRecordDDL(t *testing.T) {
 	provider := NewTableInfoProvider()
 	t1 := commonType.WrapTableInfo("test", &timodel.TableInfo{ID: 1, Name: ast.NewCIStr("t1"), UpdateTS: 100})
 	t2 := commonType.WrapTableInfo("test", &timodel.TableInfo{ID: 2, Name: ast.NewCIStr("t2"), UpdateTS: 100})
 	t3 := commonType.WrapTableInfo("other", &timodel.TableInfo{ID: 3, Name: ast.NewCIStr("t3"), UpdateTS: 100})
-	provider.WriteTableInfo(t1)
-	provider.WriteTableInfo(t2)
-	provider.WriteTableInfo(t3)
+	provider.WriteTableInfo(t1, 0)
+	provider.WriteTableInfo(t2, 0)
+	provider.WriteTableInfo(t3, 0)
 
 	// Normal DDL invalidates only its target table.
 	provider.RecordDDL(&commonEvent.DDLEvent{
@@ -55,9 +54,9 @@ func TestTableInfoProviderRecordDDL(t *testing.T) {
 	} {
 		t.Run(action.String(), func(t *testing.T) {
 			p := NewTableInfoProvider()
-			p.WriteTableInfo(t1)
-			p.WriteTableInfo(t2)
-			p.WriteTableInfo(t3)
+			p.WriteTableInfo(t1, 0)
+			p.WriteTableInfo(t2, 0)
+			p.WriteTableInfo(t3, 0)
 
 			p.RecordDDL(&commonEvent.DDLEvent{
 				FinishedTs: 120,
@@ -76,41 +75,38 @@ func TestTableInfoProviderRecordDDL(t *testing.T) {
 	}
 }
 
-func TestTableInfoProviderAllocatorIsolationAndConcurrency(t *testing.T) {
+func TestTableIDIsolation(t *testing.T) {
 	p1 := NewTableInfoProvider()
+	id := p1.AllocateTableID("test", "t1")
+	p1.AddBlockTableID("test", "t1", id)
+	p1.AddBlockTableID("test", "t1", id)
+
 	p2 := NewTableInfoProvider()
+	p2.AllocateTableID("test", "t1")
 
-	id1 := p1.AllocateTableID("test", "t1")
-	p1.AddBlockTableID("test", "t1", id1)
-	id2 := p2.AllocateTableID("test", "t1")
-	p2.AddBlockTableID("test", "t1", id2)
-
-	require.Equal(t, []int64{id1}, p1.GetBlockedTables("test", "t1"))
-	require.Equal(t, []int64{id2}, p2.GetBlockedTables("test", "t1"))
-
-	var wg sync.WaitGroup
-	for range 8 {
-		wg.Go(func() {
-			id := p1.AllocateTableID("test", "concurrent")
-			p1.AddBlockTableID("test", "concurrent", id)
-			_ = p1.GetBlockedTables("test", "concurrent")
-		})
-	}
-	wg.Wait()
-	require.Len(t, p1.GetBlockedTables("test", "concurrent"), 1)
-	require.Empty(t, p2.GetBlockedTables("test", "concurrent"))
+	require.Equal(t, []int64{id}, p1.GetBlockedTables("test", "t1"))
+	require.Empty(t, p2.GetBlockedTables("test", "t1"))
 }
 
-func TestTableInfoProviderReleaseBeforeWithEffectiveTs(t *testing.T) {
+func TestReleaseBefore(t *testing.T) {
 	provider := NewTableInfoProvider()
-	oldT1 := commonType.WrapTableInfo("test", &timodel.TableInfo{ID: 1, Name: ast.NewCIStr("t1"), UpdateTS: 100})
-	newT1 := commonType.WrapTableInfo("test", &timodel.TableInfo{ID: 2, Name: ast.NewCIStr("t1"), UpdateTS: 50})
+	oldestT1 := commonType.WrapTableInfo("test", &timodel.TableInfo{ID: 1, Name: ast.NewCIStr("t1"), UpdateTS: 20})
+	oldT1 := commonType.WrapTableInfo("test", &timodel.TableInfo{ID: 2, Name: ast.NewCIStr("t1"), UpdateTS: 100})
+	// A resumed decoder can report a lower version than one already seen.
+	newT1 := commonType.WrapTableInfo("test", &timodel.TableInfo{ID: 3, Name: ast.NewCIStr("t1"), UpdateTS: 50})
 
-	provider.WriteTableInfoAt(oldT1, 100)
-	provider.WriteTableInfoAt(newT1, 300)
+	provider.WriteTableInfo(oldestT1, 20)
+	provider.WriteTableInfo(oldT1, 100)
+	provider.WriteTableInfo(newT1, 300)
 
+	// Retention follows effectiveTs while ReadAt resolves by version, so both
+	// floors stay: newT1 survives a watermark above its version, and ReadAt at a
+	// later commit ts still finds oldT1.
 	provider.ReleaseBefore(350)
 	require.Equal(t, uint64(350), provider.ReleasedWatermark())
+	require.Nil(t, provider.Read("test", "t1", 20))
 	require.Same(t, newT1, provider.Read("test", "t1", 50))
-	require.Nil(t, provider.Read("test", "t1", 100))
+	version, info := provider.ReadAt("test", "t1", 400)
+	require.Equal(t, uint64(100), version)
+	require.Same(t, oldT1, info)
 }

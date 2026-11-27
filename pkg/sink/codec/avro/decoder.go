@@ -65,7 +65,7 @@ func NewDecoder(
 	schemaM schemamanager.SchemaManager,
 	topic string,
 	db *sql.DB,
-) common.Decoder {
+) common.EventDecoder {
 	codecs, _ := lru.New(decoderCodecCacheSize)
 	return &decoder{
 		config:       config,

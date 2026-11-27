@@ -286,7 +286,7 @@ func TestConductorEffectiveWatermarkPendingDecodeAndInvertedOrder(t *testing.T) 
 	}()
 
 	t1Info := commonType.WrapTableInfo("test", &timodel.TableInfo{ID: 1, Name: ast.NewCIStr("t1"), UpdateTS: 200})
-	schemas.WriteTableInfo(t1Info)
+	schemas.WriteTableInfo(t1Info, 0)
 
 	var mu sync.Mutex
 	var flushed []string

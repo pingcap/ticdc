@@ -43,6 +43,23 @@ func TestSanitizeName(t *testing.T) {
 	require.Equal(t, "columnNameWith__", SanitizeName("columnNameWith中文"))
 }
 
+func TestBuildSnapshotQueryQuotesIdentifiersAndBindsValues(t *testing.T) {
+	t.Parallel()
+
+	query, args := buildSnapshotQuery(
+		"schema`name",
+		"table`name",
+		map[string]any{
+			"name":           "alice' OR 1=1 -- ",
+			"id` OR 1=1 -- ": 42,
+		},
+	)
+	require.Equal(t,
+		"select * from `schema``name`.`table``name` where `id`` OR 1=1 -- ` = ? and `name` = ?",
+		query)
+	require.Equal(t, []any{42, "alice' OR 1=1 -- "}, args)
+}
+
 func TestQueryRowChecksumQueryErrors(t *testing.T) {
 	columns := []*model.ColumnInfo{{ID: 1, Name: ast.NewCIStr("id"), FieldType: *types.NewFieldType(mysql.TypeLong)}}
 	for _, name := range []string{"permission denied", "other unsupported function", "missing row", "invalid value"} {

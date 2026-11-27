@@ -21,6 +21,7 @@ import (
 	"testing"
 	"time"
 
+	lru "github.com/hashicorp/golang-lru"
 	"github.com/jarcoal/httpmock"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/stretchr/testify/require"
@@ -355,4 +356,47 @@ func TestHTTPRetryReturnsServerError(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, http.StatusInternalServerError, resp.StatusCode)
 	_ = resp.Body.Close()
+}
+
+func TestDecodeCacheBound(t *testing.T) {
+	cache := newSchemaCache()
+	var err error
+	cache.decodeEntries, err = lru.New(2)
+	require.NoError(t, err)
+
+	encodeEntry := &schemaCacheEntry{schemaVersion: 1, schemaDefinition: "encode"}
+	_, _, err = cache.getOrCreate("topic-value", "test.t", 1, func() (*schemaCacheEntry, error) {
+		return encodeEntry, nil
+	})
+	require.NoError(t, err)
+
+	loads := 0
+	loadSchema := func(id int, def string) {
+		_, err := cache.getOrLoadDecode(newDecodeCacheKey("topic-value", NewConfluentSchemaID(id)), func() (*schemaCacheEntry, error) {
+			loads++
+			return &schemaCacheEntry{schemaID: NewConfluentSchemaID(id), schemaDefinition: def}, nil
+		})
+		require.NoError(t, err)
+	}
+
+	loadSchema(1, "s1")
+	loadSchema(2, "s2")
+	loadSchema(3, "s3") // evicts id 1
+	require.Equal(t, 3, loads)
+
+	// id 2 and id 3 remain cached; id 1 must be reloaded.
+	loadSchema(2, "s2")
+	loadSchema(3, "s3")
+	require.Equal(t, 3, loads)
+	loadSchema(1, "s1")
+	require.Equal(t, 4, loads)
+
+	// Encode entry remains untouched.
+	gotEncode, cached, err := cache.getOrCreate("topic-value", "test.t", 1, func() (*schemaCacheEntry, error) {
+		t.Fatal("encode entry should still be cached")
+		return nil, nil
+	})
+	require.NoError(t, err)
+	require.True(t, cached)
+	require.Same(t, encodeEntry, gotEncode)
 }

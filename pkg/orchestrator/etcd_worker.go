@@ -19,15 +19,10 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/pingcap/failpoint"
 	"github.com/pingcap/log"
-	"github.com/pingcap/ticdc/pkg/chdelay"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/etcd"
-	"github.com/pingcap/ticdc/pkg/migrate"
 	"github.com/pingcap/ticdc/pkg/orchestrator/util"
-	pkgutil "github.com/pingcap/ticdc/pkg/util"
-	"github.com/prometheus/client_golang/prometheus"
 	"go.etcd.io/etcd/api/v3/etcdserverpb"
 	"go.etcd.io/etcd/api/v3/mvccpb"
 	"go.etcd.io/etcd/api/v3/v3rpc/rpctypes"
@@ -46,10 +41,9 @@ const (
 
 // EtcdWorker handles all interactions with Etcd
 type EtcdWorker struct {
-	clusterID string
-	client    etcd.Client
-	reactor   Reactor
-	state     ReactorState
+	client  etcd.Client
+	reactor Reactor
+	state   ReactorState
 	// rawState is the local cache of the latest Etcd state.
 	rawState map[util.EtcdKey]rawStateEntry
 	// pendingUpdates stores Etcd updates that the Reactor has not been notified of.
@@ -71,18 +65,6 @@ type EtcdWorker struct {
 	// a `compare-and-swap` semantics, which is essential for implementing
 	// snapshot isolation for Reactor ticks.
 	deleteCounter int64
-	metrics       *etcdWorkerMetrics
-
-	migrator     migrate.Migrator
-	ownerMetaKey string
-	isOwner      bool
-}
-
-type etcdWorkerMetrics struct {
-	// kv events related metrics
-	metricEtcdTxnSize            prometheus.Observer
-	metricEtcdTxnDuration        prometheus.Observer
-	metricEtcdWorkerTickDuration prometheus.Observer
 }
 
 type etcdUpdate struct {
@@ -104,46 +86,25 @@ func NewEtcdWorker(
 	prefix string,
 	reactor Reactor,
 	initState ReactorState,
-	migrator migrate.Migrator,
 ) (*EtcdWorker, error) {
 	return &EtcdWorker{
-		clusterID:  client.GetClusterID(),
 		client:     client.GetEtcdClient(),
 		reactor:    reactor,
 		state:      initState,
 		rawState:   make(map[util.EtcdKey]rawStateEntry),
 		prefix:     util.NormalizePrefix(prefix),
 		barrierRev: -1, // -1 indicates no barrier
-		migrator:   migrator,
 	}, nil
-}
-
-func (worker *EtcdWorker) initMetrics() {
-	metrics := &etcdWorkerMetrics{}
-	metrics.metricEtcdTxnSize = etcdTxnSize
-	metrics.metricEtcdTxnDuration = etcdTxnExecDuration
-	metrics.metricEtcdWorkerTickDuration = etcdWorkerTickDuration
-	worker.metrics = metrics
 }
 
 // Run starts the EtcdWorker event loop.
 // A tick is generated either on a timer whose interval is timerInterval, or on an Etcd event.
 // If the specified etcd session is Done, this Run function will exit with cerrors.ErrEtcdSessionDone.
 // And the specified etcd session is nil-safety.
-func (worker *EtcdWorker) Run(ctx context.Context, session *concurrency.Session, timerInterval time.Duration, role string) error {
+func (worker *EtcdWorker) Run(ctx context.Context, session *concurrency.Session, timerInterval time.Duration) error {
 	defer worker.cleanUp()
-	worker.isOwner = role == pkgutil.RoleOwner.String()
-	// migrate data here
-	err := worker.checkAndMigrateMetaData(ctx, role)
-	if err != nil {
-		return errors.Trace(err)
-	}
-	// migration is done, cdc server can serve http now
-	worker.migrator.MarkMigrateDone()
 
-	worker.initMetrics()
-
-	err = worker.syncRawState(ctx)
+	err := worker.syncRawState(ctx)
 	if err != nil {
 		return errors.Trace(err)
 	}
@@ -153,15 +114,7 @@ func (worker *EtcdWorker) Run(ctx context.Context, session *concurrency.Session,
 
 	watchCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
-	watchCh := worker.client.Watch(watchCtx, worker.prefix.String(), role, clientv3.WithPrefix(), clientv3.WithRev(worker.revision+1))
-
-	if role == pkgutil.RoleProcessor.String() {
-		failpoint.Inject("ProcessorEtcdDelay", func() {
-			delayer := chdelay.NewChannelDelayer(time.Second*3, watchCh, 1024, 16)
-			defer delayer.Close()
-			watchCh = delayer.Out()
-		})
-	}
+	watchCh := worker.client.Watch(watchCtx, worker.prefix.String(), clientv3.WithPrefix(), clientv3.WithRev(worker.revision+1))
 
 	var (
 		pendingPatches   [][]DataPatch
@@ -172,8 +125,6 @@ func (worker *EtcdWorker) Run(ctx context.Context, session *concurrency.Session,
 	)
 	if session != nil {
 		sessionDone = session.Done()
-		worker.ownerMetaKey = fmt.Sprintf("%s/%x",
-			etcd.CaptureOwnerKey(worker.clusterID), session.Lease())
 	} else {
 		// should never be closed
 		sessionDone = make(chan struct{})
@@ -219,8 +170,7 @@ func (worker *EtcdWorker) Run(ctx context.Context, session *concurrency.Session,
 				log.Info("Stale Etcd event dropped",
 					zap.Int64("eventRevision", response.Header.GetRevision()),
 					zap.Int64("previousRevision", worker.revision),
-					zap.Strings("events", etcdEventKeys(response.Events)),
-					zap.String("role", role))
+					zap.Strings("events", etcdEventKeys(response.Events)))
 				continue
 			}
 			worker.revision = response.Header.GetRevision()
@@ -290,10 +240,9 @@ func (worker *EtcdWorker) Run(ctx context.Context, session *concurrency.Session,
 		costTime := time.Since(startTime)
 		if costTime > etcdWorkerLogsWarnDuration {
 			log.Warn("EtcdWorker reactor tick took too long",
-				zap.Duration("duration", costTime),
-				zap.String("role", role))
+				zap.Duration("duration", costTime))
 		}
-		worker.metrics.metricEtcdWorkerTickDuration.Observe(costTime.Seconds())
+		etcdWorkerTickDuration.Observe(costTime.Seconds())
 		if err != nil {
 			if !errors.ErrReactorFinished.Equal(errors.Cause(err)) {
 				return errors.Trace(err)
@@ -365,18 +314,6 @@ func (worker *EtcdWorker) handleEvent(_ context.Context, event *clientv3.Event) 
 		}
 	case mvccpb.DELETE:
 		delete(worker.rawState, util.NewEtcdKeyFromBytes(event.Kv.Key))
-		if string(event.Kv.Key) == worker.ownerMetaKey {
-			if worker.isOwner {
-				err := errors.ErrNotOwner.GenWithStackByArgs()
-				log.Error("owner key is delete, it may causes by "+
-					"owner resign or externally delete operation"+
-					"exit etcd worker and campaign again",
-					zap.String("ownerMetaKey", worker.ownerMetaKey),
-					zap.String("value", pkgutil.RedactValue(string(event.Kv.Value))),
-					zap.Error(err))
-				return err
-			}
-		}
 	}
 	return nil
 }
@@ -484,15 +421,14 @@ func (worker *EtcdWorker) commitChangedState(ctx context.Context, changedState m
 		panic("unreachable")
 	}
 
-	worker.metrics.metricEtcdTxnSize.Observe(float64(size))
+	etcdTxnSize.Observe(float64(size))
 	startTime := time.Now()
 	resp, err := worker.client.Txn(ctx, cmps, opsThen, etcd.TxnEmptyOpsElse)
-
 	costTime := time.Since(startTime)
 	if costTime > etcdWorkerLogsWarnDuration {
 		log.Warn("Etcd transaction took too long", zap.Duration("duration", costTime))
 	}
-	worker.metrics.metricEtcdTxnDuration.Observe(costTime.Seconds())
+	etcdTxnExecDuration.Observe(costTime.Seconds())
 	if err != nil {
 		return errors.Trace(err)
 	}
@@ -577,26 +513,4 @@ func (worker *EtcdWorker) handleDeleteCounter(value []byte) {
 	if worker.deleteCounter <= 0 {
 		log.Panic("unexpected delete counter", zap.Int64("value", worker.deleteCounter))
 	}
-}
-
-// checkAndMigrateMetaData check if we should migrate meta, if true, it will block
-// until migrate done
-func (worker *EtcdWorker) checkAndMigrateMetaData(
-	ctx context.Context, role string,
-) error {
-	shouldMigrate, err := worker.migrator.ShouldMigrate(ctx)
-	if err != nil {
-		return errors.Trace(err)
-	}
-	if !shouldMigrate {
-		return nil
-	}
-
-	if role != pkgutil.RoleOwner.String() {
-		err = worker.migrator.WaitMetaVersionMatched(ctx)
-		return errors.Trace(err)
-	}
-
-	err = worker.migrator.Migrate(ctx)
-	return err
 }

@@ -14,16 +14,15 @@
 package common
 
 import (
+	"maps"
 	"slices"
 	"sort"
 	"sync"
 	"sync/atomic"
 
-	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	timodel "github.com/pingcap/tidb/pkg/meta/model"
-	"go.uber.org/zap"
 )
 
 // TableInfoProvider keeps the TableInfo of every table version. Decoders may
@@ -36,7 +35,6 @@ type TableInfoProvider struct {
 	invalidations     []uint64
 	releasedWatermark atomic.Uint64
 
-	idMu            sync.RWMutex
 	tableIDs        map[accessKey]int64
 	currentTableID  int64
 	blockedTableIDs map[accessKey]map[int64]struct{}
@@ -56,38 +54,33 @@ func (c *TableInfoProvider) ReleasedWatermark() uint64 {
 	return c.releasedWatermark.Load()
 }
 
-// WriteTableInfo stores the table info under its own version.
-func (c *TableInfoProvider) WriteTableInfo(info *common.TableInfo) {
+// WriteTableInfo stores the table info under its own version. Retention is
+// ordered by effectiveTs, because a DDL entry is read by its update ts but may
+// be needed until the job finishes; a zero effectiveTs uses the update ts.
+func (c *TableInfoProvider) WriteTableInfo(info *common.TableInfo, effectiveTs uint64) {
 	if info == nil {
 		return
 	}
-	c.WriteTableInfoAt(info, info.GetUpdateTS())
-}
-
-// WriteTableInfoAt stores the table info under its own version while ordering
-// version retention by effectiveTs.
-func (c *TableInfoProvider) WriteTableInfoAt(info *common.TableInfo, effectiveTs uint64) {
-	if info == nil {
+	schema, table := info.TableName.Schema, info.TableName.Table
+	if schema == "" || table == "" {
 		return
 	}
 	if effectiveTs == 0 {
 		effectiveTs = info.GetUpdateTS()
 	}
-	c.writeVersion(info.TableName.Schema, info.TableName.Table, info.GetUpdateTS(), effectiveTs, info)
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.table(schema, table).set(info.GetUpdateTS(), effectiveTs, info)
 }
 
 // Write stores the table info under the version the message belongs to.
 func (c *TableInfoProvider) Write(schema, table string, version uint64, info *common.TableInfo) {
-	c.writeVersion(schema, table, version, version, info)
-}
-
-func (c *TableInfoProvider) writeVersion(schema, table string, version, effectiveTs uint64, info *common.TableInfo) {
 	if schema == "" || table == "" || info == nil {
 		return
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	c.table(schema, table).set(version, effectiveTs, info)
+	c.table(schema, table).set(version, version, info)
 }
 
 // Read returns the table info of exactly the requested version.
@@ -204,8 +197,8 @@ func (c *TableInfoProvider) table(schema, table string) *tableVersions {
 
 // AllocateTableID allocates a physical table ID scoped to this provider.
 func (c *TableInfoProvider) AllocateTableID(schema, table string) int64 {
-	c.idMu.Lock()
-	defer c.idMu.Unlock()
+	c.mu.Lock()
+	defer c.mu.Unlock()
 
 	key := accessKey{schema, table}
 	if tableID, ok := c.tableIDs[key]; ok {
@@ -218,32 +211,22 @@ func (c *TableInfoProvider) AllocateTableID(schema, table string) int64 {
 
 // AddBlockTableID registers a physical table ID as blocked by DDLs on the table.
 func (c *TableInfoProvider) AddBlockTableID(schema, table string, physicalTableID int64) {
-	c.idMu.Lock()
-	defer c.idMu.Unlock()
+	c.mu.Lock()
+	defer c.mu.Unlock()
 
 	key := accessKey{schema, table}
 	if _, ok := c.blockedTableIDs[key]; !ok {
 		c.blockedTableIDs[key] = make(map[int64]struct{})
 	}
-
-	if _, exists := c.blockedTableIDs[key][physicalTableID]; !exists {
-		c.blockedTableIDs[key][physicalTableID] = struct{}{}
-		log.Info("add table id to blocked list",
-			zap.String("schema", schema), zap.String("table", table), zap.Int64("tableID", physicalTableID))
-	}
+	c.blockedTableIDs[key][physicalTableID] = struct{}{}
 }
 
 // GetBlockedTables returns the physical table IDs blocked by DDLs on the table.
 func (c *TableInfoProvider) GetBlockedTables(schema, table string) []int64 {
-	c.idMu.RLock()
-	defer c.idMu.RUnlock()
+	c.mu.RLock()
+	defer c.mu.RUnlock()
 
-	blocked := c.blockedTableIDs[accessKey{schema, table}]
-	result := make([]int64, 0, len(blocked))
-	for item := range blocked {
-		result = append(result, item)
-	}
-	return result
+	return slices.Collect(maps.Keys(c.blockedTableIDs[accessKey{schema, table}]))
 }
 
 // tableVersions keeps the versions of one table in ascending order. A table has
@@ -302,24 +285,23 @@ func (t *tableVersions) set(version, effectiveTs uint64, info *common.TableInfo)
 }
 
 func (t *tableVersions) releaseBefore(watermark uint64) {
-	var covered int
-	var floorEffectiveTs uint64
+	// ReadAt resolves by version, while WriteTableInfoAt orders retention by
+	// effectiveTs, so the newest released entry of either stays as a floor.
+	var versionFloor, effectiveTsFloor uint64
 	for _, item := range t.entries {
+		if item.version <= watermark {
+			versionFloor = max(versionFloor, item.version)
+		}
 		if item.effectiveTs <= watermark {
-			covered++
-			floorEffectiveTs = max(floorEffectiveTs, item.effectiveTs)
+			effectiveTsFloor = max(effectiveTsFloor, item.effectiveTs)
 		}
 	}
-	if covered <= 1 {
-		return
-	}
-	kept := 0
+	kept := t.entries[:0]
 	for _, item := range t.entries {
-		if item.effectiveTs >= floorEffectiveTs {
-			t.entries[kept] = item
-			kept++
+		if item.version >= versionFloor || item.effectiveTs >= effectiveTsFloor {
+			kept = append(kept, item)
 		}
 	}
-	clear(t.entries[kept:])
-	t.entries = t.entries[:kept]
+	clear(t.entries[len(kept):])
+	t.entries = kept
 }

@@ -124,7 +124,7 @@ func TestDecodeGroupBroadcastDDLDedupBootstrapAndStaleSkip(t *testing.T) {
 		require.NoError(t, err)
 		s := raw.(*simple.Decoder)
 		s.ShareTableInfo(schemas)
-		return decoder{Decoder: s, schema: s}
+		return decoder{EventDecoder: s, schema: s}
 	}
 	group := &Group{codecConfig: cfg, schemas: schemas}
 	dec0 := newSimple()

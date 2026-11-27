@@ -560,7 +560,20 @@ func ParseFileIndexFromFileName(fileName string, extension string) (FileIndex, e
 	}, nil
 }
 
-var dateSeparatorDayRegexp *regexp.Regexp
+var dateSeparatorDayRegexp = regexp.MustCompile("^" + config.DateSeparatorDay.GetPattern() + "$")
+
+func dateFromDMLPath(filePath string) string {
+	parts := strings.Split(filePath, "/")
+	// The date directory is the rightmost complete date component. Searching
+	// from the end prevents dates embedded in schema or table names from being
+	// mistaken for the retention date.
+	for i := len(parts) - 2; i >= 0; i-- {
+		if dateSeparatorDayRegexp.MatchString(parts[i]) {
+			return parts[i]
+		}
+	}
+	return ""
+}
 
 // RemoveExpiredFiles removes expired files from external storage.
 func RemoveExpiredFiles(
@@ -573,9 +586,6 @@ func RemoveExpiredFiles(
 	if cfg.DateSeparator != config.DateSeparatorDay {
 		return nil
 	}
-	if dateSeparatorDayRegexp == nil {
-		dateSeparatorDayRegexp = regexp.MustCompile(config.DateSeparatorDay.GetPattern())
-	}
 
 	ttl := time.Duration(cfg.FileExpirationDays) * time.Hour * 24
 	currTime := oracle.GetTimeFromTS(checkpointTs).Add(-ttl)
@@ -585,8 +595,8 @@ func RemoveExpiredFiles(
 	err := util.RemoveFilesIf(ctx, storage, func(path string) bool {
 		// the path is like: <schema>/<table>/<tableVersion>/<partitionID>/<date>/CDC_{dispatcher}_{num}.extension
 		// or <schema>/<table>/<tableVersion>/<partitionID>/<date>/CDC{num}.extension
-		match := dateSeparatorDayRegexp.FindString(path)
-		return match != "" && match < expiredDate
+		date := dateFromDMLPath(path)
+		return date != "" && date < expiredDate
 	}, nil)
 	return err
 }

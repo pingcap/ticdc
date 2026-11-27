@@ -99,7 +99,7 @@ type wokenDML struct {
 // decoder pairs a generic codec decoder with the simple-protocol decoder when
 // the source needs schema-aware row buffering.
 type decoder struct {
-	common.Decoder
+	common.EventDecoder
 	schema *simple.Decoder
 }
 
@@ -133,12 +133,6 @@ type Options struct {
 	CodecConfig   *common.Config
 	ReplicaConfig *config.ReplicaConfig
 	UpstreamURI   *url.URL
-}
-
-// tableInfoSharer is implemented by protocol decoders that read table info
-// through the cache shared by all decoders.
-type tableInfoSharer interface {
-	ShareTableInfo(*common.TableInfoProvider)
 }
 
 // NewGroup builds a decode group with concurrency decoupled from source partitions.
@@ -202,17 +196,15 @@ func NewGroup(ctx context.Context, opts Options) *Group {
 			log.Panic("consumer event decoder initialization failed", zap.String("protocol", codecConfig.Protocol.String()), zap.Error(err))
 		}
 
-		if sharer, ok := item.(tableInfoSharer); ok {
-			sharer.ShareTableInfo(group.schemas)
-		}
+		item.ShareTableInfo(group.schemas)
 
 		schema, ok := item.(*simple.Decoder)
 		if !ok {
-			group.decoders[i] = decoder{Decoder: item}
+			group.decoders[i] = decoder{EventDecoder: item}
 			continue
 		}
 
-		group.decoders[i] = decoder{Decoder: item, schema: schema}
+		group.decoders[i] = decoder{EventDecoder: item, schema: schema}
 	}
 
 	return group
@@ -407,17 +399,17 @@ func (d *Group) decodeSimpleRow(schemaDecoder *simple.Decoder, future *Future) {
 func (d *Group) decodeSimpleDDL(schemaDecoder *simple.Decoder, future *Future) {
 	ddlEvent := schemaDecoder.DecodeDDLEvent()
 
+	var effectiveTs uint64
+	if !ddlEvent.IsBootstrap {
+		effectiveTs = ddlEvent.FinishedTs
+	}
 	var woken []wokenDML
 	d.waitMu.Lock()
-	if !ddlEvent.IsBootstrap && ddlEvent.FinishedTs != 0 {
-		d.schemas.WriteTableInfoAt(ddlEvent.TableInfo, ddlEvent.FinishedTs)
-	} else {
-		d.schemas.WriteTableInfo(ddlEvent.TableInfo)
-	}
+	d.schemas.WriteTableInfo(ddlEvent.TableInfo, effectiveTs)
 
 	woken = d.popWaitingLocked(ddlEvent.TableInfo, woken)
 	if len(ddlEvent.MultipleTableInfos) > 1 && ddlEvent.MultipleTableInfos[1] != nil {
-		d.schemas.WriteTableInfo(ddlEvent.MultipleTableInfos[1])
+		d.schemas.WriteTableInfo(ddlEvent.MultipleTableInfos[1], 0)
 		woken = d.popWaitingLocked(ddlEvent.MultipleTableInfos[1], woken)
 	}
 	d.waitMu.Unlock()

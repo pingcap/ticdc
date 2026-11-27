@@ -17,6 +17,8 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/pingcap/ticdc/downstreamadapter/sink/columnselector"
@@ -29,6 +31,7 @@ import (
 	"github.com/pingcap/tidb/pkg/kv"
 	"github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/tidb/pkg/parser/ast"
+	"github.com/pingcap/tidb/pkg/parser/mysql"
 	"github.com/pingcap/tidb/pkg/tablecodec"
 	"github.com/pingcap/tidb/pkg/util/chunk"
 	"github.com/stretchr/testify/require"
@@ -1138,6 +1141,145 @@ func TestDDLSequence(t *testing.T) {
 	require.Equal(t, obtained.GetBlockedTables().InfluenceType, commonEvent.InfluenceTypeNormal)
 }
 
+func TestDecoderTableInfoCacheUsesDDLCommitTsAcrossColumnChanges(t *testing.T) {
+	ctx := context.Background()
+	codecConfig := common.NewConfig(config.ProtocolCanalJSON)
+	codecConfig.EnableTiDBExtension = true
+
+	decoder, err := NewDecoder(ctx, codecConfig, nil)
+	require.NoError(t, err)
+
+	buildRowMessage := func(commitTs uint64, mysqlTypes map[string]string) *canalJSONMessageWithTiDBExtension {
+		data := map[string]any{
+			"data": "insert_1",
+			"id":   "525",
+		}
+		if _, ok := mysqlTypes["new_col"]; ok {
+			data["new_col"] = nil
+		}
+		return &canalJSONMessageWithTiDBExtension{
+			JSONMessage: &JSONMessage{
+				Schema:    "test",
+				Table:     "table_5",
+				PKNames:   []string{"id"},
+				IsDDL:     false,
+				EventType: "INSERT",
+				SQLType: map[string]int32{
+					"data":    12,
+					"id":      4,
+					"new_col": 4,
+				},
+				MySQLType: mysqlTypes,
+				Data:      []map[string]any{data},
+			},
+			Extensions: &tidbExtension{CommitTs: commitTs},
+		}
+	}
+
+	decodeRow := func(message *canalJSONMessageWithTiDBExtension) *commonEvent.DMLEvent {
+		payload, err := json.Marshal(message)
+		require.NoError(t, err)
+		decoder.AddKeyValue(nil, payload)
+		messageType, hasNext := decoder.HasNext()
+		require.True(t, hasNext)
+		require.Equal(t, common.MessageTypeRow, messageType)
+		return decoder.NextDMLEvent()
+	}
+
+	columnNames := func(event *commonEvent.DMLEvent) []string {
+		columns := event.TableInfo.GetColumns()
+		result := make([]string, 0, len(columns))
+		for _, column := range columns {
+			result = append(result, column.Name.O)
+		}
+		return result
+	}
+
+	oldSchema := map[string]string{
+		"data": "varchar(255)",
+		"id":   "int",
+	}
+	newSchema := map[string]string{
+		"data":    "varchar(255)",
+		"id":      "int",
+		"new_col": "int",
+	}
+
+	oldEvent := decodeRow(buildRowMessage(100, oldSchema))
+	require.Equal(t, []string{"data", "id"}, columnNames(oldEvent))
+
+	ddlMessage := &canalJSONMessageWithTiDBExtension{
+		JSONMessage: &JSONMessage{
+			Schema:    "test",
+			Table:     "table_5",
+			IsDDL:     true,
+			EventType: "ALTER",
+			Query:     "ALTER TABLE `test`.`table_5` ADD COLUMN `new_col` INT",
+		},
+		Extensions: &tidbExtension{CommitTs: 200},
+	}
+	payload, err := json.Marshal(ddlMessage)
+	require.NoError(t, err)
+	decoder.AddKeyValue(nil, payload)
+	messageType, hasNext := decoder.HasNext()
+	require.True(t, hasNext)
+	require.Equal(t, common.MessageTypeDDL, messageType)
+	ddl := decoder.NextDDLEvent()
+	require.Equal(t, oldEvent.GetTableID(), ddl.GetBlockedTables().TableIDs[0])
+
+	newEvent := decodeRow(buildRowMessage(300, newSchema))
+	require.Equal(t, []string{"data", "id", "new_col"}, columnNames(newEvent))
+
+	lateOldEvent := decodeRow(buildRowMessage(100, oldSchema))
+	require.Equal(t, []string{"data", "id"}, columnNames(lateOldEvent))
+	require.Equal(t, oldEvent.GetTableID(), lateOldEvent.GetTableID())
+	require.Equal(t, oldEvent.GetTableID(), newEvent.GetTableID())
+}
+
+func TestDecoderTableInfoCacheUsesDDLCommitTsBoundary(t *testing.T) {
+	dec := &decoder{
+		cache: common.NewTableInfoProvider(),
+	}
+	buildMessage := func(commitTs uint64, mysqlTypes map[string]string) *canalJSONMessageWithTiDBExtension {
+		return &canalJSONMessageWithTiDBExtension{
+			JSONMessage: &JSONMessage{
+				Schema:    "test",
+				Table:     "table_5",
+				PKNames:   []string{"id"},
+				MySQLType: mysqlTypes,
+			},
+			Extensions: &tidbExtension{CommitTs: commitTs},
+		}
+	}
+	columnNames := func(tableInfo *commonType.TableInfo) []string {
+		columns := tableInfo.GetColumns()
+		result := make([]string, 0, len(columns))
+		for _, column := range columns {
+			result = append(result, column.Name.O)
+		}
+		return result
+	}
+	beforeDropSchema := map[string]string{
+		"data":    "varchar(255)",
+		"id":      "int",
+		"new_col": "int",
+	}
+	afterDropSchema := map[string]string{
+		"data": "varchar(255)",
+		"id":   "int",
+	}
+
+	dec.cache.AddDDL("test", "table_5", 200)
+	sameTsAsDDL := dec.queryTableInfo(buildMessage(200, beforeDropSchema), true)
+	afterDDL := dec.queryTableInfo(buildMessage(300, afterDropSchema), true)
+	lateSameTsAsDDL := dec.queryTableInfo(buildMessage(200, beforeDropSchema), true)
+
+	require.Equal(t, []string{"data", "id", "new_col"}, columnNames(sameTsAsDDL))
+	require.Equal(t, []string{"data", "id"}, columnNames(afterDDL))
+	require.NotSame(t, sameTsAsDDL, afterDDL)
+	require.Same(t, sameTsAsDDL, lateSameTsAsDDL)
+}
+
 func TestCreateTableDDL(t *testing.T) {
 	helper := commonEvent.NewEventTestHelper(t)
 	defer helper.Close()
@@ -1284,7 +1426,9 @@ func TestRowKey(t *testing.T) {
 // alphabetically first column (s_data here, because the decoder sorts columns by
 // name) was used instead, which made every UPDATE scan the whole table.
 func TestTableInfoFromMessageLocatesRowByPrimaryKey(t *testing.T) {
-	dec := &decoder{cache: common.NewTableInfoProvider()}
+	dec := &decoder{
+		cache: common.NewTableInfoProvider(),
+	}
 	tableInfo := dec.queryTableInfo(&canalJSONMessageWithTiDBExtension{
 		JSONMessage: &JSONMessage{
 			Schema:  "test",
@@ -1298,12 +1442,12 @@ func TestTableInfoFromMessageLocatesRowByPrimaryKey(t *testing.T) {
 			},
 		},
 		Extensions: &tidbExtension{CommitTs: 100},
-	})
+	}, true)
 
 	common.RequireRowLocatorByPrimaryKey(t, tableInfo, "s_i_id", "s_w_id")
 }
 
-func TestCanalJSONNextDDLEventInvalidatesSharedCache(t *testing.T) {
+func TestDDLInvalidatesCache(t *testing.T) {
 	ctx := t.Context()
 	cfg := common.NewConfig(config.ProtocolCanalJSON)
 	cfg.EnableTiDBExtension = true
@@ -1313,12 +1457,12 @@ func TestCanalJSONNextDDLEventInvalidatesSharedCache(t *testing.T) {
 	provider := common.NewTableInfoProvider()
 	dec, err := NewDecoder(ctx, cfg, nil)
 	require.NoError(t, err)
-	dec.(*decoder).ShareTableInfo(provider)
+	dec.ShareTableInfo(provider)
 
 	t1 := commonType.WrapTableInfo("test", &model.TableInfo{ID: 1, Name: ast.NewCIStr("t1"), UpdateTS: 100})
 	t2 := commonType.WrapTableInfo("other", &model.TableInfo{ID: 2, Name: ast.NewCIStr("t2"), UpdateTS: 100})
-	provider.WriteTableInfo(t1)
-	provider.WriteTableInfo(t2)
+	provider.WriteTableInfo(t1, 0)
+	provider.WriteTableInfo(t2, 0)
 
 	msg, err := encoder.EncodeDDLEvent(&commonEvent.DDLEvent{
 		FinishedTs: 120,
@@ -1342,17 +1486,23 @@ func TestCanalJSONNextDDLEventInvalidatesSharedCache(t *testing.T) {
 	require.Nil(t, afterT2)
 }
 
-func TestTxnDecoderReusesTableInfo(t *testing.T) {
+func TestTxnTableInfo(t *testing.T) {
 	cfg := common.NewConfig(config.ProtocolCanalJSON)
 	cfg.EnableTiDBExtension = true
 	cfg.Terminator = "\n"
 
-	row1 := `{"id":0,"database":"test","table":"t1","pkNames":["id"],"isDdl":false,"type":"INSERT","es":1,"ts":1,"sql":"","sqlType":{"id":4,"v":4},"mysqlType":{"id":"int","v":"int"},"data":[{"id":"1","v":"10"}],"old":null,"_tidb":{"commitTs":101}}`
-	row2 := `{"id":0,"database":"test","table":"t1","pkNames":["id"],"isDdl":false,"type":"INSERT","es":1,"ts":1,"sql":"","sqlType":{"id":4,"v":4},"mysqlType":{"id":"int","v":"int"},"data":[{"id":"2","v":"20"}],"old":null,"_tidb":{"commitTs":102}}`
-	row3 := `{"id":0,"database":"test","table":"t2","pkNames":["id"],"isDdl":false,"type":"INSERT","es":1,"ts":1,"sql":"","sqlType":{"id":4,"v":4},"mysqlType":{"id":"int","v":"int"},"data":[{"id":"3","v":"30"}],"old":null,"_tidb":{"commitTs":103}}`
+	insert := func(table, id, v string, ts int64) string {
+		return `{"database":"test","table":"` + table + `","pkNames":["id"],"isDdl":false,"type":"INSERT","es":1,"ts":1,"sql":"","sqlType":{"id":4,"v":4},"mysqlType":{"id":"int","v":"int"},"data":[{"id":"` + id + `","v":"` + v + `"}],"_tidb":{"commitTs":` + strconv.FormatInt(ts, 10) + `}}`
+	}
+	keyOnly := `{"database":"test","table":"t1","pkNames":["id"],"isDdl":false,"type":"INSERT","es":1,"ts":1,"sql":"","sqlType":{"id":4},"mysqlType":{"id":"int"},"data":[{"id":"3"}],"_tidb":{"commitTs":103}}`
 
 	dec := NewTxnDecoder(cfg)
-	dec.AddKeyValue(nil, []byte(row1+"\n"+row2+"\n"+row3+"\n"))
+	dec.AddKeyValue(nil, []byte(strings.Join([]string{
+		insert("t1", "1", "10", 101),
+		insert("t1", "2", "20", 102),
+		keyOnly,
+		insert("t2", "4", "40", 104),
+	}, "\n")+"\n"))
 
 	var events []*commonEvent.DMLEvent
 	for {
@@ -1365,7 +1515,125 @@ func TestTxnDecoderReusesTableInfo(t *testing.T) {
 		t.Cleanup(dml.PostFlush)
 		events = append(events, dml)
 	}
-	require.Len(t, events, 3)
+	require.Len(t, events, 4)
+
+	// Same table and layout reuse the info, a changed column set or table rebuilds it.
 	require.Same(t, events[0].TableInfo, events[1].TableInfo)
 	require.NotSame(t, events[0].TableInfo, events[2].TableInfo)
+	require.Len(t, events[2].TableInfo.GetColumns(), 1)
+	require.NotSame(t, events[0].TableInfo, events[3].TableInfo)
+
+	row, ok := events[1].GetNextRow()
+	require.True(t, ok)
+	require.Equal(t, int64(2), row.Row.GetInt64(0))
+	require.Equal(t, int64(20), row.Row.GetInt64(1))
+}
+
+func TestColdDelete(t *testing.T) {
+	ctx := t.Context()
+	helper := commonEvent.NewEventTestHelper(t)
+	defer helper.Close()
+
+	helper.Tk().MustExec("use test")
+	_ = helper.DDL2Event("create table t1 (id int primary key, val varchar(32))")
+	deleteEvent := helper.DML2Event("test", "t1", "insert into test.t1 values (1, 'old')")
+	deleteEvent.CommitTs = 101
+	deleteRow, ok := deleteEvent.GetNextRow()
+	require.True(t, ok)
+	deleteRow.PreRow, deleteRow.Row = deleteRow.Row, chunk.Row{}
+	deleteRowEvent := &commonEvent.RowEvent{
+		TableInfo:      deleteEvent.TableInfo,
+		Event:          deleteRow,
+		CommitTs:       deleteEvent.CommitTs,
+		ColumnSelector: columnselector.NewDefaultColumnSelector(),
+		Callback:       func() {},
+	}
+	insertEvent := helper.DML2Event("test", "t1", "insert into test.t1 values (2, 'hello')")
+	insertEvent.CommitTs = 102
+	insertRow, ok := insertEvent.GetNextRow()
+	require.True(t, ok)
+	insertRowEvent := &commonEvent.RowEvent{
+		TableInfo:      insertEvent.TableInfo,
+		Event:          insertRow,
+		CommitTs:       insertEvent.CommitTs,
+		ColumnSelector: columnselector.NewDefaultColumnSelector(),
+		Callback:       func() {},
+	}
+
+	cfg := common.NewConfig(config.ProtocolCanalJSON)
+	cfg.EnableTiDBExtension = true
+	cfg.DeleteOnlyHandleKeyColumns = true
+
+	encoder, err := NewJSONRowEventEncoder(cfg, nil)
+	require.NoError(t, err)
+	require.NoError(t, encoder.AppendRowChangedEvent(ctx, "", deleteRowEvent))
+	deleteMsgs := encoder.Build()
+	require.Len(t, deleteMsgs, 1)
+	require.NoError(t, encoder.AppendRowChangedEvent(ctx, "", insertRowEvent))
+	insertMsgs := encoder.Build()
+	require.Len(t, insertMsgs, 1)
+
+	provider := common.NewTableInfoProvider()
+	decA, err := NewDecoder(ctx, cfg, nil)
+	require.NoError(t, err)
+	decA.ShareTableInfo(provider)
+	decB, err := NewDecoder(ctx, cfg, nil)
+	require.NoError(t, err)
+	decB.ShareTableInfo(provider)
+
+	decA.AddKeyValue(deleteMsgs[0].Key, deleteMsgs[0].Value)
+	tp, hasNext := decA.HasNext()
+	require.True(t, hasNext)
+	require.Equal(t, common.MessageTypeRow, tp)
+	decodedDelete := decA.NextDMLEvent()
+	t.Cleanup(decodedDelete.PostFlush)
+	require.Len(t, decodedDelete.TableInfo.GetColumns(), 1)
+	_, cachedAfterDelete := provider.ReadAt("test", "t1", 102)
+	require.Nil(t, cachedAfterDelete)
+
+	decB.AddKeyValue(insertMsgs[0].Key, insertMsgs[0].Value)
+	tp, hasNext = decB.HasNext()
+	require.True(t, hasNext)
+	require.Equal(t, common.MessageTypeRow, tp)
+	decodedInsert := decB.NextDMLEvent()
+	t.Cleanup(decodedInsert.PostFlush)
+	require.Len(t, decodedInsert.TableInfo.GetColumns(), 2)
+	row, ok := decodedInsert.GetNextRow()
+	require.True(t, ok)
+	require.Equal(t, int64(2), row.Row.GetInt64(0))
+	require.Equal(t, "hello", string(row.Row.GetBytes(1)))
+
+	_, cachedAfterInsert := provider.ReadAt("test", "t1", 103)
+	require.Same(t, decodedInsert.TableInfo, cachedAfterInsert)
+}
+
+// TestCanalJSONSnapshotLayoutNotCached checks that a layout rebuilt from the
+// snapshot is never written to the shared cache. buildData reports enum and set
+// columns as varchar for the snapshot rows, so caching that layout would decode
+// every later row of the table with the wrong column types.
+func TestSnapshotLayoutNotCached(t *testing.T) {
+	newMsg := func(mysqlType map[string]string) *canalJSONMessageWithTiDBExtension {
+		return &canalJSONMessageWithTiDBExtension{
+			JSONMessage: &JSONMessage{
+				Schema:    "test",
+				Table:     "t1",
+				PKNames:   []string{"id"},
+				MySQLType: mysqlType,
+			},
+			Extensions: &tidbExtension{CommitTs: 100},
+		}
+	}
+	dec := &decoder{cache: common.NewTableInfoProvider()}
+	shared := dec.queryTableInfo(newMsg(map[string]string{"id": "int", "val": "enum('a','b')"}), true)
+
+	built := dec.queryTableInfo(newMsg(map[string]string{"id": "int", "val": "varchar(32)"}), false)
+	require.NotSame(t, shared, built)
+	require.Equal(t, mysql.TypeEnum, shared.GetColumns()[1].FieldType.GetType())
+	require.Equal(t, mysql.TypeVarchar, built.GetColumns()[1].FieldType.GetType())
+	_, cached := dec.cache.ReadAt("test", "t1", 101)
+	require.Same(t, shared, cached)
+
+	cachedInfo := dec.queryTableInfo(newMsg(map[string]string{"id": "int", "val": "varchar(32)"}), true)
+	_, cached = dec.cache.ReadAt("test", "t1", 101)
+	require.Same(t, cachedInfo, cached)
 }

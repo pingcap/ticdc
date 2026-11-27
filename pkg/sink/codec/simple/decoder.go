@@ -62,7 +62,7 @@ type Decoder struct {
 // NewDecoder returns a simple decoder, reusing externalStorage when provided.
 func NewDecoder(
 	ctx context.Context, config *common.Config, db *sql.DB, externalStorage ...storeapi.Storage,
-) (common.Decoder, error) {
+) (common.EventDecoder, error) {
 	var storage storeapi.Storage
 	if len(externalStorage) > 0 {
 		storage = externalStorage[0]
@@ -291,12 +291,17 @@ func (d *Decoder) NextDDLEvent() *commonEvent.DDLEvent {
 	ddl := d.buildDDLEvent(d.msg)
 	d.msg = nil
 
-	if !ddl.IsBootstrap && ddl.FinishedTs != 0 {
-		d.memo.WriteTableInfoAt(ddl.TableInfo, ddl.FinishedTs)
-	} else {
-		d.memo.WriteTableInfo(ddl.TableInfo)
+	d.memo.AddBlockTableID(ddl.SchemaName, ddl.TableName, ddl.TableInfo.TableName.TableID)
+	if ddl.Query != "" {
+		ddl.BlockedTables = common.GetBlockedTables(d.memo, ddl)
 	}
-	d.memo.WriteTableInfo(ddl.MultipleTableInfos[1])
+
+	var effectiveTs uint64
+	if !ddl.IsBootstrap {
+		effectiveTs = ddl.FinishedTs
+	}
+	d.memo.WriteTableInfo(ddl.TableInfo, effectiveTs)
+	d.memo.WriteTableInfo(ddl.MultipleTableInfos[1], 0)
 
 	for ele := d.cachedMessages.Front(); ele != nil; {
 		msg := ele.Value.(*message)
@@ -358,6 +363,9 @@ func (d *Decoder) DecodeDDLEvent() *commonEvent.DDLEvent {
 	}
 	ddl := d.buildDDLEvent(d.msg)
 	d.msg = nil
+	if ddl.Query != "" {
+		ddl.BlockedTables = common.GetBlockedTables(d.memo, ddl)
+	}
 	return ddl
 }
 
@@ -501,7 +509,6 @@ func (d *Decoder) buildDDLEvent(msg *message) *commonEvent.DDLEvent {
 	result.FinishedTs = msg.CommitTs
 	result.SchemaName = tableInfo.TableName.Schema
 	result.TableName = tableInfo.TableName.Table
-	d.memo.AddBlockTableID(result.SchemaName, result.TableName, tableInfo.TableName.TableID)
 
 	if preTableInfo != nil {
 		result.ExtraSchemaName = preTableInfo.GetSchemaName()
@@ -515,7 +522,6 @@ func (d *Decoder) buildDDLEvent(msg *message) *commonEvent.DDLEvent {
 
 	actionType := common.GetDDLActionType(result.Query)
 	result.Type = byte(actionType)
-	result.BlockedTables = common.GetBlockedTables(d.memo, result)
 	return result
 }
 

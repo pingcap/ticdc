@@ -181,6 +181,12 @@ func (c *logCoordinator) handleMessage(_ context.Context, targetMessage *messagi
 				target: targetMessage.From,
 			}
 		case *heartbeatpb.LogCoordinatorResolvedTsRequest:
+			if msg.ChangefeedID == nil {
+				log.Warn("ignore log coordinator resolved ts request without changefeed ID",
+					zap.Stringer("from", targetMessage.From),
+					zap.String("type", targetMessage.Type.String()))
+				continue
+			}
 			c.sendResolvedTsToCoordinator(targetMessage.From, common.NewChangefeedIDFromPB(msg.ChangefeedID))
 		default:
 			log.Warn("unknown message type, ignore it",
@@ -288,6 +294,17 @@ func (c *logCoordinator) updateChangefeedStates(from node.ID, states *logservice
 	defer c.nodes.Unlock()
 	if _, alive := c.nodes.m[from]; !alive {
 		return
+	}
+
+	// The report is a full snapshot of the node, so a skipped entry would be
+	// treated as a removed changefeed below. Reject the whole report instead.
+	for _, state := range states.States {
+		if state.GetChangefeedID() == nil {
+			log.Warn("ignore changefeed states without changefeed ID",
+				zap.Stringer("from", from),
+				zap.String("type", messaging.TypeLogCoordinatorChangefeedStates.String()))
+			return
+		}
 	}
 
 	c.changefeedStates.Lock()

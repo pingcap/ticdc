@@ -57,12 +57,12 @@ func NewAvroDecoder(
 	ctx context.Context,
 	config *common.Config,
 	db *sql.DB,
-) (common.Decoder, error) {
+) (common.EventDecoder, error) {
 	registryURL := strings.TrimRight(config.AvroConfluentSchemaRegistry, "/")
 	if registryURL == "" {
 		return nil, errors.ErrAvroSchemaAPIError.GenWithStackByArgs("schema registry URI is empty")
 	}
-	schemaM, err := schemamanager.NewConfluentSchemaManager(ctx, registryURL, nil)
+	schemaM, err := schemamanager.NewConfluentSchemaManagerWithoutProbe(ctx, registryURL, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -75,7 +75,7 @@ func NewAvroDecoderWithSchemaManager(
 	config *common.Config,
 	schemaM schemamanager.SchemaManager,
 	db *sql.DB,
-) common.Decoder {
+) common.EventDecoder {
 	schemas, _ := lru.New(debeziumAvroDecoderSchemaCacheSize)
 	return &avroDecoder{
 		decoder: NewDecoder(config, db).(*decoder),

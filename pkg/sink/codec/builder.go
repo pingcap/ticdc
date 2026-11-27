@@ -64,7 +64,7 @@ func NewEventDecoder(
 	upstreamTiDB *sql.DB,
 	externalStorage storeapi.Storage,
 	schemaM schemamanager.SchemaManager,
-) (common.Decoder, error) {
+) (common.EventDecoder, error) {
 	switch codecConfig.Protocol {
 	case config.ProtocolOpen, config.ProtocolDefault:
 		return open.NewDecoder(ctx, codecConfig, upstreamTiDB, externalStorage)

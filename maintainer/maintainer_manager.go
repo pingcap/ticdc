@@ -106,21 +106,27 @@ func NewMaintainerManager(
 	return m
 }
 
-func logInvalidMaintainerMessage(msg *messaging.TargetMessage, reason string) {
-	log.Warn("ignore invalid maintainer message",
-		zap.String("from", msg.From.String()),
-		zap.String("type", msg.Type.String()),
-		zap.String("reason", reason))
-}
-
 func (m *Manager) recvMaintainerMessage(ctx context.Context, msg *messaging.TargetMessage) error {
 	if len(msg.Message) == 0 {
-		logInvalidMaintainerMessage(msg, "missing payload")
+		log.Warn("ignore invalid maintainer message",
+			zap.Stringer("from", msg.From),
+			zap.String("type", msg.Type.String()),
+			zap.String("reason", "missing payload"))
 		return nil
 	}
-	req := msg.Message[0].(*heartbeatpb.MaintainerCloseResponse)
-	if req == nil || req.ChangefeedID == nil {
-		logInvalidMaintainerMessage(msg, "missing changefeed ID")
+	req, ok := msg.Message[0].(*heartbeatpb.MaintainerCloseResponse)
+	if !ok {
+		log.Warn("ignore invalid maintainer message",
+			zap.Stringer("from", msg.From),
+			zap.String("type", msg.Type.String()),
+			zap.String("reason", "unexpected payload type"))
+		return nil
+	}
+	if req.ChangefeedID == nil {
+		log.Warn("ignore invalid maintainer message",
+			zap.Stringer("from", msg.From),
+			zap.String("type", msg.Type.String()),
+			zap.String("reason", "missing changefeed ID"))
 		return nil
 	}
 	return m.dispatcherMaintainerMessage(ctx, common.NewChangefeedIDFromPB(req.ChangefeedID), msg)
@@ -129,7 +135,10 @@ func (m *Manager) recvMaintainerMessage(ctx context.Context, msg *messaging.Targ
 // recvMessages is the message handler for maintainer manager.
 func (m *Manager) recvMessages(ctx context.Context, msg *messaging.TargetMessage) error {
 	if len(msg.Message) == 0 {
-		logInvalidMaintainerMessage(msg, "missing payload")
+		log.Warn("ignore invalid maintainer message",
+			zap.Stringer("from", msg.From),
+			zap.String("type", msg.Type.String()),
+			zap.String("reason", "missing payload"))
 		return nil
 	}
 	switch msg.Type {
@@ -143,12 +152,18 @@ func (m *Manager) recvMessages(ctx context.Context, msg *messaging.TargetMessage
 		switch msg.Type {
 		case messaging.TypeAddMaintainerRequest:
 			if msg.Message[0].(*heartbeatpb.AddMaintainerRequest).Id == nil {
-				logInvalidMaintainerMessage(msg, "missing changefeed ID")
+				log.Warn("ignore invalid maintainer message",
+					zap.Stringer("from", msg.From),
+					zap.String("type", msg.Type.String()),
+					zap.String("reason", "missing changefeed ID"))
 				return nil
 			}
 		case messaging.TypeRemoveMaintainerRequest:
 			if msg.Message[0].(*heartbeatpb.RemoveMaintainerRequest).Id == nil {
-				logInvalidMaintainerMessage(msg, "missing changefeed ID")
+				log.Warn("ignore invalid maintainer message",
+					zap.Stringer("from", msg.From),
+					zap.String("type", msg.Type.String()),
+					zap.String("reason", "missing changefeed ID"))
 				return nil
 			}
 		}
@@ -162,14 +177,20 @@ func (m *Manager) recvMessages(ctx context.Context, msg *messaging.TargetMessage
 	case messaging.TypeMaintainerBootstrapResponse:
 		req := msg.Message[0].(*heartbeatpb.MaintainerBootstrapResponse)
 		if req.ChangefeedID == nil {
-			logInvalidMaintainerMessage(msg, "missing changefeed ID")
+			log.Warn("ignore invalid maintainer message",
+				zap.Stringer("from", msg.From),
+				zap.String("type", msg.Type.String()),
+				zap.String("reason", "missing changefeed ID"))
 			return nil
 		}
 		return m.dispatcherMaintainerMessage(ctx, common.NewChangefeedIDFromPB(req.ChangefeedID), msg)
 	case messaging.TypeMaintainerPostBootstrapResponse:
 		req := msg.Message[0].(*heartbeatpb.MaintainerPostBootstrapResponse)
 		if req.ChangefeedID == nil {
-			logInvalidMaintainerMessage(msg, "missing changefeed ID")
+			log.Warn("ignore invalid maintainer message",
+				zap.Stringer("from", msg.From),
+				zap.String("type", msg.Type.String()),
+				zap.String("reason", "missing changefeed ID"))
 			return nil
 		}
 		return m.dispatcherMaintainerMessage(ctx, common.NewChangefeedIDFromPB(req.ChangefeedID), msg)
@@ -177,28 +198,40 @@ func (m *Manager) recvMessages(ctx context.Context, msg *messaging.TargetMessage
 	case messaging.TypeHeartBeatRequest:
 		req := msg.Message[0].(*heartbeatpb.HeartBeatRequest)
 		if req.ChangefeedID == nil {
-			logInvalidMaintainerMessage(msg, "missing changefeed ID")
+			log.Warn("ignore invalid maintainer message",
+				zap.Stringer("from", msg.From),
+				zap.String("type", msg.Type.String()),
+				zap.String("reason", "missing changefeed ID"))
 			return nil
 		}
 		return m.dispatcherMaintainerMessage(ctx, common.NewChangefeedIDFromPB(req.ChangefeedID), msg)
 	case messaging.TypeBlockStatusRequest:
 		req, ok := msg.Message[0].(*heartbeatpb.BlockStatusRequest)
 		if !ok || req == nil || req.ChangefeedID == nil {
-			logInvalidMaintainerMessage(msg, "missing changefeed ID")
+			log.Warn("ignore invalid maintainer message",
+				zap.Stringer("from", msg.From),
+				zap.String("type", msg.Type.String()),
+				zap.String("reason", "missing changefeed ID"))
 			return nil
 		}
 		return m.dispatcherMaintainerMessage(ctx, common.NewChangefeedIDFromPB(req.ChangefeedID), msg)
 	case messaging.TypeCheckpointTsMessage:
 		req := msg.Message[0].(*heartbeatpb.CheckpointTsMessage)
 		if req.ChangefeedID == nil {
-			logInvalidMaintainerMessage(msg, "missing changefeed ID")
+			log.Warn("ignore invalid maintainer message",
+				zap.Stringer("from", msg.From),
+				zap.String("type", msg.Type.String()),
+				zap.String("reason", "missing changefeed ID"))
 			return nil
 		}
 		return m.dispatcherMaintainerMessage(ctx, common.NewChangefeedIDFromPB(req.ChangefeedID), msg)
 	case messaging.TypeRedoResolvedTsProgressMessage:
 		req := msg.Message[0].(*heartbeatpb.RedoResolvedTsProgressMessage)
 		if req.ChangefeedID == nil {
-			logInvalidMaintainerMessage(msg, "missing changefeed ID")
+			log.Warn("ignore invalid maintainer message",
+				zap.Stringer("from", msg.From),
+				zap.String("type", msg.Type.String()),
+				zap.String("reason", "missing changefeed ID"))
 			return nil
 		}
 		return m.dispatcherMaintainerMessage(ctx, common.NewChangefeedIDFromPB(req.ChangefeedID), msg)

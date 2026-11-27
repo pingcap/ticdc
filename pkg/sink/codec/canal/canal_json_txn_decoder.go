@@ -16,14 +16,13 @@ package canal
 import (
 	"bytes"
 	"encoding/json"
+	"maps"
 
 	"github.com/pingcap/log"
 	commonType "github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"github.com/pingcap/ticdc/pkg/util"
-	timodel "github.com/pingcap/tidb/pkg/meta/model"
-	"github.com/pingcap/tidb/pkg/parser/ast"
 	"github.com/pingcap/tidb/pkg/util/chunk"
 	canal "github.com/pingcap/tiflow/proto/canal"
 	"go.uber.org/zap"
@@ -32,9 +31,12 @@ import (
 type txnDecoder struct {
 	data []byte
 
-	config    *common.Config
-	msg       canalJSONMessageInterface
-	tableInfo *commonType.TableInfo
+	config          *common.Config
+	msg             canalJSONMessageInterface
+	tableInfo       *commonType.TableInfo
+	tableMySQLTypes map[string]string
+	tablePKNames    map[string]struct{}
+	cache           *common.TableInfoProvider
 }
 
 // NewTxnDecoder return a new CanalJSONTxnEventDecoder.
@@ -43,6 +45,7 @@ func NewTxnDecoder(
 ) *txnDecoder {
 	return &txnDecoder{
 		config: codecConfig,
+		cache:  common.NewTableInfoProvider(),
 	}
 }
 
@@ -57,6 +60,8 @@ func (d *txnDecoder) AddKeyValue(_, value []byte) {
 	}
 	d.data = value
 	d.tableInfo = nil
+	d.tableMySQLTypes = nil
+	d.tablePKNames = nil
 }
 
 // HasNext return true if there is any event can be returned.
@@ -100,21 +105,29 @@ func (d *txnDecoder) HasNext() (common.MessageType, bool) {
 
 func (d *txnDecoder) NextDMLEvent() *commonEvent.DMLEvent {
 	if d.msg == nil || d.msg.messageType() != common.MessageTypeRow {
+		messageType := common.MessageTypeUnknown
+		if d.msg != nil {
+			messageType = d.msg.messageType()
+		}
 		log.Panic("message type is not row changed",
-			zap.Any("messageType", d.msg.messageType()), zap.Any("msg", d.msg))
+			zap.Any("messageType", messageType), zap.Any("msg", d.msg))
 	}
-	result := d.canalJSONMessage2RowChange()
+	msg := d.msg
 	d.msg = nil
-	return result
+	return d.canalJSONMessage2RowChange(msg)
 }
 
-func (d *txnDecoder) canalJSONMessage2RowChange() *commonEvent.DMLEvent {
-	msg := d.msg
-
+func (d *txnDecoder) canalJSONMessage2RowChange(msg canalJSONMessageInterface) *commonEvent.DMLEvent {
+	mysqlTypes := msg.getMySQLType()
+	pkNames := msg.pkNameSet()
 	if d.tableInfo == nil ||
 		d.tableInfo.GetSchemaName() != *msg.getSchema() ||
-		d.tableInfo.GetTableName() != *msg.getTable() {
-		d.tableInfo = newTableInfo(msg)
+		d.tableInfo.GetTableName() != *msg.getTable() ||
+		!maps.Equal(d.tableMySQLTypes, mysqlTypes) ||
+		!maps.Equal(d.tablePKNames, pkNames) {
+		d.tableInfo = newTableInfo(d.cache, msg)
+		d.tableMySQLTypes = mysqlTypes
+		d.tablePKNames = pkNames
 	}
 	tableInfo := d.tableInfo
 	result := new(commonEvent.DMLEvent)
@@ -165,17 +178,4 @@ func (d *txnDecoder) NextResolvedEvent() uint64 {
 // NextDDLEvent implements the Decoder interface
 func (d *txnDecoder) NextDDLEvent() *commonEvent.DDLEvent {
 	return nil
-}
-
-func newTableInfo(msg canalJSONMessageInterface) *commonType.TableInfo {
-	schemaName := *msg.getSchema()
-	tableName := *msg.getTable()
-	tableInfo := new(timodel.TableInfo)
-	tableInfo.Name = ast.NewCIStr(tableName)
-
-	columns := newTiColumns(msg)
-	tableInfo.Columns = columns
-	tableInfo.Indices = newTiIndices(columns, msg.pkNameSet())
-	commonType.SetHandleKeyFlags(tableInfo)
-	return commonType.NewTableInfo4Decoder(schemaName, tableInfo)
 }

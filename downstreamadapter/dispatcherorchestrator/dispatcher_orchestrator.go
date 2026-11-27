@@ -107,7 +107,7 @@ func (m *DispatcherOrchestrator) RecvMaintainerRequest(
 
 	key, ok := getPendingMessageKey(msg)
 	if !ok {
-		log.Warn("unknown message type, drop message",
+		log.Warn("invalid maintainer request, drop message",
 			zap.String("type", msg.Type.String()))
 		return nil
 	}
@@ -133,12 +133,15 @@ func getPendingMessageKey(msg *messaging.TargetMessage) (pendingMessageKey, bool
 	var changefeedID *heartbeatpb.ChangefeedID
 	switch req := msg.Message[0].(type) {
 	case *heartbeatpb.MaintainerBootstrapRequest:
-		changefeedID = req.ChangefeedID
+		changefeedID = req.GetChangefeedID()
 	case *heartbeatpb.MaintainerPostBootstrapRequest:
-		changefeedID = req.ChangefeedID
+		changefeedID = req.GetChangefeedID()
 	case *heartbeatpb.MaintainerCloseRequest:
-		changefeedID = req.ChangefeedID
+		changefeedID = req.GetChangefeedID()
 	default:
+		return pendingMessageKey{}, false
+	}
+	if changefeedID == nil {
 		return pendingMessageKey{}, false
 	}
 	return pendingMessageKey{
@@ -182,6 +185,9 @@ func (m *DispatcherOrchestrator) handleBootstrapRequest(
 ) error {
 	if m.fenced.Load() {
 		return nil
+	}
+	if err := validateChangefeedIdentity(req.ChangefeedID); err != nil {
+		return err
 	}
 	cfId := common.NewChangefeedIDFromPB(req.ChangefeedID)
 	maintainerEpoch := req.MaintainerEpoch
@@ -358,6 +364,16 @@ func (m *DispatcherOrchestrator) handleBootstrapRequest(
 	response := createBootstrapResponse(req.ChangefeedID, manager, startTs, redoStartTs)
 	manager.MaintainerFenceMu.Unlock()
 	return m.sendResponse(from, messaging.MaintainerManagerTopic, response)
+}
+
+func validateChangefeedIdentity(changefeedID *heartbeatpb.ChangefeedID) error {
+	if changefeedID == nil {
+		return common.ValidateChangefeedID("")
+	}
+	if err := common.ValidateChangefeedID(changefeedID.Name); err != nil {
+		return err
+	}
+	return common.ValidateKeyspace(changefeedID.Keyspace)
 }
 
 // bootstrapTableTrigger describes one table trigger flavor during bootstrap

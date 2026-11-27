@@ -15,9 +15,19 @@
 package schemamanager
 
 import (
+	"hash/maphash"
 	"strconv"
 	"sync"
+
+	lru "github.com/hashicorp/golang-lru"
 )
+
+const (
+	defaultDecodeSchemaCacheSize = 1024
+	lockStripeCount              = 64
+)
+
+var lockSeed = maphash.MakeSeed()
 
 type schemaCacheEntry struct {
 	schemaVersion    uint64
@@ -32,15 +42,18 @@ type schemaCacheKey struct {
 }
 
 type schemaCache struct {
-	mu      sync.RWMutex
-	entries map[schemaCacheKey]*schemaCacheEntry
+	mu            sync.RWMutex
+	entries       map[schemaCacheKey]*schemaCacheEntry
+	decodeEntries *lru.Cache
 
-	subjectLocks sync.Map
+	locks [lockStripeCount]sync.Mutex
 }
 
 func newSchemaCache() *schemaCache {
+	decodeEntries, _ := lru.New(defaultDecodeSchemaCacheSize)
 	return &schemaCache{
-		entries: make(map[schemaCacheKey]*schemaCacheEntry),
+		entries:       make(map[schemaCacheKey]*schemaCacheEntry),
+		decodeEntries: decodeEntries,
 	}
 }
 
@@ -93,7 +106,7 @@ func (c *schemaCache) getOrCreate(
 		return entry, true, nil
 	}
 
-	unlock := c.lockSubject(schemaName)
+	unlock := c.lock(schemaName)
 	defer unlock()
 
 	if entry, ok := c.loadByVersion(key, schemaVersion); ok {
@@ -108,9 +121,34 @@ func (c *schemaCache) getOrCreate(
 	return entry, false, nil
 }
 
-func (c *schemaCache) lockSubject(schemaName string) func() {
-	value, _ := c.subjectLocks.LoadOrStore(schemaName, &sync.Mutex{})
-	registerLock := value.(*sync.Mutex)
-	registerLock.Lock()
-	return registerLock.Unlock
+func (c *schemaCache) getOrLoadDecode(
+	key schemaCacheKey,
+	load func() (*schemaCacheEntry, error),
+) (*schemaCacheEntry, error) {
+	if cached, ok := c.decodeEntries.Get(key); ok {
+		return cached.(*schemaCacheEntry), nil
+	}
+
+	unlock := c.lock(key.schemaIdentity)
+	defer unlock()
+
+	if cached, ok := c.decodeEntries.Get(key); ok {
+		return cached.(*schemaCacheEntry), nil
+	}
+
+	entry, err := load()
+	if err != nil {
+		return nil, err
+	}
+	c.decodeEntries.Add(key, entry)
+	return entry, nil
+}
+
+// lock serializes cache misses on the same key. Keys are hashed onto a fixed
+// set of mutexes, so unrelated keys rarely wait for each other and the lock
+// table does not grow with the number of seen schemas.
+func (c *schemaCache) lock(key string) func() {
+	m := &c.locks[maphash.String(lockSeed, key)%lockStripeCount]
+	m.Lock()
+	return m.Unlock
 }

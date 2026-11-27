@@ -1664,11 +1664,10 @@ func TestRenameTable(t *testing.T) {
 	encoder, err := NewBatchEncoder(codecConfig, nil)
 	require.NoError(t, err)
 
-	shared := common.NewTableInfoProvider()
 	dec, err := NewDecoder(ctx, codecConfig, nil)
 	require.NoError(t, err)
-	dec.(*decoder).ShareTableInfo(shared)
-	allocator := shared
+	shared := common.NewTableInfoProvider()
+	dec.ShareTableInfo(shared)
 
 	m, err := encoder.EncodeDDLEvent(createTableDDL)
 	require.NoError(t, err)
@@ -1685,7 +1684,7 @@ func TestRenameTable(t *testing.T) {
 
 	decoder1, err := NewDecoder(ctx, codecConfig, nil)
 	require.NoError(t, err)
-	decoder1.(*decoder).ShareTableInfo(shared)
+	decoder1.ShareTableInfo(shared)
 
 	err = encoder.AppendRowChangedEvent(ctx, "", insertRowEvent)
 	require.NoError(t, err)
@@ -1699,7 +1698,7 @@ func TestRenameTable(t *testing.T) {
 
 	decodedInsert := decoder1.NextDMLEvent()
 	require.NotZero(t, decodedInsert.GetTableID())
-	require.Contains(t, allocator.GetBlockedTables("test", "t"), decodedInsert.GetTableID())
+	require.Contains(t, shared.GetBlockedTables("test", "t"), decodedInsert.GetTableID())
 
 	m, err = encoder.EncodeDDLEvent(renameTableDDL)
 	require.NoError(t, err)
@@ -1729,9 +1728,7 @@ func TestDDLSequence(t *testing.T) {
 	decoder, err := NewDecoder(ctx, codecConfig, nil)
 	require.NoError(t, err)
 	allocator := common.NewTableInfoProvider()
-	decoder.(interface {
-		ShareTableInfo(*common.TableInfoProvider)
-	}).ShareTableInfo(allocator)
+	decoder.ShareTableInfo(allocator)
 
 	createDB := helper.DDL2Event(`create database abc`)
 

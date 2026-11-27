@@ -1867,6 +1867,10 @@ func TestLargeMessageHandleKeyOnly(t *testing.T) {
 		common.EncodingFormatJSON,
 	} {
 		codecConfig.EncodingFormat = format
+		var handleKeyArg any = int64(127)
+		if format == common.EncodingFormatJSON {
+			handleKeyArg = "127"
+		}
 		for _, compressionType := range []string{
 			compression.None,
 			compression.Snappy,
@@ -1925,10 +1929,12 @@ func TestLargeMessageHandleKeyOnly(t *testing.T) {
 				mock.ExpectExec(query).WillReturnResult(driver.ResultNoRows)
 
 				names, values := common.LargeColumnKeyValues()
-				mock.ExpectQuery("select * from test.t where tu1 = 127").
+				mock.ExpectQuery("select * from `test`.`t` where `tu1` = ?").
+					WithArgs(handleKeyArg).
 					WillReturnRows(mock.NewRows(names).AddRow(values...))
 
-				mock.ExpectQuery("select * from test.t where tu1 = 127").
+				mock.ExpectQuery("select * from `test`.`t` where `tu1` = ?").
+					WithArgs(handleKeyArg).
 					WillReturnRows(mock.NewRows(names).AddRow(values...))
 
 			}

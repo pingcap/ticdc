@@ -411,8 +411,8 @@ func TestAvroNextDDLEventInvalidatesSharedCache(t *testing.T) {
 
 	t1 := commonType.WrapTableInfo("test", &timodel.TableInfo{ID: 1, Name: ast.NewCIStr("t1"), UpdateTS: 100})
 	t2 := commonType.WrapTableInfo("other", &timodel.TableInfo{ID: 2, Name: ast.NewCIStr("t2"), UpdateTS: 100})
-	provider.WriteTableInfo(t1)
-	provider.WriteTableInfo(t2)
+	provider.WriteTableInfo(t1, 0)
+	provider.WriteTableInfo(t2, 0)
 
 	payload, err := json.Marshal(&ddlEvent{
 		Query:    "ALTER TABLE test.t1 EXCHANGE PARTITION p0 WITH TABLE test.t_normal",

@@ -92,7 +92,7 @@ type decoder struct {
 // NewDecoder returns a canal-json decoder, reusing externalStorage when provided.
 func NewDecoder(
 	ctx context.Context, codecConfig *common.Config, db *sql.DB, externalStorage ...storeapi.Storage,
-) (common.Decoder, error) {
+) (common.EventDecoder, error) {
 	var storage storeapi.Storage
 	if len(externalStorage) > 0 {
 		storage = externalStorage[0]
@@ -285,8 +285,10 @@ func (d *decoder) assembleHandleKeyOnlyDMLEvent(
 		result.Data = []map[string]interface{}{data}
 	}
 
-	d.msg = result
-	return d.decodeDMLMessage(result)
+	// This layout describes the snapshot rows, where enum and set columns are
+	// labels instead of the index or bitmask used on the wire, so it must not
+	// become the shared layout of ordinary messages.
+	return d.canalJSONMessage2DMLEvent(result, false)
 }
 
 // NextDMLEvent implements the Decoder interface
@@ -315,11 +317,13 @@ func (d *decoder) decodeDMLMessage(msg canalJSONMessageInterface) *commonEvent.D
 			return d.assembleClaimCheckDMLEvent(ctx, message.Extensions.ClaimCheckLocation)
 		}
 	}
-	return d.canalJSONMessage2DMLEvent(msg)
+	return d.canalJSONMessage2DMLEvent(msg, true)
 }
 
-func (d *decoder) canalJSONMessage2DMLEvent(msg canalJSONMessageInterface) *commonEvent.DMLEvent {
-	tableInfo := d.queryTableInfo(msg)
+func (d *decoder) canalJSONMessage2DMLEvent(
+	msg canalJSONMessageInterface, cacheable bool,
+) *commonEvent.DMLEvent {
+	tableInfo := d.queryTableInfo(msg, cacheable)
 
 	result := new(commonEvent.DMLEvent)
 	result.TableInfo = tableInfo
@@ -538,27 +542,57 @@ func (d *decoder) ShareTableInfo(cache *common.TableInfoProvider) {
 	d.cache = cache
 }
 
-func (d *decoder) queryTableInfo(msg canalJSONMessageInterface) *commonType.TableInfo {
+func (d *decoder) queryTableInfo(
+	msg canalJSONMessageInterface, cacheable bool,
+) *commonType.TableInfo {
 	schemaName := *msg.getSchema()
 	tableName := *msg.getTable()
 
-	version, tableInfo := d.cache.ReadAt(schemaName, tableName, msg.getCommitTs())
-	if tableInfo == nil {
-		tidbTableInfo := new(timodel.TableInfo)
-		tidbTableInfo.ID = d.cache.AllocateTableID(schemaName, tableName)
-		d.cache.AddBlockTableID(schemaName, tableName, tidbTableInfo.ID)
-		tidbTableInfo.Name = ast.NewCIStr(tableName)
-
-		columns := newTiColumns(msg)
-		tidbTableInfo.Columns = columns
-		tidbTableInfo.Indices = newTiIndices(columns, msg.pkNameSet())
-		commonType.SetHandleKeyFlags(tidbTableInfo)
-		tableInfo = commonType.NewTableInfo4Decoder(schemaName, tidbTableInfo)
+	// A message rebuilt from a snapshot describes its own layout: the snapshot
+	// reports enum/set as labels, while the shared layout holds the wire types.
+	var version uint64
+	if cacheable {
+		var tableInfo *commonType.TableInfo
+		version, tableInfo = d.cache.ReadAt(schemaName, tableName, msg.getCommitTs())
+		if tableInfo != nil {
+			return tableInfo
+		}
+	}
+	tableInfo := newTableInfo(d.cache, msg)
+	d.cache.AddBlockTableID(schemaName, tableName, tableInfo.TableName.TableID)
+	if cacheable && isCacheableCanalTableInfo(msg) {
 		d.cache.Write(schemaName, tableName, version, tableInfo)
 	}
 	return tableInfo
 }
 
+// isCacheableCanalTableInfo reports whether msg carries the full column layout.
+// With DeleteOnlyHandleKeyColumns enabled, DELETE carries only handle columns
+// without setting _tidb.onlyHandleKey; an unresolved OnlyHandleKey large
+// message does the same. Caching either would omit non-key columns for later rows.
+func isCacheableCanalTableInfo(msg canalJSONMessageInterface) bool {
+	if msg.eventType() == canal.EventType_DELETE {
+		return false
+	}
+	if withExt, ok := msg.(*canalJSONMessageWithTiDBExtension); ok && withExt.Extensions != nil && withExt.Extensions.OnlyHandleKey {
+		return false
+	}
+	return true
+}
+
+func newTableInfo(cache *common.TableInfoProvider, msg canalJSONMessageInterface) *commonType.TableInfo {
+	schemaName := *msg.getSchema()
+	tableName := *msg.getTable()
+	tidbTableInfo := new(timodel.TableInfo)
+	tidbTableInfo.ID = cache.AllocateTableID(schemaName, tableName)
+	tidbTableInfo.Name = ast.NewCIStr(tableName)
+
+	columns := newTiColumns(msg)
+	tidbTableInfo.Columns = columns
+	tidbTableInfo.Indices = newTiIndices(columns, msg.pkNameSet())
+	commonType.SetHandleKeyFlags(tidbTableInfo)
+	return commonType.NewTableInfo4Decoder(schemaName, tidbTableInfo)
+}
 func newTiColumns(msg canalJSONMessageInterface) []*timodel.ColumnInfo {
 	type columnPair struct {
 		mysqlType string

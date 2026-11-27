@@ -81,6 +81,20 @@ func TestOrchestratorShard_CloseWaitsForRunningHandler(t *testing.T) {
 	}
 }
 
+func TestValidateChangefeedIdentity(t *testing.T) {
+	t.Parallel()
+
+	require.NoError(t, validateChangefeedIdentity(
+		common.NewChangeFeedIDWithName("cf-1", "tenant_a").ToPB()))
+	for _, changefeedID := range []*heartbeatpb.ChangefeedID{
+		nil,
+		{Name: "bad'name", Keyspace: "default"},
+		{Name: "valid-name", Keyspace: "bad'keyspace"},
+	} {
+		require.Error(t, validateChangefeedIdentity(changefeedID))
+	}
+}
+
 func TestOrchestratorShard_RunIsIdempotent(t *testing.T) {
 	t.Parallel()
 
@@ -472,6 +486,37 @@ func TestGetPendingMessageKey_SupportedTypes(t *testing.T) {
 	key, ok = getPendingMessageKey(closeReq)
 	require.True(t, ok)
 	require.Equal(t, pendingMessageKey{changefeedID: cfID, msgType: messaging.TypeMaintainerCloseRequest}, key)
+}
+
+func TestRecvMaintainerRequestRejectsMissingChangefeedID(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		request messaging.IOTypeT
+	}{
+		{name: "bootstrap", request: &heartbeatpb.MaintainerBootstrapRequest{}},
+		{name: "post bootstrap", request: &heartbeatpb.MaintainerPostBootstrapRequest{}},
+		{name: "close", request: &heartbeatpb.MaintainerCloseRequest{}},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			orchestrator := newTestDispatcherOrchestrator()
+			msg := messaging.NewSingleTargetMessage(
+				node.ID("to"),
+				messaging.DispatcherManagerManagerTopic,
+				tc.request,
+			)
+
+			_, ok := getPendingMessageKey(msg)
+			require.False(t, ok)
+			require.NoError(t, orchestrator.RecvMaintainerRequest(t.Context(), msg))
+			for _, shard := range orchestrator.shards {
+				require.Empty(t, shard.queue.pending)
+			}
+		})
+	}
 }
 
 func TestDispatcherOrchestratorLocalFenceDropsNewMessages(t *testing.T) {
