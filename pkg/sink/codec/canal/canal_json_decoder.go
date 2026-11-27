@@ -593,6 +593,7 @@ func newTableInfo(cache *common.TableInfoProvider, msg canalJSONMessageInterface
 	commonType.SetHandleKeyFlags(tidbTableInfo)
 	return commonType.NewTableInfo4Decoder(schemaName, tidbTableInfo)
 }
+
 func newTiColumns(msg canalJSONMessageInterface) []*timodel.ColumnInfo {
 	type columnPair struct {
 		mysqlType string
