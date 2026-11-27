@@ -411,7 +411,12 @@ func (c *storageReader) readIndex(ctx context.Context, path string) (cloudstorag
 	if err != nil {
 		return cloudstorage.FileIndex{}, err
 	}
-	return cloudstorage.ParseFileIndexFromFileName(strings.TrimSuffix(string(data), "\n"), c.fileExtension)
+	index, err := cloudstorage.ParseFileIndexFromFileName(strings.TrimSuffix(string(data), "\n"), c.fileExtension)
+	if err != nil {
+		log.Error("parse storage index file failed", zap.String("path", path), zap.Error(err))
+		return cloudstorage.FileIndex{}, err
+	}
+	return index, nil
 }
 
 func (c *storageReader) readSchema(ctx context.Context, path string) (cloudstorage.SchemaPathKey, bool, error) {
@@ -501,6 +506,17 @@ func (c *storageReader) Read(ctx context.Context) ([]*Payload, error) {
 		}
 		item := c.ranges[0]
 		key := item.key
+		// Ranges are sorted by TableVersion ascending, and every row or DDL under
+		// a schema version has CommitTs >= TableVersion. Once every lower-version
+		// range has been dispatched, advancing the watermark up to
+		// min(key.TableVersion-1, c.sourceCheckpoint) lets the writer flush
+		// earlier versions before the full scan finishes.
+		if c.sourceCheckpoint > 0 && key.TableVersion > 0 {
+			if candidate := min(key.TableVersion-1, c.sourceCheckpoint); candidate > c.watermark {
+				c.watermark = candidate
+				return []*Payload{{Watermark: candidate}}, nil
+			}
+		}
 		schema := c.schemas[key.SchemaPathKey]
 		ddlWatermark := c.schemaWatermark(key.SchemaPathKey, schema)
 
@@ -695,7 +711,7 @@ func newS3Client(ctx context.Context, uri *url.URL) *s3.Client {
 
 	// Only an AWS bucket served without an endpoint needs region detection.
 	provider := cmp.Or(values.Get("s3.provider"), values.Get("provider"))
-	if region != "" || (provider != "aws" && (provider != "" || endpoint != "")) {
+	if region != "" || endpoint != "" || (provider != "" && !strings.EqualFold(provider, "aws")) {
 		return client
 	}
 

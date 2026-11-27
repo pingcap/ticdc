@@ -50,6 +50,13 @@ func newPulsarReader(opts Options) *pulsarReader {
 		pulsarConfig = *replicaConfig.Sink.PulsarConfig
 	}
 
+	tlsTrustCerts := cmp.Or(query.Get("ca"), util.GetOrZero(pulsarConfig.TLSTrustCertsFilePath))
+	tlsCert := cmp.Or(query.Get("cert"), util.GetOrZero(pulsarConfig.TLSCertificateFile))
+	tlsKey := cmp.Or(query.Get("key"), util.GetOrZero(pulsarConfig.TLSKeyFilePath))
+	if (tlsCert == "") != (tlsKey == "") {
+		log.Panic("pulsar TLS certificate and key must be configured together")
+	}
+
 	brokerScheme := upstreamURI.Scheme
 	switch brokerScheme {
 	case config.PulsarHTTPScheme:
@@ -57,20 +64,25 @@ func newPulsarReader(opts Options) *pulsarReader {
 	case config.PulsarHTTPSScheme:
 		brokerScheme = "https"
 	}
+	if cmp.Or(tlsTrustCerts, tlsCert, tlsKey) != "" {
+		switch brokerScheme {
+		case config.PulsarScheme:
+			brokerScheme = config.PulsarSSLScheme
+		case "http":
+			brokerScheme = "https"
+		}
+	}
 
 	clientOptions := pulsar.ClientOptions{
 		URL:                   brokerScheme + "://" + upstreamURI.Host,
 		ConnectionTimeout:     5 * time.Second,
 		OperationTimeout:      5 * time.Second,
 		TLSValidateHostname:   true,
-		TLSTrustCertsFilePath: cmp.Or(query.Get("ca"), util.GetOrZero(pulsarConfig.TLSTrustCertsFilePath)),
-		TLSCertificateFile:    cmp.Or(query.Get("cert"), util.GetOrZero(pulsarConfig.TLSCertificateFile)),
-		TLSKeyFilePath:        cmp.Or(query.Get("key"), util.GetOrZero(pulsarConfig.TLSKeyFilePath)),
+		TLSTrustCertsFilePath: tlsTrustCerts,
+		TLSCertificateFile:    tlsCert,
+		TLSKeyFilePath:        tlsKey,
 		Logger:                pulsarutil.NewPulsarLogger(log.L()),
 		MemoryLimitBytes:      64 << 20,
-	}
-	if (clientOptions.TLSCertificateFile == "") != (clientOptions.TLSKeyFilePath == "") {
-		log.Panic("pulsar TLS certificate and key must be configured together")
 	}
 
 	oauth2 := config.OAuth2{}

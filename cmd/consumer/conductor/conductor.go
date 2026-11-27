@@ -100,7 +100,8 @@ func (c *Conductor) run(ctx context.Context, tasks <-chan *decode.Future, w *wri
 				return err
 			}
 
-			c.observeCheckpoint(w.Checkpoint())
+			c.observeCheckpoint(c.confirmCheckpoint(w.Checkpoint()))
+			c.recordPosition(future.Payload)
 		}
 	}
 }
@@ -168,6 +169,9 @@ func (c *Conductor) resolvePendingDecode(resolved decode.ResolvedDML) {
 
 func (c *Conductor) acceptBatch(events []event.Event, payload *source.Payload) error {
 	for _, e := range events {
+		if e == nil {
+			continue
+		}
 		if err := c.accept(e, payload); err != nil {
 			return err
 		}
@@ -198,27 +202,31 @@ func (c *Conductor) accept(e event.Event, payload *source.Payload) error {
 
 		c.queueDDL(e)
 	case nil:
-		// A source position becomes confirmable once all decoded events from
-		// this payload are registered, including idle resolved/skipped-DDL payloads.
-		if payload.Ack != nil {
-			c.positionsMu.Lock()
-
-			through := c.marker
-			if pending := c.positions[payload.Partition]; len(pending) != 0 {
-				through = max(through, pending[len(pending)-1].through)
-			}
-
-			c.positions[payload.Partition] = append(c.positions[payload.Partition],
-				sourcePosition{through: through, ack: payload.Ack})
-			c.positionsMu.Unlock()
-
-			notifyConfirmation(c.confirmable)
-		}
-
-		c.marker = 0
+		c.recordPosition(payload)
 	}
 
 	return nil
+}
+
+// recordPosition registers a confirmable source position once its decoded events
+// have been accepted and flushed.
+func (c *Conductor) recordPosition(payload *source.Payload) {
+	if payload != nil && payload.Ack != nil {
+		c.positionsMu.Lock()
+
+		through := c.marker
+		if pending := c.positions[payload.Partition]; len(pending) != 0 {
+			through = max(through, pending[len(pending)-1].through)
+		}
+
+		c.positions[payload.Partition] = append(c.positions[payload.Partition],
+			sourcePosition{through: through, ack: payload.Ack})
+		c.positionsMu.Unlock()
+
+		notifyConfirmation(c.confirmable)
+	}
+
+	c.marker = 0
 }
 
 // tableQueue holds one table's pending DMLs ordered by (CommitTs, dmlRowOrder).
@@ -661,6 +669,17 @@ func (c *Conductor) advanceWriter(w *writer.Writer) {
 	w.Advance(writer.Progress{Watermark: c.effectiveWatermark(), Pending: pending})
 }
 
+func (c *Conductor) confirmCheckpoint(checkpoint uint64) uint64 {
+	if len(c.pendingDDL) == 0 {
+		return checkpoint
+	}
+	ts := c.pendingDDL[0].GetCommitTs()
+	if ts == 0 {
+		return 0
+	}
+	return min(checkpoint, ts-1)
+}
+
 // observeCheckpoint publishes a durable checkpoint and wakes the confirm loop.
 func (c *Conductor) observeCheckpoint(checkpoint uint64) {
 	previous := c.checkpoint.Swap(checkpoint)
@@ -677,24 +696,33 @@ func (c *Conductor) confirm(ctx context.Context) error {
 		case <-ctx.Done():
 			return context.Cause(ctx)
 		case <-c.confirmable:
+			c.positionsMu.Lock()
 			checkpoint := c.checkpoint.Load()
 			if checkpoint == 0 {
+				c.positionsMu.Unlock()
 				continue
 			}
+			positions := maps.Clone(c.positions)
+			c.positionsMu.Unlock()
 
-			c.confirmPositions(ctx, checkpoint)
+			c.ackPositions(ctx, checkpoint, positions)
 		}
 	}
 }
 
-// confirmPositions acknowledges the checkpoint-covered prefix of every
-// partition. Offsets are committed cumulatively, so a failed acknowledgement is
-// logged and dropped: the next acknowledgement commits a higher offset.
+// confirmPositions acknowledges the checkpoint-covered prefix of every partition.
 func (c *Conductor) confirmPositions(ctx context.Context, checkpoint uint64) {
 	c.positionsMu.Lock()
 	positions := maps.Clone(c.positions)
 	c.positionsMu.Unlock()
 
+	c.ackPositions(ctx, checkpoint, positions)
+}
+
+// ackPositions acknowledges the checkpoint-covered prefix of every partition.
+// Superseded prefix entries are dropped immediately, while the final covered
+// position stays queued for retry if acknowledgement fails before shutdown.
+func (c *Conductor) ackPositions(ctx context.Context, checkpoint uint64, positions map[int32][]sourcePosition) {
 	for partition, pending := range positions {
 		count := sort.Search(len(pending), func(i int) bool {
 			return pending[i].through > checkpoint
@@ -703,8 +731,12 @@ func (c *Conductor) confirmPositions(ctx context.Context, checkpoint uint64) {
 			continue
 		}
 
-		if err := pending[count-1].ack(ctx); err != nil && ctx.Err() == nil {
-			log.Warn("consumer input confirmation failed", zap.Error(err))
+		if err := pending[count-1].ack(ctx); err != nil {
+			if ctx.Err() == nil {
+				log.Warn("consumer input confirmation failed", zap.Error(err))
+				c.dropPositions(partition, count-1)
+			}
+			continue
 		}
 
 		c.dropPositions(partition, count)

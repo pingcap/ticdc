@@ -47,7 +47,6 @@ CURRENT_GO_MINOR := $(shell printf '%s\n' '$(CURRENT_GO_VERSION)' | sed -E 's/^(
 # ref: https://github.com/cloudfoundry/gosigar/issues/58#issuecomment-1150925711
 # ref: https://github.com/pingcap/tidb/pull/39526#issuecomment-1407952955
 OS := "$(shell go env GOOS)"
-IS_ALPINE := $(shell if [ -f /etc/os-release ]; then grep -qi Alpine /etc/os-release && echo 1; else echo 0; fi)
 ifeq (${OS}, "linux")
 	CGO := 0
 else ifeq (${OS}, "darwin")
@@ -111,12 +110,7 @@ LDFLAGS += -X "$(TIFLOW_CDC_PKG)/pkg/version.GitHash=$(GITHASH)"
 LDFLAGS += -X "$(TIFLOW_CDC_PKG)/pkg/version.GitBranch=$(GITBRANCH)"
 LDFLAGS += -X "$(TIFLOW_CDC_PKG)/pkg/version.BuildTS=$(BUILDTS)"
 
-CONSUMER_BUILD_FLAG=
-ifeq ("${IS_ALPINE}", "1")
-	CONSUMER_BUILD_FLAG = -tags musl
-endif
 GOBUILD  := $(GOEXPERIMENT) CGO_ENABLED=$(CGO) $(GO) build $(BUILD_FLAG) -trimpath $(GOVENDORFLAG)
-CONSUMER_GOBUILD  := $(GOEXPERIMENT) CGO_ENABLED=1 $(GO) build $(CONSUMER_BUILD_FLAG) -trimpath $(GOVENDORFLAG)
 
 PACKAGE_LIST := go list ./... | grep -vE 'vendor|proto|ticdc/tests|integration|testing_utils|pb|pbmock|ticdc/bin'
 PACKAGES := $$($(PACKAGE_LIST))
@@ -180,14 +174,9 @@ cdc: check-go-version
 consumer: check-go-version
 	$(GOBUILD) -ldflags '$(LDFLAGS)' -o bin/cdc_consumer ./cmd/consumer
 
-kafka_consumer:
-	$(CONSUMER_GOBUILD) -ldflags '$(LDFLAGS)' -o bin/cdc_kafka_consumer ./cmd/kafka-consumer
-
-storage_consumer:
-	$(GOBUILD) -ldflags '$(LDFLAGS)' -o bin/cdc_storage_consumer ./cmd/storage-consumer
-
-pulsar_consumer:
-	$(GOBUILD) -ldflags '$(LDFLAGS)' -o bin/cdc_pulsar_consumer ./cmd/pulsar-consumer
+# Temporary compatibility for CI jobs that still check and cache the old names.
+kafka_consumer pulsar_consumer storage_consumer: consumer
+	ln -sf cdc_consumer bin/cdc_$@
 
 oauth2_server:
 	$(GOBUILD) -ldflags '$(LDFLAGS)' -o bin/oauth2-server ./cmd/oauth2-server/main.go
