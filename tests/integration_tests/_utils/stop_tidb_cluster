@@ -13,6 +13,7 @@ fi
 
 ${PKILL} cdc.test || true
 ${PKILL} cdc || true
+${PKILL} cdc_consumer || true
 ${PKILL} cdc_kafka_consumer || true
 ${PKILL} cdc_pulsar_consumer || true
 ${PKILL} cdc_storage_consumer || true

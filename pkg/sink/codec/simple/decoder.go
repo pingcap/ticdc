@@ -59,15 +59,16 @@ type Decoder struct {
 	CachedDMLMessages []*common.DMLMessage
 }
 
-// NewDecoder returns a simple decoder.
+// NewDecoder returns a simple decoder, reusing externalStorage when provided.
 func NewDecoder(
-	ctx context.Context, config *common.Config, db *sql.DB,
+	ctx context.Context, config *common.Config, db *sql.DB, externalStorage ...storeapi.Storage,
 ) (common.EventDecoder, error) {
-	var (
-		storage storeapi.Storage
-		err     error
-	)
-	if config.LargeMessageHandle.EnableClaimCheck() {
+	var storage storeapi.Storage
+	if len(externalStorage) > 0 {
+		storage = externalStorage[0]
+	}
+	var err error
+	if storage == nil && config.LargeMessageHandle.EnableClaimCheck() {
 		storageURI := config.LargeMessageHandle.ClaimCheckStorageURI
 		storage, err = util.GetExternalStorageWithDefaultTimeout(ctx, storageURI)
 		if err != nil {
