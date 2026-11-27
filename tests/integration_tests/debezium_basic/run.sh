@@ -39,7 +39,7 @@ EOF
 		fi
 
 		cdc_cli_changefeed create -c "debezium-$mode" --sink-uri="$sink_uri" --config="$config_file"
-		run_kafka_consumer "$WORK_DIR" "$sink_uri" "$config_file" "" "-$mode"
+		run_consumer "$WORK_DIR" "$sink_uri" "$config_file" "-$mode"
 		sed "s/debezium_modes/$database/g" "$CUR/data/handling_modes.sql" >"$WORK_DIR/handling-$mode.sql"
 		run_sql_file "$WORK_DIR/handling-$mode.sql" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
 
@@ -53,7 +53,7 @@ EOF
 			"$CUR/conf/diff_config.toml" >"$diff_config"
 		check_sync_diff "$WORK_DIR" "$diff_config"
 		cdc_cli_changefeed remove -c "debezium-$mode"
-		cleanup_process cdc_kafka_consumer
+		cleanup_process cdc_consumer
 	done
 }
 
@@ -78,7 +78,7 @@ function run() {
 	cdc_cli_changefeed create -c debezium-basic --sink-uri="$SINK_URI" --config=$CUR/conf/changefeed.toml
 	sleep 5 # wait for changefeed to start
 	# determine the sink uri and run corresponding consumer
-	run_kafka_consumer $WORK_DIR $SINK_URI $CUR/conf/changefeed.toml
+	run_consumer $WORK_DIR $SINK_URI $CUR/conf/changefeed.toml
 
 	run_sql_file $CUR/data/data.sql ${UP_TIDB_HOST} ${UP_TIDB_PORT}
 	run_sql "CREATE TABLE test.finish_mark1 (a int primary key);" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
@@ -103,7 +103,7 @@ function run() {
 	./checksum_checker --upstream-uri "root@tcp(${UP_TIDB_HOST}:${UP_TIDB_PORT})/" --downstream-uri "root@tcp(${DOWN_TIDB_HOST}:${DOWN_TIDB_PORT})/" --databases "test" --config="$CUR/conf/changefeed.toml"
 
 	cdc_cli_changefeed remove -c debezium-basic
-	cleanup_process cdc_kafka_consumer
+	cleanup_process cdc_consumer
 	run_handling_modes
 
 	cleanup_process $CDC_BINARY

@@ -1,0 +1,28 @@
+#!/bin/bash
+
+# Parameters: work directory, optional log suffix.
+set -eu
+
+workdir=$1
+log_suffix=${2:-}
+pid_file="$workdir/cdc_consumer${log_suffix}.pid"
+
+if [ ! -f "$pid_file" ]; then
+	exit 0
+fi
+
+pid=$(cat "$pid_file")
+if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
+	kill "$pid" 2>/dev/null || true
+	attempt=0
+	while kill -0 "$pid" 2>/dev/null; do
+		attempt=$((attempt + 1))
+		if [ "$attempt" -ge 50 ]; then
+			kill -9 "$pid" 2>/dev/null || true
+			break
+		fi
+		sleep 0.1
+	done
+fi
+
+rm -f "$pid_file"

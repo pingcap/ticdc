@@ -89,15 +89,16 @@ type decoder struct {
 	cache        *common.TableInfoProvider
 }
 
-// NewDecoder returns a canal-json decoder.
+// NewDecoder returns a canal-json decoder, reusing externalStorage when provided.
 func NewDecoder(
-	ctx context.Context, codecConfig *common.Config, db *sql.DB,
+	ctx context.Context, codecConfig *common.Config, db *sql.DB, externalStorage ...storeapi.Storage,
 ) (common.EventDecoder, error) {
-	var (
-		storage storeapi.Storage
-		err     error
-	)
-	if codecConfig.LargeMessageHandle.EnableClaimCheck() {
+	var storage storeapi.Storage
+	if len(externalStorage) > 0 {
+		storage = externalStorage[0]
+	}
+	var err error
+	if storage == nil && codecConfig.LargeMessageHandle.EnableClaimCheck() {
 		storageURI := codecConfig.LargeMessageHandle.ClaimCheckStorageURI
 		storage, err = util.GetExternalStorageWithDefaultTimeout(ctx, storageURI)
 		if err != nil {
