@@ -29,6 +29,18 @@ type DDLWorkload interface {
 	BuildDDLSql(opt DDLOption) string
 }
 
+// InsertValuesWorkload is an optional interface implemented by workloads
+// that prefer prepared statements for inserts.
+type InsertValuesWorkload interface {
+	BuildInsertSqlWithValues(tableN int, batchSize int) (string, []interface{})
+}
+
+// UpdateValuesWorkload is an optional interface implemented by workloads
+// that prefer prepared statements for updates.
+type UpdateValuesWorkload interface {
+	BuildUpdateSqlWithValues(opt UpdateOption) (string, []interface{})
+}
+
 type Workload interface {
 	// BuildCreateTableStatement returns the create-table sql of the table n
 	BuildCreateTableStatement(n int) string
